@@ -1,4 +1,4 @@
-# TREC-COVID Benchmark (Manticore + Qdrant)
+# Search Benchmark (Manticore + Qdrant)
 
 This CLI benchmarks retrieval quality and performance on TREC-COVID across:
 - Manticore full-text (`MATCH(...)`)
@@ -63,6 +63,8 @@ Note:
 The index selector combines options discovered from all local `config*.yaml` files (excluding templates).
 
 ## Installation
+
+Requirement: Python `3.11+`.
 
 ```bash
 python3 -m venv .venv
