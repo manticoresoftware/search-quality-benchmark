@@ -11,6 +11,7 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 ## Dataset
 
 - Source: `beir/trec-covid` via `ir_datasets`.
+- Dataset catalog/docs: [ir-datasets.com](https://ir-datasets.com/).
 - Corpus: COVID-19 research documents with `title` and `abstract` fields.
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
