@@ -236,6 +236,7 @@ Behavior:
 - cache key = `md5(normalized_text + model + hnsw_similarity)`,
 - normalized text = selected `vector_from` fields joined with single spaces,
 - cache can store `NULL` status (embedding unavailable); such docs are skipped during vector indexing and not retried.
+- query embeddings use the same cache (same keying by normalized text + model + similarity); cache misses are embedded and written back automatically.
 - Manticore vector indexing:
   - uses cached vectors when available,
   - auto-embeds only cache misses,
