@@ -1,0 +1,87 @@
+# TREC-COVID benchmark configuration template.
+# Inheritance mode (flat entries):
+# - each top-level entry is a runnable profile
+# - derived entries use `base: <entry_name>` and override only needed fields
+# - flat keys are routed automatically to manticore/qdrant/benchmark/dataset/metrics
+# - optional mode filter per entry: `type: vector` or `type: full-text`
+
+dataset:
+  source: "beir/trec-covid"  # default: "beir/trec-covid"
+  prepared_dir: "data/prepared"  # default: "data/prepared"
+
+benchmark:
+  limit: 100  # default: 100
+  warmup_queries: 5  # default: 5
+  repeats: 1  # default: 1
+  concurrency: 1  # default: 4
+  timeout_seconds: 60  # default: 60
+  diagnostics_queries: 3  # default: 3
+
+metrics:
+  enabled: ["ndcg@10", "ndcg@20", "map@10", "p@20", "recall@100", "latency", "qps", "error_rate"]  # default: ["ndcg@10","ndcg@20","map@10","p@20","recall@100","latency","qps","error_rate"]
+  ndcg_ks: [10, 20]  # default: [10,20]
+  map_k: 10  # default: 10
+  precision_k: 20  # default: 20
+  recall_k: 100  # default: 100
+
+manticore:
+  host: "127.0.0.1"  # default: "127.0.0.1"
+  sql_port: 9306  # default: 9306
+  http_port: 9308  # default: 9308
+  user: ""  # default: ""
+  password: ""  # default: ""
+  fulltext_table: "trec_covid_ft"  # default: "trec_covid_ft"
+  vector_table: "trec_covid_vec"  # default: "trec_covid_vec"
+  vector_field: "embedding"  # default: "embedding"
+  vector_model: "openai/text-embedding-3-large"  # default: "openai/text-embedding-3-large"
+  vector_from: "title,abstract"  # default: "title,abstract"
+  vector_similarity: "cosine"  # default: "cosine"
+  vector_quantization: ""  # default: ""; allowed examples: "8bit", "1bit", "1bitsimple"
+  # If omitted, Manticore internal KNN defaults are used (no explicit option passed).
+  vector_search_oversampling:
+  vector_search_rescore:
+  vector_cache_path: "vector_cache/embeddings.sqlite"  # default: "vector_cache/embeddings.sqlite"
+  vector_cache_fetch_batch_size: 1000  # default: 1000
+  vector_api_key: ""  # default: ""
+  vector_api_key_file: ""  # default: ""
+  fulltext_options: "morphology='stem_en' index_field_lengths='1'"  # default: "morphology='stem_en' index_field_lengths='1'"
+  search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"  # default: expr ranker; appended to Manticore search OPTION clause
+  batch_size: 500  # default: 500
+  insert_retries: 3  # default: 3
+  connect_timeout_seconds: 10  # default: 10
+  query_timeout_seconds: 60  # default: 60
+
+qdrant:
+  path: ""  # default: "" (server mode when empty)
+  host: "127.0.0.1"  # default: "127.0.0.1"
+  port: 6333  # default: 6333
+  api_key: ""  # default: ""
+  https: false  # default: false
+  timeout_seconds: 60  # default: 60
+  batch_size: 2000  # default: 2000
+  dense_collection: "trec_covid_qdrant_dense"  # default: "trec_covid_qdrant_dense"
+  bm25_collection: "trec_covid_qdrant_bm25"  # default: "trec_covid_qdrant_bm25"
+  dense_vector_name: "dense"  # default: "dense"
+  sparse_vector_name: "bm25"  # default: "bm25"
+  dense_binary_quantization: false  # default: false
+  dense_binary_always_ram: true  # default: true
+  dense_binary_query_encoding: "default"  # default: "default"
+  # If omitted, Qdrant internal defaults are used.
+  dense_search_quantization_rescore:
+  dense_search_quantization_oversampling:
+  dense_search_quantization_ignore: false  # default: false
+
+# Derived examples:
+manticore_bm25:
+  base: "manticore"
+  search_options: "ranker=bm25"
+
+manticore_q1bit:
+  base: "manticore"
+  vector_table: "trec_covid_vec_q1bit"
+  vector_quantization: "1bit"
+
+qdrant_bq:
+  base: "qdrant"
+  dense_collection: "trec_covid_qdrant_dense_bq"
+  dense_binary_quantization: true
