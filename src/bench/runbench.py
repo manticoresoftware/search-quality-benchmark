@@ -5,14 +5,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass
 from pathlib import Path
-from time import perf_counter, time
+import re
+from time import perf_counter, sleep, time
 from typing import Any, Callable
 
 from .config import AppConfig
 from .io_utils import ensure_dir, generate_run_id, read_jsonl
 from .manticore import ManticoreClient
-from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k
+from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k, reciprocal_rank_at_k
 from .qdrant_backend import QdrantBackend
+from .search_options import normalize_search_options
 from .vector_cache import VectorCache, cache_key_from_text, normalize_text
 
 
@@ -72,7 +74,7 @@ def _run_single_query_manticore(
         started = perf_counter()
         if mode == "fulltext":
             option_clause = _manticore_fulltext_option_clause(cfg)
-            qlit = client.conn.escape(str(query_text))
+            qlit = client.conn.escape(_sanitize_manticore_fulltext_query(query_text))
             rows = client.query(
                 f"""
                 SELECT doc_id, WEIGHT() AS score
@@ -138,7 +140,7 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
                 try:
                     if mode == "fulltext":
                         option_clause = _manticore_fulltext_option_clause(cfg)
-                        qlit = client.conn.escape(str(qtext))
+                        qlit = client.conn.escape(_sanitize_manticore_fulltext_query(qtext))
                         client.query(
                             f"""
                             SELECT doc_id
@@ -173,21 +175,21 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
     return diagnostics
 
 
-def _normalize_search_options(raw: str) -> str:
-    s = (raw or "").strip()
-    if not s:
-        return ""
-    low = s.lower()
-    if low.startswith("option "):
-        s = s[7:].strip()
-    if s.endswith(";"):
-        s = s[:-1].strip()
-    return s
+def _sanitize_manticore_fulltext_query(query_text: str) -> str:
+    q = str(query_text or "").strip()
+    if not q:
+        return q
+    # MATCH() treats punctuation as query syntax operators in extended mode.
+    # For benchmark NL queries, normalize punctuation to spaces to avoid parser errors
+    # (e.g. MSMARCO query fragments like "5/5 of 60").
+    q = re.sub(r"[^\w\s]+", " ", q, flags=re.UNICODE)
+    q = re.sub(r"\s+", " ", q, flags=re.UNICODE).strip()
+    return q or str(query_text or "").strip()
 
 
 def _manticore_fulltext_option_clause(cfg: AppConfig) -> str:
     parts: list[str] = []
-    extra = _normalize_search_options(cfg.manticore.search_options)
+    extra = normalize_search_options(cfg.manticore.search_options)
     if extra:
         parts.append(extra)
     parts.extend(
@@ -200,12 +202,12 @@ def _manticore_fulltext_option_clause(cfg: AppConfig) -> str:
 
 
 def _manticore_vector_option_clause(cfg: AppConfig) -> str:
-    return _normalize_search_options(cfg.manticore.search_options)
+    return normalize_search_options(cfg.manticore.search_options)
 
 
 def _manticore_fulltext_ranker_label(cfg: AppConfig) -> str:
     extras: list[str] = []
-    search_opts = _normalize_search_options(cfg.manticore.search_options)
+    search_opts = normalize_search_options(cfg.manticore.search_options)
     if search_opts:
         extras.append(f"search:{search_opts}")
     opts = (cfg.manticore.fulltext_options or "").strip()
@@ -248,7 +250,7 @@ def _manticore_vector_label(cfg: AppConfig) -> str:
         extra.append(f"os={float(cfg.manticore.vector_search_oversampling)}")
     if cfg.manticore.vector_search_rescore is not None:
         extra.append(f"rs={1 if int(cfg.manticore.vector_search_rescore) > 0 else 0}")
-    search_opts = _normalize_search_options(cfg.manticore.search_options)
+    search_opts = normalize_search_options(cfg.manticore.search_options)
     if search_opts:
         extra.append(f"search:{search_opts}")
     if extra:
@@ -284,44 +286,49 @@ def _get_query_vectors_from_cache_or_embed(cfg: AppConfig, query_texts: list[str
             if entry.status == "ok" and entry.vector:
                 out[q] = entry.vector
                 continue
-            if entry.status == "null":
-                continue
+            # Query embedding failures are rare and may be transient/provider-specific.
+            # Unlike corpus docs, always retry query-side null cache entries.
             missing_queries.append(q)
 
         if missing_queries:
-            manticore = ManticoreClient(cfg.manticore)
-            try:
-                embedded = manticore.embed_texts(
-                    missing_queries,
-                    vector_field=cfg.manticore.vector_field,
-                    model_name=cfg.manticore.vector_model,
-                    vector_from=cfg.manticore.vector_from,
-                    api_key=cfg.manticore.vector_api_key,
-                    api_key_file=cfg.manticore.vector_api_key_file,
-                )
-            finally:
-                manticore.close()
+            retry_delays = [0.0, 0.5, 1.0, 2.0, 3.0]
+            unresolved = list(missing_queries)
+            for attempt_idx, delay in enumerate(retry_delays, start=1):
+                if not unresolved:
+                    break
+                if delay > 0:
+                    sleep(delay)
+                manticore = ManticoreClient(cfg.manticore)
+                try:
+                    embedded = manticore.embed_texts(
+                        unresolved,
+                        vector_field=cfg.manticore.vector_field,
+                        model_name=cfg.manticore.vector_model,
+                        vector_from=cfg.manticore.vector_from,
+                        api_key=cfg.manticore.vector_api_key,
+                        api_key_file=cfg.manticore.vector_api_key_file,
+                    )
+                finally:
+                    manticore.close()
 
-            for q, vec in zip(missing_queries, embedded):
-                norm = normalize_text(q)
-                key = cache_key_from_text(norm, model=model, similarity=similarity)
-                if vec:
-                    vv = [float(x) for x in vec]
-                    cache.upsert_ok(
-                        cache_key=key,
-                        model=model,
-                        similarity=similarity,
-                        text_value=norm,
-                        vector=vv,
-                    )
-                    out[q] = vv
-                else:
-                    cache.upsert_null(
-                        cache_key=key,
-                        model=model,
-                        similarity=similarity,
-                        text_value=norm,
-                    )
+                next_unresolved: list[str] = []
+                for q, vec in zip(unresolved, embedded):
+                    norm = normalize_text(q)
+                    key = cache_key_from_text(norm, model=model, similarity=similarity)
+                    if vec:
+                        vv = [float(x) for x in vec]
+                        cache.upsert_ok(
+                            cache_key=key,
+                            model=model,
+                            similarity=similarity,
+                            text_value=norm,
+                            vector=vv,
+                        )
+                        out[q] = vv
+                    else:
+                        next_unresolved.append(q)
+                unresolved = next_unresolved
+
             cache.commit()
     finally:
         cache.close()
@@ -617,6 +624,7 @@ def run_benchmark(
     for m in modes:
         ndcgs_by_k: dict[int, list[float]] = {k: [] for k in ndcg_ks}
         maps: list[float] = []
+        mrrs: list[float] = []
         precisions: list[float] = []
         recalls: list[float] = []
         for topic in topics:
@@ -628,10 +636,12 @@ def run_benchmark(
             for k in ndcg_ks:
                 ndcgs_by_k[k].append(ndcg_at_k(retrieved, rels, k))
             maps.append(average_precision_at_k(retrieved, rels, cfg.metrics.map_k))
+            mrrs.append(reciprocal_rank_at_k(retrieved, rels, cfg.metrics.mrr_k))
             precisions.append(precision_at_k(retrieved, rels, cfg.metrics.precision_k))
             recalls.append(recall_at_k(retrieved, rels, cfg.metrics.recall_k))
         mode_rel: dict[str, float] = {
             f"map@{cfg.metrics.map_k}": sum(maps) / len(maps) if maps else 0.0,
+            f"mrr@{cfg.metrics.mrr_k}": sum(mrrs) / len(mrrs) if mrrs else 0.0,
             f"p@{cfg.metrics.precision_k}": sum(precisions) / len(precisions) if precisions else 0.0,
             f"recall@{cfg.metrics.recall_k}": sum(recalls) / len(recalls) if recalls else 0.0,
         }
@@ -673,6 +683,7 @@ def run_benchmark(
         "run_id": run_id,
         "run_at_unix": run_at_unix,
         "profile": profile_name or "",
+        "dataset_source": cfg.dataset.source,
         "engine": engine,
         "mode": mode,
         "model": model_label,

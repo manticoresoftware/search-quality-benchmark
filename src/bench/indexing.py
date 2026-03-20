@@ -251,6 +251,7 @@ def _run_index_qdrant(
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
     docs = read_jsonl(docs_path)
     qdrant = QdrantBackend(cfg.qdrant)
+    qdrant.ensure_accessible()
     out: list[ModeIndexResult] = []
 
     if mode not in ("fulltext", "vector"):
@@ -354,7 +355,7 @@ def _run_index_qdrant(
             raise RuntimeError(
                 "Vector cache miss during Qdrant vector indexing. "
                 f"Missing keys={missing_total} sample={missing_keys}. "
-                "Populate cache first (bench cache-populate)."
+                "Build the corresponding Manticore vector index first so the cache is populated."
             )
         if not docs_cached:
             raise RuntimeError("No vector documents available in cache (all missing/null).")

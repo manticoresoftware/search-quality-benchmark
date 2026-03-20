@@ -8,9 +8,21 @@ import sys
 from typing import Any
 
 from .config import AppConfig, load_engine_targets
+from .discovery import discover_config_paths
 from .manticore import ManticoreClient
 from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
+from .search_options import normalize_search_options
+from .table_filters import (
+    draw_header_with_filters,
+    filter_block_height,
+    filter_rows,
+    fit_text,
+    prompt_filter_value,
+)
+from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
+
+_fit = fit_text
 
 
 @dataclass
@@ -40,17 +52,6 @@ def _display_mode(mode: str) -> str:
     return mode
 
 
-def _normalize_search_options(raw: str) -> str:
-    s = (raw or "").strip()
-    if not s:
-        return ""
-    if s.lower().startswith("option "):
-        s = s[7:].strip()
-    if s.endswith(";"):
-        s = s[:-1].strip()
-    return s
-
-
 def _manticore_vector_label(cfg: AppConfig) -> str:
     quant = (cfg.manticore.vector_quantization or "").strip().lower()
     extra: list[str] = []
@@ -60,7 +61,7 @@ def _manticore_vector_label(cfg: AppConfig) -> str:
         extra.append(f"os={float(cfg.manticore.vector_search_oversampling)}")
     if cfg.manticore.vector_search_rescore is not None:
         extra.append(f"rs={1 if int(cfg.manticore.vector_search_rescore) > 0 else 0}")
-    search_opts = _normalize_search_options(cfg.manticore.search_options)
+    search_opts = normalize_search_options(cfg.manticore.search_options)
     if search_opts:
         extra.append(f"search:{search_opts}")
     if extra:
@@ -79,15 +80,6 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
     return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
 
 
-def discover_config_paths() -> list[Path]:
-    out: list[Path] = []
-    for p in sorted(Path(".").glob("config*.yaml")):
-        if p.name.endswith(".template"):
-            continue
-        out.append(p)
-    return out
-
-
 def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     variants: list[RunVariant] = []
     for p in paths:
@@ -104,7 +96,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = _manticore_vector_label(cfg) if engine == "manticore" else _qdrant_vector_label(cfg)
                 elif engine == "manticore":
                     extras: list[str] = []
-                    search_opts = _normalize_search_options(cfg.manticore.search_options)
+                    search_opts = normalize_search_options(cfg.manticore.search_options)
                     if search_opts:
                         extras.append(f"search:{search_opts}")
                     opts = (cfg.manticore.fulltext_options or "").strip()
@@ -144,95 +136,6 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     )
 
 
-def _fit(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text.ljust(width)
-    if width <= 1:
-        return text[:width]
-    return text[: width - 1] + "…"
-
-
-def _wrap_text_lines(text: str, width: int) -> list[str]:
-    if width <= 1:
-        return [text[: max(0, width)]]
-    src = str(text or "")
-    if not src:
-        return [""]
-    out: list[str] = []
-    while src:
-        if len(src) <= width:
-            out.append(src)
-            break
-        split_at = src.rfind(" ", 0, width + 1)
-        if split_at <= 0:
-            split_at = width
-        out.append(src[:split_at].rstrip())
-        src = src[split_at:].lstrip()
-    return out or [""]
-
-
-def _wrap_cell(text: str, width: int, max_lines: int = 2) -> list[str]:
-    if max_lines <= 1:
-        return [_fit(text, width)]
-    src = str(text or "")
-    out: list[str] = []
-    while src and len(out) < max_lines:
-        if len(src) <= width:
-            out.append(src.ljust(width))
-            src = ""
-            break
-        if len(out) == max_lines - 1:
-            out.append(_fit(src, width))
-            src = ""
-            break
-        out.append(src[:width].ljust(width))
-        src = src[width:]
-    while len(out) < max_lines:
-        out.append("".ljust(width))
-    return out
-
-
-def _dynamic_model_lines(total_rows: int, term_height: int) -> int:
-    available = max(1, term_height - 4)
-    target_rows = max(1, min(total_rows, 10))
-    lines = available // target_rows
-    if lines < 1:
-        return 1
-    if lines > 3:
-        return 3
-    return lines
-
-
-def _draw_header(
-    stdscr: Any,
-    y: int,
-    widths: dict[str, int],
-    max_width: int,
-    sort_key: str,
-    sort_desc: bool,
-) -> None:
-    cols = [
-        ("SEL", "sel"),
-        ("PROFILE", "entry"),
-        ("ENGINE", "engine"),
-        ("MODE", "mode"),
-        ("MODEL/OPTS", "model"),
-    ]
-    x = 0
-    for title, key in cols:
-        if x >= max_width:
-            break
-        label = title
-        attrs = curses.A_UNDERLINE | curses.A_BOLD
-        if key == sort_key:
-            label = f"{title}{'↓' if sort_desc else '↑'}"
-            attrs |= curses.A_REVERSE
-        stdscr.addstr(y, x, _fit(label, widths[key]), attrs)
-        x += widths[key] + 1
-
-
 def _draw_row(
     stdscr: Any,
     y: int,
@@ -256,8 +159,8 @@ def _draw_row(
             color_mode = curses.color_pair(3)
         elif v.mode == "vector":
             color_mode = curses.color_pair(4)
-    entry_lines = _wrap_cell(v.entry, widths["entry"], max_lines=model_lines_max)
-    model_lines = _wrap_cell(v.model, widths["model"], max_lines=model_lines_max)
+    entry_lines = wrap_cell(v.entry, widths["entry"], max_lines=model_lines_max)
+    model_lines = wrap_cell(v.model, widths["model"], max_lines=model_lines_max)
     x = 0
     stdscr.addstr(y, x, _fit("[x]" if selected else "[ ]", widths["sel"]), attrs)
     x += widths["sel"] + 1
@@ -269,6 +172,8 @@ def _draw_row(
     x += widths["engine"] + 1
     stdscr.addstr(y, x, _fit(_display_mode(v.mode), widths["mode"]), attrs | color_mode)
     x += widths["mode"] + 1
+    stdscr.addstr(y, x, _fit(_variant_target_name(v), widths["target"]), attrs)
+    x += widths["target"] + 1
     stdscr.addstr(y, x, model_lines[0], attrs)
     for i in range(1, model_lines_max):
         stdscr.addstr(y + i, x, model_lines[i], attrs)
@@ -278,6 +183,30 @@ def _variant_target_name(v: RunVariant) -> str:
     if v.engine == "manticore":
         return v.cfg.manticore.fulltext_table if v.mode == "fulltext" else v.cfg.manticore.vector_table
     return v.cfg.qdrant.bm25_collection if v.mode == "fulltext" else v.cfg.qdrant.dense_collection
+
+
+def is_variant_runnable(v: RunVariant) -> bool:
+    try:
+        target = _variant_target_name(v)
+        if v.engine == "manticore":
+            client = ManticoreClient(v.cfg.manticore)
+            try:
+                return bool(client.table_exists(target))
+            finally:
+                client.close()
+        backend = QdrantBackend(v.cfg.qdrant)
+        collection_exists = getattr(backend.client, "collection_exists", None)
+        if callable(collection_exists):
+            return bool(collection_exists(target))
+        # Fallback for older clients: count() raises if collection does not exist.
+        backend._count_points(target)
+        return True
+    except Exception:
+        return False
+
+
+def filter_runnable_variants(variants: list[RunVariant]) -> list[RunVariant]:
+    return [v for v in variants if is_variant_runnable(v)]
 
 
 def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
@@ -369,7 +298,7 @@ def _draw_details_panel(
         if y > max_rows:
             break
         attrs = curses.A_BOLD if line in ("Resolved Config", "Live State") else curses.A_DIM
-        wrapped = _wrap_text_lines(line, panel_w)
+        wrapped = wrap_text_lines(line, panel_w)
         for j, part in enumerate(wrapped):
             if y > max_rows:
                 break
@@ -383,9 +312,10 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
     current = 0
     offset = 0
     row_count_cache: dict[tuple[str, str, str], str] = {}
+    all_variants = list(variants)
 
     def _inner(stdscr: Any) -> list[int]:
-        nonlocal current, offset
+        nonlocal current, offset, variants, selected_idx
         curses.curs_set(0)
         stdscr.keypad(True)
         if curses.has_colors():
@@ -400,12 +330,14 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             "entry": 18,
             "engine": 10,
             "mode": 9,
-            "model": 52,
+            "target": 24,
+            "model": 45,
         }
-        sort_cols = ["entry", "engine", "mode", "model"]
+        sort_cols = ["entry", "engine", "mode", "target", "model"]
         sort_idx = 0
         sort_key = sort_cols[sort_idx]
         sort_desc = False
+        filters: dict[str, str] = {}
 
         def _variant_id(v: RunVariant) -> tuple[str, str, str, str]:
             return (v.entry, v.engine, v.mode, v.model)
@@ -420,14 +352,30 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                 return v.engine.lower()
             if col == "mode":
                 return _mode_ord(v.mode)
+            if col == "target":
+                return _variant_target_name(v).lower()
             if col == "model":
                 return v.model.lower()
             return v.entry.lower()
+
+        def _filter_value(v: RunVariant, col: str) -> Any:
+            if col == "entry":
+                return v.entry
+            if col == "engine":
+                return v.engine
+            if col == "mode":
+                return _display_mode(v.mode)
+            if col == "target":
+                return _variant_target_name(v)
+            if col == "model":
+                return v.model
+            return ""
 
         def _apply_sort() -> None:
             nonlocal variants, selected_idx, current, offset
             selected_ids = {_variant_id(variants[i]) for i in selected_idx if 0 <= i < len(variants)}
             current_id = _variant_id(variants[current]) if 0 <= current < len(variants) else None
+            variants = filter_rows(all_variants, filters, _filter_value)
             variants.sort(key=lambda v: _sort_value(v, sort_key), reverse=sort_desc)
             selected_idx = {i for i, v in enumerate(variants) if _variant_id(v) in selected_ids}
             if current_id is not None:
@@ -435,16 +383,36 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                     if _variant_id(v) == current_id:
                         current = i
                         break
+            current = min(max(0, current), max(0, len(variants) - 1))
             offset = 0
 
         _apply_sort()
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
-            row_h = _dynamic_model_lines(len(variants), h)
-            stdscr.addstr(0, 0, _fit("↑/↓ move  ←/→ sort col  SPACE toggle  ENTER run selected  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)
-            _draw_header(stdscr, 1, widths=widths, max_width=max(1, w - 1), sort_key=sort_key, sort_desc=sort_desc)
-            visible = max(1, (h - 4) // row_h)
+            row_h = dynamic_row_lines(len(variants), h)
+            stdscr.addstr(0, 0, fit_text("↑/↓ move  ←/→ sort col  SPACE toggle  f filter  ENTER run selected  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)
+            filter_lines = filter_block_height(filters, widths)
+            draw_header_with_filters(
+                stdscr,
+                y=1,
+                cols=[
+                    ("SEL", "sel"),
+                    ("PROFILE", "entry"),
+                    ("ENGINE", "engine"),
+                    ("MODE", "mode"),
+                    ("TARGET", "target"),
+                    ("MODEL/OPTS", "model"),
+                ],
+                widths=widths,
+                max_width=max(1, w - 1),
+                active_col=sort_key,
+                sort_desc=sort_desc,
+                filters=filters,
+                filter_lines=filter_lines,
+            )
+            rows_y = 2 + filter_lines
+            visible = max(1, (h - rows_y - 2) // row_h)
             if current < offset:
                 offset = current
             if current >= offset + visible:
@@ -455,7 +423,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                     break
                 _draw_row(
                     stdscr,
-                    y=2 + i * row_h,
+                    y=rows_y + i * row_h,
                     v=variants[ridx],
                     idx=ridx + 1,
                     selected=(ridx in selected_idx),
@@ -472,7 +440,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                     h=h,
                     row_count_cache=row_count_cache,
                 )
-            stdscr.addstr(h - 1, 0, _fit(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
+            stdscr.addstr(h - 1, 0, fit_text(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
             stdscr.refresh()
 
             ch = stdscr.getch()
@@ -488,6 +456,19 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                 sort_idx = (sort_idx + 1) % len(sort_cols)
                 sort_key = sort_cols[sort_idx]
                 _apply_sort()
+            elif ch in (ord("f"), ord("F")):
+                val = prompt_filter_value(
+                    stdscr,
+                    prompt=f"Filter {sort_key} (empty clears): ",
+                    initial=str(filters.get(sort_key, "") or ""),
+                )
+                if val is not None:
+                    val = val.strip()
+                    if val:
+                        filters[sort_key] = val
+                    else:
+                        filters.pop(sort_key, None)
+                    _apply_sort()
             elif ch == ord(" "):
                 if current in selected_idx:
                     selected_idx.remove(current)
@@ -515,6 +496,7 @@ def select_variants_interactive(variants: list[RunVariant]) -> list[RunVariant]:
     for i, v in enumerate(variants, start=1):
         print(
             f"{i:>2}. {v.entry}\t{v.engine}\t{_display_mode(v.mode)}\t"
+            f"target={_variant_target_name(v)}\t"
             f"model={v.model}"
         )
     raw = input("Select variant numbers (e.g. 1,3-5): ").strip()

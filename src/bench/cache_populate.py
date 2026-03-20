@@ -40,6 +40,9 @@ def populate_cache_from_manticore(
     cached_ok = 0
     cached_null_from_table = 0
     cached_null_from_missing_docs = 0
+    ok_batch: list[dict[str, Any]] = []
+    null_batch: list[dict[str, Any]] = []
+    write_batch_size = max(100, int(cfg.manticore.batch_size))
     try:
         for row in client.iter_vectors(table, cfg.manticore.vector_field, batch_size=max(1, int(cfg.manticore.batch_size))):
             seen_rows += 1
@@ -48,22 +51,32 @@ def populate_cache_from_manticore(
             seen_keys.add(key)
             vec = row.get("vector") or []
             if vec:
-                cache.upsert_ok(
-                    cache_key=key,
-                    model=model,
-                    similarity=sim,
-                    text_value=text_value,
-                    vector=[float(x) for x in vec],
+                ok_batch.append(
+                    {
+                        "cache_key": key,
+                        "model": model,
+                        "similarity": sim,
+                        "text_value": text_value,
+                        "vector": [float(x) for x in vec],
+                    }
                 )
                 cached_ok += 1
             else:
-                cache.upsert_null(
-                    cache_key=key,
-                    model=model,
-                    similarity=sim,
-                    text_value=text_value,
+                null_batch.append(
+                    {
+                        "cache_key": key,
+                        "model": model,
+                        "similarity": sim,
+                        "text_value": text_value,
+                    }
                 )
                 cached_null_from_table += 1
+            if len(ok_batch) >= write_batch_size:
+                cache.upsert_ok_many(ok_batch)
+                ok_batch.clear()
+            if len(null_batch) >= write_batch_size:
+                cache.upsert_null_many(null_batch)
+                null_batch.clear()
             if progress_callback is not None and (seen_rows == 1 or seen_rows % 1000 == 0):
                 progress_callback(
                     {
@@ -80,13 +93,18 @@ def populate_cache_from_manticore(
             key = cache_key_from_doc(d, fields=fields, model=model, similarity=sim)
             if key in seen_keys:
                 continue
-            cache.upsert_null(
-                cache_key=key,
-                model=model,
-                similarity=sim,
-                text_value=normalized_vector_text(d, fields),
+            null_batch.append(
+                {
+                    "cache_key": key,
+                    "model": model,
+                    "similarity": sim,
+                    "text_value": normalized_vector_text(d, fields),
+                }
             )
             cached_null_from_missing_docs += 1
+            if len(null_batch) >= write_batch_size:
+                cache.upsert_null_many(null_batch)
+                null_batch.clear()
             if progress_callback is not None and (cached_null_from_missing_docs == 1 or cached_null_from_missing_docs % 1000 == 0):
                 progress_callback(
                     {
@@ -99,6 +117,12 @@ def populate_cache_from_manticore(
                     }
                 )
 
+        if ok_batch:
+            cache.upsert_ok_many(ok_batch)
+            ok_batch.clear()
+        if null_batch:
+            cache.upsert_null_many(null_batch)
+            null_batch.clear()
         cache.commit()
     finally:
         client.close()

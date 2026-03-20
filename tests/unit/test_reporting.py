@@ -5,6 +5,7 @@ def test_build_summary_includes_resolved_config_and_live_state() -> None:
     metrics = {
         "run_id": "abc123",
         "profile": "manticore_bm25",
+        "dataset_source": "msmarco-passage/dev/small",
         "mode": "fulltext",
         "runtime_seconds": 0.12,
         "benchmark_settings": {
@@ -29,4 +30,4 @@ def test_build_summary_includes_resolved_config_and_live_state() -> None:
     assert "`manticore.search_options: ranker=bm25`" in md
     assert "## Live State" in md
     assert "`rows (trec_covid_ft): 171,332`" in md
-
+    assert "- Dataset source: `msmarco-passage/dev/small`" in md

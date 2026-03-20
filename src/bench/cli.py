@@ -6,14 +6,24 @@ from pathlib import Path
 import sys
 from time import perf_counter
 
-from .cache_populate import populate_cache_from_manticore
 from .config import AppConfig, load_config, load_engine_targets
-from .index_matrix import build_index_variants_from_config_paths, discover_config_paths, select_index_variants_interactive
+from .discovery import discover_config_paths
+from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
 from .manticore import ManticoreClient
 from .io_utils import generate_run_id
 from .prepare import prepare_dataset
-from .run_matrix import build_variants_from_config_paths, run_selected_variants, select_variants_interactive
+from .prepare_matrix import (
+    PrepareVariant,
+    build_prepare_variants_from_config_paths,
+    select_prepare_variants_interactive,
+)
+from .run_matrix import (
+    build_variants_from_config_paths,
+    filter_runnable_variants,
+    run_selected_variants,
+    select_variants_interactive,
+)
 from .runbench import run_benchmark, write_run_artifacts
 from .summarize import generate_combined_report
 
@@ -215,8 +225,59 @@ def _confirm_manticore_vector_reindex_for_configs(
 
 
 def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
-    result = prepare_dataset(cfg)
-    print(f"Prepared dataset written to {result.docs_path.parent}")
+    selected: list[PrepareVariant] = []
+    raw_sources: list[str] = []
+    for value in list(getattr(args, "source", []) or []):
+        raw_sources.extend([x.strip() for x in str(value).split(",") if x.strip()])
+    source_filter = {s.lower() for s in raw_sources}
+
+    raw_entries: list[str] = []
+    for value in list(getattr(args, "entry", []) or []):
+        raw_entries.extend([x.strip() for x in str(value).split(",") if x.strip()])
+    entry_filter = {s for s in raw_entries}
+
+    variants = build_prepare_variants_from_config_paths(discover_prepare_config_paths())
+    if source_filter or entry_filter:
+        for v in variants:
+            if source_filter and v.source.lower() not in source_filter:
+                continue
+            if entry_filter:
+                entry_tokens = {x.strip() for x in v.entry.split(",")}
+                if not any(e in entry_tokens for e in entry_filter):
+                    continue
+            selected.append(v)
+        if not selected:
+            raise ValueError(
+                "No matching dataset sources/entries found. "
+                "Check `--source` / `--entry` values against config entries."
+            )
+    elif sys.stdin.isatty() and sys.stdout.isatty():
+        selected = select_prepare_variants_interactive(variants)
+        if not selected:
+            print("Prepare canceled: no sources selected.")
+            return 0
+    else:
+        selected = [
+            PrepareVariant(
+                config_path=args.config,
+                entry="(default)",
+                source=cfg.dataset.source,
+                prepared_dir=cfg.dataset.prepared_dir,
+                cfg=cfg,
+            )
+        ]
+
+    replay: list[str] = []
+    for v in selected:
+        replay.append(f"bench --config {args.config} prepare --source {v.source}")
+    print("Replay commands:")
+    for cmd in replay:
+        print(f"- {cmd}")
+
+    for v in selected:
+        print(f"Preparing: source={v.source} output={v.cfg.dataset.prepared_dir}")
+        result = prepare_dataset(v.cfg)
+        print(f"Prepared dataset written to {result.docs_path.parent}")
     return 0
 
 
@@ -351,11 +412,26 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             print("")
         print("Index canceled by user.")
         return 130
+    except Exception as exc:
+        if is_tty:
+            print("")
+        print(f"FATAL: {exc}")
+        return 1
 
 
 def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
     if args.mode is None and args.engine is None:
-        variants = build_variants_from_config_paths([Path(args.config)])
+        variants_all = build_variants_from_config_paths([Path(args.config)])
+        variants = filter_runnable_variants(variants_all)
+        skipped = len(variants_all) - len(variants)
+        if skipped > 0:
+            print(
+                f"Skipping {skipped} run variant(s) because index/collection is missing.",
+                flush=True,
+            )
+        if not variants:
+            print("Run canceled: no runnable variants (indexes/collections missing).")
+            return 0
         selected = select_variants_interactive(variants)
         if not selected:
             print("Run canceled: no runs selected.")
@@ -443,24 +519,6 @@ def cmd_report(_: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_cache_populate(cfg: AppConfig, args: argparse.Namespace) -> int:
-    result = populate_cache_from_manticore(
-        cfg,
-        source_table=args.table,
-        model_name=args.model,
-        similarity=args.similarity,
-        vector_from=args.vector_from,
-    )
-    print(
-        "Cache populated: "
-        f"path={result.cache_path} table={result.source_table} "
-        f"rows={result.seen_rows} ok={result.cached_ok} "
-        f"null_from_table={result.cached_null_from_table} "
-        f"null_from_missing_docs={result.cached_null_from_missing_docs}"
-    )
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bench", add_help=False)
     parser.add_argument("--config", default="config.yaml")
@@ -468,6 +526,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=False)
 
     p_prepare = sub.add_parser("prepare", add_help=False)
+    p_prepare.add_argument("--source", action="append", default=None, help="Dataset source(s) to prepare")
+    p_prepare.add_argument("--entry", action="append", default=None, help="Entry name(s) to prepare source from")
 
     p_index = sub.add_parser("index", add_help=False)
     p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant"])
@@ -491,12 +551,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--output", default=None, help="Output markdown path")
     p_report.add_argument("--title", default="Benchmark Report")
 
-    p_cache = sub.add_parser("cache-populate", add_help=False)
-    p_cache.add_argument("--table", default=None, help="Source Manticore vector table")
-    p_cache.add_argument("--model", default=None, help="Model name for cache keys")
-    p_cache.add_argument("--similarity", default=None, help="Similarity for cache keys (e.g. cosine)")
-    p_cache.add_argument("--vector-from", default=None, help="Comma-separated source text fields for cache keys")
-
     return parser
 
 
@@ -517,8 +571,6 @@ def main() -> None:
         raise SystemExit(cmd_run(cfg, args))
     if args.command == "report":
         raise SystemExit(cmd_report(cfg, args))
-    if args.command == "cache-populate":
-        raise SystemExit(cmd_cache_populate(cfg, args))
     raise SystemExit(2)
 
 

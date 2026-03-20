@@ -4,12 +4,23 @@ import curses
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 import shutil
 import sys
 from typing import Any
 
 from .io_utils import read_json
 from .reporting import metric_definitions_markdown
+from .table_filters import (
+    draw_header_with_filters,
+    filter_block_height,
+    filter_rows,
+    fit_text,
+    prompt_filter_value,
+)
+from .table_layout import dynamic_row_lines, wrap_cell
+
+_fit = fit_text
 
 
 @dataclass
@@ -21,6 +32,8 @@ class ArtifactRow:
     engine: str
     mode: str
     model: str
+    dataset_source: str
+    doc_count: int | None
     runtime_seconds: float
     concurrency: int | None
     relevance: dict[str, float]
@@ -68,6 +81,21 @@ def _run_at_from_unix(ts: int) -> str:
     return "-"
 
 
+def _extract_doc_count(payload: dict[str, Any]) -> int | None:
+    live_state = payload.get("live_state_lines", []) or []
+    if not isinstance(live_state, list):
+        return None
+    for line in live_state:
+        text = str(line or "")
+        m = re.search(r"rows \([^)]+\):\s*([0-9][0-9,]*)", text)
+        if m:
+            try:
+                return int(m.group(1).replace(",", ""))
+            except Exception:
+                return None
+    return None
+
+
 def discover_artifacts() -> list[ArtifactRow]:
     out: list[ArtifactRow] = []
     root = Path("artifacts")
@@ -113,6 +141,8 @@ def discover_artifacts() -> list[ArtifactRow]:
                     engine=str(payload.get("engine", "")),
                     mode=mode,
                     model=model,
+                    dataset_source=str(payload.get("dataset_source", "") or ""),
+                    doc_count=_extract_doc_count(payload),
                     runtime_seconds=float(payload.get("runtime_seconds", 0.0)),
                     concurrency=(
                         int((payload.get("benchmark_settings", {}) or {}).get("concurrency"))
@@ -134,6 +164,8 @@ def discover_artifacts() -> list[ArtifactRow]:
                     engine="",
                     mode="",
                     model="n/a",
+                    dataset_source="",
+                    doc_count=None,
                     runtime_seconds=0.0,
                     concurrency=None,
                     relevance={},
@@ -184,48 +216,6 @@ def _color_pair_for_mode(mode: str) -> int:
     return 0
 
 
-def _fit(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text.ljust(width)
-    if width <= 1:
-        return text[:width]
-    return text[: width - 1] + "…"
-
-
-def _wrap_cell(text: str, width: int, max_lines: int = 2) -> list[str]:
-    if max_lines <= 1:
-        return [_fit(text, width)]
-    src = str(text or "")
-    out: list[str] = []
-    while src and len(out) < max_lines:
-        if len(src) <= width:
-            out.append(src.ljust(width))
-            src = ""
-            break
-        if len(out) == max_lines - 1:
-            out.append(_fit(src, width))
-            src = ""
-            break
-        out.append(src[:width].ljust(width))
-        src = src[width:]
-    while len(out) < max_lines:
-        out.append("".ljust(width))
-    return out
-
-
-def _dynamic_model_lines(total_rows: int, term_height: int) -> int:
-    available = max(1, term_height - 4)
-    target_rows = max(1, min(total_rows, 10))
-    lines = available // target_rows
-    if lines < 1:
-        return 1
-    if lines > 3:
-        return 3
-    return lines
-
-
 def _draw_row(
     stdscr: Any,
     y: int,
@@ -247,13 +237,17 @@ def _draw_row(
     x += widths["run_id"] + 1
     stdscr.addstr(y, x, _fit(row.run_at, widths["run_at"]), attrs)
     x += widths["run_at"] + 1
+    stdscr.addstr(y, x, _fit(row.dataset_source or "-", widths["dataset"]), attrs)
+    x += widths["dataset"] + 1
     e_pair = _color_pair_for_engine(row.engine)
     stdscr.addstr(y, x, _fit(row.engine or "-", widths["engine"]), attrs | curses.color_pair(e_pair))
     x += widths["engine"] + 1
     m_pair = _color_pair_for_mode(row.mode)
     stdscr.addstr(y, x, _fit(_display_mode(row.mode or "-"), widths["mode"]), attrs | curses.color_pair(m_pair))
     x += widths["mode"] + 1
-    model_lines = _wrap_cell(row.model or "n/a", widths["model"], max_lines=model_lines_max)
+    stdscr.addstr(y, x, _fit(f"{int(row.doc_count):,}" if row.doc_count is not None else "-", widths["docs"]), attrs)
+    x += widths["docs"] + 1
+    model_lines = wrap_cell(row.model or "n/a", widths["model"], max_lines=model_lines_max)
     stdscr.addstr(y, x, model_lines[0], attrs)
     x += widths["model"] + 1
     stdscr.addstr(y, x, _fit(row.status, widths["status"]), attrs)
@@ -261,6 +255,9 @@ def _draw_row(
     ndcg_val = row.relevance.get("ndcg@10", 0.0)
     stdscr.addstr(y, x, _fit(f"{ndcg_val:.4f}", widths["ndcg"]), attrs)
     x += widths["ndcg"] + 1
+    mrr_val = row.relevance.get("mrr@10", 0.0)
+    stdscr.addstr(y, x, _fit(f"{mrr_val:.4f}", widths["mrr"]), attrs)
+    x += widths["mrr"] + 1
     map_val = row.relevance.get("map@10", 0.0)
     stdscr.addstr(y, x, _fit(f"{map_val:.4f}", widths["map"]), attrs)
     x += widths["map"] + 1
@@ -274,52 +271,20 @@ def _draw_row(
         + widths["idx"] + 1
         + widths["run_id"] + 1
         + widths["run_at"] + 1
+        + widths["dataset"] + 1
         + widths["engine"] + 1
         + widths["mode"] + 1
+        + widths["docs"] + 1
     )
     for i in range(1, model_lines_max):
         stdscr.addstr(y + i, x_model, model_lines[i], attrs)
-
-
-def _draw_header(
-    stdscr: Any,
-    y: int,
-    widths: dict[str, int],
-    max_width: int,
-    sort_key: str,
-    sort_desc: bool,
-) -> None:
-    x = 0
-    cols = [
-        ("SEL", "sel"),
-        ("#", "idx"),
-        ("RUN_ID", "run_id"),
-        ("RUN_AT", "run_at"),
-        ("ENGINE", "engine"),
-        ("MODE", "mode"),
-        ("MODEL/OPTS", "model"),
-        ("STATUS", "status"),
-        ("NDCG@10", "ndcg"),
-        ("MAP@10", "map"),
-        ("P@20", "p20"),
-        ("RECALL@100", "recall"),
-    ]
-    for title, key in cols:
-        if x >= max_width:
-            break
-        label = title
-        attrs = curses.A_UNDERLINE | curses.A_BOLD
-        if key == sort_key:
-            label = f"{title}{'↓' if sort_desc else '↑'}"
-            attrs |= curses.A_REVERSE
-        stdscr.addstr(y, x, _fit(label, widths[key]), attrs)
-        x += widths[key] + 1
 
 
 def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
     selected_idx: set[int] = set()
     current = 0
     offset = 0
+    all_rows = list(rows)
 
     def _after_delete_reindex(selected: set[int], deleted_idx: int) -> set[int]:
         out: set[int] = set()
@@ -330,7 +295,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
         return out
 
     def _inner(stdscr: Any) -> list[int]:
-        nonlocal current, offset, selected_idx
+        nonlocal current, offset, selected_idx, rows
         curses.curs_set(0)
         stdscr.keypad(True)
         if curses.has_colors():
@@ -346,36 +311,46 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             "idx": 3,
             "run_id": 10,
             "run_at": 19,
+            "dataset": 24,
             "engine": 10,
             "mode": 9,
-            "model": 36,
+            "docs": 10,
+            "model": 24,
             "status": 7,
             "ndcg": 8,
+            "mrr": 8,
             "map": 8,
             "p20": 8,
             "recall": 10,
         }
         sort_by = "run_at"
         sort_desc = True
-        sort_cols = ["run_at", "engine", "mode", "model", "status", "ndcg", "map", "p20", "recall", "run_id"]
+        sort_cols = ["run_at", "dataset", "engine", "mode", "docs", "model", "status", "ndcg", "mrr", "map", "p20", "recall", "run_id"]
         sort_idx = sort_cols.index(sort_by)
+        filters: dict[str, str] = {}
 
         def _default_sort_desc(col: str) -> bool:
-            return col in {"run_at", "ndcg", "map", "p20", "recall"}
+            return col in {"run_at", "ndcg", "mrr", "map", "p20", "recall"}
 
         def _row_sort_key(row: ArtifactRow, col: str) -> Any:
             if col == "run_at":
                 return float(row.run_at_unix or 0)
+            if col == "dataset":
+                return (row.dataset_source or "").lower()
             if col == "engine":
                 return (row.engine or "").lower()
             if col == "mode":
                 return (row.mode or "").lower()
+            if col == "docs":
+                return int(row.doc_count or 0)
             if col == "model":
                 return (row.model or "").lower()
             if col == "status":
                 return (row.status or "").lower()
             if col == "ndcg":
                 return float(row.relevance.get("ndcg@10", 0.0))
+            if col == "mrr":
+                return float(row.relevance.get("mrr@10", 0.0))
             if col == "map":
                 return float(row.relevance.get("map@10", 0.0))
             if col == "p20":
@@ -386,12 +361,44 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                 return row.run_id
             return row.run_id
 
+        def _filter_value(row: ArtifactRow, col: str) -> Any:
+            if col == "run_id":
+                return row.run_id
+            if col == "run_at":
+                return row.run_at
+            if col == "dataset":
+                return row.dataset_source
+            if col == "engine":
+                return row.engine
+            if col == "mode":
+                return _display_mode(row.mode)
+            if col == "docs":
+                return f"{int(row.doc_count):,}" if row.doc_count is not None else "-"
+            if col == "model":
+                return row.model
+            if col == "status":
+                return row.status
+            if col == "ndcg":
+                return f"{row.relevance.get('ndcg@10', 0.0):.4f}"
+            if col == "mrr":
+                return f"{row.relevance.get('mrr@10', 0.0):.4f}"
+            if col == "map":
+                return f"{row.relevance.get('map@10', 0.0):.4f}"
+            if col == "p20":
+                return f"{row.relevance.get('p@20', 0.0):.4f}"
+            if col == "recall":
+                return f"{row.relevance.get('recall@100', 0.0):.4f}"
+            return ""
+
         def _apply_sort(col: str, desc: bool) -> None:
             nonlocal rows, selected_idx, current, offset
             if not rows:
-                return
-            selected_ids = {rows[i].run_id for i in selected_idx if 0 <= i < len(rows)}
-            current_id = rows[current].run_id if 0 <= current < len(rows) else None
+                selected_ids: set[str] = set()
+                current_id = None
+            else:
+                selected_ids = {rows[i].run_id for i in selected_idx if 0 <= i < len(rows)}
+                current_id = rows[current].run_id if 0 <= current < len(rows) else None
+            rows = filter_rows(all_rows, filters, _filter_value)
             rows.sort(key=lambda r: _row_sort_key(r, col), reverse=desc)
             selected_idx = {i for i, r in enumerate(rows) if r.run_id in selected_ids}
             if current_id is not None:
@@ -399,24 +406,48 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                     if r.run_id == current_id:
                         current = i
                         break
+            current = min(max(0, current), max(0, len(rows) - 1))
             offset = 0
+
+        _apply_sort(sort_by, sort_desc)
 
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
-            row_h = _dynamic_model_lines(len(rows), h)
-            help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  a select all  1-0 sort  d delete  ENTER submit  ESC/q cancel"
-            stdscr.addstr(0, 0, _fit(help1, max(1, w - 1)), curses.A_BOLD)
-            _draw_header(
+            row_h = dynamic_row_lines(len(rows), h)
+            help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  f filter  a select all  1-0 sort  d delete  ENTER submit  ESC/q cancel"
+            stdscr.addstr(0, 0, fit_text(help1, max(1, w - 1)), curses.A_BOLD)
+            filter_lines = filter_block_height(filters, widths)
+            draw_header_with_filters(
                 stdscr,
-                1,
+                y=1,
+                cols=[
+                    ("SEL", "sel"),
+                    ("#", "idx"),
+                    ("RUN_ID", "run_id"),
+                    ("RUN_AT", "run_at"),
+                    ("DATASET", "dataset"),
+                    ("ENGINE", "engine"),
+                    ("MODE", "mode"),
+                    ("DOCS", "docs"),
+                    ("MODEL/OPTS", "model"),
+                    ("STATUS", "status"),
+                    ("NDCG@10", "ndcg"),
+                    ("MRR@10", "mrr"),
+                    ("MAP@10", "map"),
+                    ("P@20", "p20"),
+                    ("RECALL@100", "recall"),
+                ],
                 widths=widths,
                 max_width=max(1, w - 1),
-                sort_key=sort_by,
+                active_col=sort_by,
                 sort_desc=sort_desc,
+                filters=filters,
+                filter_lines=filter_lines,
             )
 
-            visible = max(1, (h - 4) // row_h)
+            rows_y = 2 + filter_lines
+            visible = max(1, (h - rows_y - 2) // row_h)
             if current < offset:
                 offset = current
             if current >= offset + visible:
@@ -426,7 +457,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                 ridx = offset + i
                 if ridx >= len(rows):
                     break
-                y = 2 + i * row_h
+                y = rows_y + i * row_h
                 _draw_row(
                     stdscr=stdscr,
                     y=y,
@@ -440,7 +471,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
 
             sort_hint = f"{sort_by}{' desc' if sort_desc else ' asc'}"
             summary = f"Selected: {len(selected_idx)} / {len(rows)}  |  Sort: {sort_hint}"
-            stdscr.addstr(h - 1, 0, _fit(summary, max(1, w - 1)), curses.A_DIM)
+            stdscr.addstr(h - 1, 0, fit_text(summary, max(1, w - 1)), curses.A_DIM)
             stdscr.refresh()
 
             ch = stdscr.getch()
@@ -468,17 +499,30 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                     selected_idx.clear()
                 else:
                     selected_idx = set(range(len(rows)))
+            elif ch in (ord("f"), ord("F")):
+                val = prompt_filter_value(
+                    stdscr,
+                    prompt=f"Filter {sort_by} (empty clears): ",
+                    initial=str(filters.get(sort_by, "") or ""),
+                )
+                if val is not None:
+                    val = val.strip()
+                    if val:
+                        filters[sort_by] = val
+                    else:
+                        filters.pop(sort_by, None)
+                    _apply_sort(sort_by, sort_desc)
             elif ch in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6"), ord("7"), ord("8"), ord("9"), ord("0")):
                 key_to_col = {
                     ord("1"): "run_at",
-                    ord("2"): "engine",
-                    ord("3"): "mode",
-                    ord("4"): "model",
-                    ord("5"): "status",
-                    ord("6"): "ndcg",
-                    ord("7"): "map",
-                    ord("8"): "p20",
-                    ord("9"): "recall",
+                    ord("2"): "dataset",
+                    ord("3"): "engine",
+                    ord("4"): "mode",
+                    ord("5"): "docs",
+                    ord("6"): "model",
+                    ord("7"): "status",
+                    ord("8"): "ndcg",
+                    ord("9"): "mrr",
                     ord("0"): "run_id",
                 }
                 new_col = key_to_col[ch]
@@ -542,9 +586,10 @@ def select_artifacts_interactive(rows: list[ArtifactRow]) -> list[ArtifactRow]:
     print("")
     for i, r in enumerate(rows, start=1):
         ndcg_val = r.relevance.get("ndcg@10", 0.0)
+        docs_text = f"{int(r.doc_count):,}" if r.doc_count is not None else "-"
         print(
-            f"{i:>2}.\trun_id={r.run_id}\trun_at={r.run_at}\tengine={r.engine or '-'}\tmode={_display_mode(r.mode or '-')}\t"
-            f"model={r.model or 'n/a'}\tstatus={r.status}\tndcg@10={ndcg_val:.4f}\t"
+            f"{i:>2}.\trun_id={r.run_id}\trun_at={r.run_at}\tdataset={r.dataset_source or '-'}\tengine={r.engine or '-'}\tmode={_display_mode(r.mode or '-')}\t"
+            f"docs={docs_text}\tmodel={r.model or 'n/a'}\tstatus={r.status}\tndcg@10={ndcg_val:.4f}\t"
             f"runtime={r.runtime_seconds:.3f}s\tconcurrency={r.concurrency if r.concurrency is not None else '-'}"
         )
     print("")
@@ -561,6 +606,8 @@ def _collect_relevance_keys(rows: list[ArtifactRow]) -> list[str]:
     ordered = sorted([k for k in keys if k.startswith("ndcg@")], key=lambda x: int(x.split("@", 1)[1]))
     if "map@10" in keys:
         ordered.append("map@10")
+    if "mrr@10" in keys:
+        ordered.append("mrr@10")
     if "p@20" in keys:
         ordered.append("p@20")
     if "recall@100" in keys:
@@ -571,16 +618,17 @@ def _collect_relevance_keys(rows: list[ArtifactRow]) -> list[str]:
     return ordered
 
 
-def _relevance_sort_key(r: ArtifactRow) -> tuple[float, float, float, float, float, str, float]:
+def _relevance_sort_key(r: ArtifactRow) -> tuple[float, float, float, float, float, float, str, float]:
     ndcg10 = float(r.relevance.get("ndcg@10", 0.0))
     ndcg20 = float(r.relevance.get("ndcg@20", 0.0))
     map10 = float(r.relevance.get("map@10", 0.0))
+    mrr10 = float(r.relevance.get("mrr@10", 0.0))
     p20 = float(r.relevance.get("p@20", 0.0))
     recall100 = float(r.relevance.get("recall@100", 0.0))
     system = _system_label(r.engine, r.mode).lower()
     run_at_unix = float(r.run_at_unix or 0.0)
     # Primary metric columns: descending (higher is better), then system asc, then run-at desc.
-    return (-ndcg10, -ndcg20, -map10, -p20, -recall100, system, -run_at_unix)
+    return (-ndcg10, -ndcg20, -map10, -mrr10, -p20, -recall100, system, -run_at_unix)
 
 
 def _performance_sort_key(r: ArtifactRow) -> tuple[float, float, float, float]:
@@ -602,8 +650,8 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines.append("## Relevance")
     lines.append("")
     rel_keys = _collect_relevance_keys(rows)
-    header = "| Run ID | System | Run At | Model/Opts | Status | " + " | ".join([k.upper() for k in rel_keys]) + " |"
-    sep = "|" + "---|" * (5 + len(rel_keys))
+    header = "| Run ID | System | Dataset | Docs | Run At | Model/Opts | Status | " + " | ".join([k.upper() for k in rel_keys]) + " |"
+    sep = "|" + "---|" * (7 + len(rel_keys))
     lines.append(header)
     lines.append(sep)
     rel_rows = sorted(rows, key=_relevance_sort_key)
@@ -616,6 +664,8 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
                 [
                     run_id_link,
                     _system_label(r.engine, r.mode),
+                    r.dataset_source or "-",
+                    f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
                     r.run_at,
                     r.model or "n/a",
                     r.status,
@@ -628,9 +678,9 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines.append("## Query Performance")
     lines.append("")
     lines.append(
-        "| Run ID | System | Run At | Model/Opts | Status | Concurrency | P50 (ms) | P95 (ms) | P99 (ms) | QPS | Error rate | Queries |"
+        "| Run ID | System | Dataset | Docs | Run At | Model/Opts | Status | Concurrency | P50 (ms) | P95 (ms) | P99 (ms) | QPS | Error rate | Queries |"
     )
-    lines.append("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     perf_rows = sorted(rows, key=_performance_sort_key)
     for r in perf_rows:
         run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
@@ -641,6 +691,8 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
                 [
                     run_id_link,
                     _system_label(r.engine, r.mode),
+                    r.dataset_source or "-",
+                    f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
                     r.run_at,
                     r.model or "n/a",
                     r.status,

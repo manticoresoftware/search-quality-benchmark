@@ -25,7 +25,22 @@ class QdrantBackend:
                 api_key=cfg.api_key or None,
                 https=cfg.https,
                 timeout=cfg.timeout_seconds,
+                check_compatibility=False,
             )
+
+    def connection_target(self) -> str:
+        if (self.cfg.path or "").strip():
+            return f"path={self.cfg.path}"
+        scheme = "https" if self.cfg.https else "http"
+        return f"{scheme}://{self.cfg.host}:{self.cfg.port}"
+
+    def ensure_accessible(self) -> None:
+        try:
+            self.client.get_collections()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Qdrant is not reachable at {self.connection_target()}: {exc}"
+            ) from exc
 
     def recreate_dense_collection(self, size: int) -> None:
         quantization_config = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -11,6 +12,8 @@ import yaml
 class DatasetConfig:
     source: str = "beir/trec-covid"
     prepared_dir: str = "data/prepared"
+    max_docs: int = 0
+    keep_qrels_docs: bool = True
 
 
 @dataclass
@@ -82,6 +85,7 @@ class MetricsConfig:
             "ndcg@10",
             "ndcg@20",
             "map@10",
+            "mrr@10",
             "p@20",
             "recall@100",
             "latency",
@@ -91,6 +95,7 @@ class MetricsConfig:
     )
     ndcg_ks: list[int] = field(default_factory=lambda: [10, 20])
     map_k: int = 10
+    mrr_k: int = 10
     precision_k: int = 20
     recall_k: int = 100
 
@@ -111,6 +116,45 @@ class EngineTarget:
     type: str
     mode_filter: str | None
     cfg: AppConfig
+
+
+def dataset_source_slug(source: str) -> str:
+    raw = str(source or "").strip().lower()
+    if not raw:
+        return "default"
+    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    return slug or "default"
+
+
+def prepared_dir_for_source(
+    base_prepared_dir: str,
+    source: str,
+    *,
+    max_docs: int = 0,
+    keep_qrels_docs: bool = True,
+) -> str:
+    base = Path(str(base_prepared_dir or "data/prepared"))
+    slug = dataset_source_slug(source)
+    suffix_parts: list[str] = []
+    if int(max_docs or 0) > 0:
+        suffix_parts.append(f"maxdocs-{int(max_docs)}")
+    if not bool(keep_qrels_docs):
+        suffix_parts.append("noqrels")
+    if suffix_parts:
+        slug = f"{slug}--{'-'.join(suffix_parts)}"
+    if base.name == slug:
+        return str(base)
+    return str(base / slug)
+
+
+def _apply_dataset_source_prepared_dir(cfg: AppConfig) -> AppConfig:
+    cfg.dataset.prepared_dir = prepared_dir_for_source(
+        cfg.dataset.prepared_dir,
+        cfg.dataset.source,
+        max_docs=cfg.dataset.max_docs,
+        keep_qrels_docs=cfg.dataset.keep_qrels_docs,
+    )
+    return cfg
 
 
 _MANTICORE_FIELDS = set(vars(ManticoreConfig()).keys())
@@ -144,33 +188,6 @@ def _defaults_dict() -> dict[str, Any]:
 
 def _to_app_config(raw: dict[str, Any]) -> AppConfig:
     merged = _deep_update(_defaults_dict(), raw)
-    # Backward compatibility for old configs: ignore removed single-cutoff ndcg_k.
-    if isinstance(merged.get("metrics"), dict):
-        merged["metrics"].pop("ndcg_k", None)
-    # Backward compatibility: index_field_lengths -> fulltext_options
-    if isinstance(merged.get("manticore"), dict):
-        m = merged["manticore"]
-        if "fulltext_options" not in m and "index_field_lengths" in m:
-            try:
-                on = 1 if int(m.get("index_field_lengths", 1)) > 0 else 0
-            except Exception:
-                on = 1
-            m["fulltext_options"] = f"morphology='stem_en' index_field_lengths='{on}'"
-        m.pop("index_field_lengths", None)
-        # Backward compatibility: fulltext_ranker/fulltext_ranker_expr -> search_options
-        ranker = str(m.pop("fulltext_ranker", "") or "").strip()
-        ranker_expr = str(m.pop("fulltext_ranker_expr", "") or "").strip()
-        search_opts = str(m.get("search_options", "") or "").strip()
-        if ranker and "ranker=" not in search_opts.lower():
-            if ranker.lower() == "expr":
-                expr = ranker_expr or "1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))"
-                ranker_opt = f"ranker=expr('{expr}')"
-            else:
-                ranker_opt = f"ranker={ranker}"
-            if search_opts:
-                m["search_options"] = f"{ranker_opt}, {search_opts}"
-            else:
-                m["search_options"] = ranker_opt
     return AppConfig(
         dataset=DatasetConfig(**merged["dataset"]),
         manticore=ManticoreConfig(**merged["manticore"]),
@@ -196,35 +213,11 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
         val = base_raw.pop(sec, None)
         if isinstance(val, dict):
             global_sections[sec] = val
-    explicit_entry_mode = any(
-        isinstance(v, dict) and ("type" in v or "base" in v) for v in base_raw.values()
-    )
-    # legacy top-level sections mode (manticore/qdrant as plain sections)
-    legacy_m = base_raw.get("manticore")
-    legacy_q = base_raw.get("qdrant")
-    if not explicit_entry_mode and (
-        isinstance(legacy_m, dict) or isinstance(legacy_q, dict)
-    ):
-        merged_legacy = _deep_update(_deep_update({}, global_sections), {})
-        if isinstance(legacy_m, dict):
-            merged_legacy["manticore"] = legacy_m
-        if isinstance(legacy_q, dict):
-            merged_legacy["qdrant"] = legacy_q
-        cfg = _to_app_config(merged_legacy)
-        return [
-            EngineTarget(source_path=str(cfg_path), name="manticore", type="manticore", mode_filter=None, cfg=cfg),
-            EngineTarget(source_path=str(cfg_path), name="qdrant", type="qdrant", mode_filter=None, cfg=cfg),
-        ]
-
     entry_defs: dict[str, dict[str, Any]] = {
         k: v for k, v in base_raw.items() if isinstance(v, dict)
     }
     if not entry_defs:
-        cfg = _to_app_config(global_sections)
-        return [
-            EngineTarget(source_path=str(cfg_path), name="manticore", type="manticore", mode_filter=None, cfg=cfg),
-            EngineTarget(source_path=str(cfg_path), name="qdrant", type="qdrant", mode_filter=None, cfg=cfg),
-        ]
+        raise ValueError(f"No engine entries found in config: {cfg_path}")
 
     resolved: dict[str, dict[str, Any]] = {}
 
@@ -321,6 +314,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
         overrides = _entry_to_overrides(ent, e_type)
         merged_raw = _deep_update(_deep_update({}, global_sections), overrides)
         cfg = _to_app_config(merged_raw)
+        cfg = _apply_dataset_source_prepared_dir(cfg)
         targets.append(
             EngineTarget(
                 source_path=str(cfg_path),

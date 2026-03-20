@@ -20,6 +20,7 @@ def metric_definitions_markdown() -> str:
         "## Metric Definitions\n\n"
         "- `ndcg@k`: ranking quality at top-k with graded relevance (higher is better).\n"
         "- `map@k`: mean average precision at top-k, emphasizing early relevant hits (higher is better).\n"
+        "- `mrr@k`: mean reciprocal rank at top-k, emphasizing the rank of the first relevant hit (higher is better).\n"
         "- `p@k`: precision at top-k (fraction of top-k hits that are relevant; higher is better).\n"
         "- `recall@k`: fraction of all relevant docs retrieved in top-k (higher is better).\n"
         "- `latency_p50_ms/p95_ms/p99_ms`: median/tail query latency in milliseconds (lower is better).\n"
@@ -35,6 +36,9 @@ def build_summary_markdown(metrics: dict[str, Any]) -> str:
     profile = str(metrics.get("profile", "") or "").strip()
     if profile:
         lines.append(f"- Profile: `{profile}`")
+    dataset_source = str(metrics.get("dataset_source", "") or "").strip()
+    if dataset_source:
+        lines.append(f"- Dataset source: `{dataset_source}`")
     lines.append(f"- Mode: `{_display_mode(str(metrics.get('mode', '')))}`")
     lines.append(f"- Runtime (sec): `{metrics.get('runtime_seconds', 0):.3f}`")
     bcfg = metrics.get("benchmark_settings", {}) or {}

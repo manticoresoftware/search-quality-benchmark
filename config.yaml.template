@@ -8,6 +8,8 @@
 dataset:
   source: "beir/trec-covid"  # default: "beir/trec-covid"
   prepared_dir: "data/prepared"  # default: "data/prepared"
+  max_docs: 0  # default: 0 (0 means full corpus, >0 means deterministic subset)
+  keep_qrels_docs: true  # default: true (always keep docs referenced by qrels)
 
 benchmark:
   limit: 100  # default: 100
@@ -18,9 +20,10 @@ benchmark:
   diagnostics_queries: 3  # default: 3
 
 metrics:
-  enabled: ["ndcg@10", "ndcg@20", "map@10", "p@20", "recall@100", "latency", "qps", "error_rate"]  # default: ["ndcg@10","ndcg@20","map@10","p@20","recall@100","latency","qps","error_rate"]
+  enabled: ["ndcg@10", "ndcg@20", "map@10", "mrr@10", "p@20", "recall@100", "latency", "qps", "error_rate"]  # default: ["ndcg@10","ndcg@20","map@10","mrr@10","p@20","recall@100","latency","qps","error_rate"]
   ndcg_ks: [10, 20]  # default: [10,20]
   map_k: 10  # default: 10
+  mrr_k: 10  # default: 10
   precision_k: 20  # default: 20
   recall_k: 100  # default: 100
 
@@ -40,7 +43,7 @@ manticore:
   # If omitted, Manticore internal KNN defaults are used (no explicit option passed).
   vector_search_oversampling:
   vector_search_rescore:
-  vector_cache_path: "vector_cache/embeddings.sqlite"  # default: "vector_cache/embeddings.sqlite"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"  # example: dataset/model-specific cache file
   vector_cache_fetch_batch_size: 1000  # default: 1000
   vector_api_key: ""  # default: ""
   vector_api_key_file: ""  # default: ""
@@ -85,3 +88,41 @@ qdrant_bq:
   base: "qdrant"
   dense_collection: "trec_covid_qdrant_dense_bq"
   dense_binary_quantization: true
+
+# MSMARCO passage examples:
+msmarco_passage_manticore:
+  base: "manticore"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  fulltext_table: "msmarco_passage_ft"
+  vector_table: "msmarco_passage_vec"
+
+msmarco_passage_qdrant:
+  base: "qdrant"
+  source: "msmarco-passage/dev/small"
+  bm25_collection: "msmarco_passage_qdrant_bm25"
+  dense_collection: "msmarco_passage_qdrant_dense"
+
+# MSMARCO-lite examples (smaller deterministic subset, cheaper/faster):
+msmarco_lite_manticore:
+  base: "msmarco_passage_manticore"
+  max_docs: 250000
+  vector_cache_path: "vector_cache/msmarco-lite-openai.sqlite"
+  fulltext_table: "msmarco_lite_ft"
+  vector_table: "msmarco_lite_vec"
+
+msmarco_lite_qdrant:
+  base: "msmarco_passage_qdrant"
+  max_docs: 250000
+  bm25_collection: "msmarco_lite_qdrant_bm25"
+  dense_collection: "msmarco_lite_qdrant_dense"
+
+msmarco_trecdl_2019_manticore:
+  base: "msmarco_passage_manticore"
+  source: "msmarco-passage/trec-dl-2019/judged"
+  vector_cache_path: "vector_cache/msmarco-trecdl-2019-openai.sqlite"
+
+msmarco_trecdl_2020_manticore:
+  base: "msmarco_passage_manticore"
+  source: "msmarco-passage/trec-dl-2020/judged"
+  vector_cache_path: "vector_cache/msmarco-trecdl-2020-openai.sqlite"

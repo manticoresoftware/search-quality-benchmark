@@ -60,3 +60,12 @@ def precision_at_k(retrieved_doc_ids: list[str], qrels: dict[str, int], k: int) 
         return 0.0
     found = sum(1 for d in retrieved_doc_ids[:k] if d in relevant)
     return found / k
+
+
+def reciprocal_rank_at_k(retrieved_doc_ids: list[str], qrels: dict[str, int], k: int) -> float:
+    if k <= 0:
+        return 0.0
+    for i, doc_id in enumerate(retrieved_doc_ids[:k], start=1):
+        if qrels.get(doc_id, 0) > 0:
+            return 1.0 / i
+    return 0.0

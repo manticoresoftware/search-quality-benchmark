@@ -7,12 +7,15 @@ def test_build_variants_from_config_paths(tmp_path: Path):
     cfg = tmp_path / "config.test.yaml"
     cfg.write_text(
         """
+benchmark:
+  concurrency: 3
 manticore:
+  type: "manticore"
   host: "127.0.0.1"
   sql_port: 9306
   http_port: 9308
-benchmark:
-  concurrency: 3
+qdrant:
+  type: "qdrant"
 """.strip()
         + "\n",
         encoding="utf-8",

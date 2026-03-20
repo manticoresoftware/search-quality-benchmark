@@ -50,6 +50,9 @@ class VectorCache:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path))
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA temp_store=MEMORY")
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS embeddings_cache (
@@ -124,51 +127,100 @@ class VectorCache:
         return out
 
     def upsert_ok(self, *, cache_key: str, model: str, similarity: str, text_value: str, vector: list[float]) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO embeddings_cache(cache_key, model, similarity, text_value, status, vector_json, updated_at)
-            VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(cache_key) DO UPDATE SET
-                model=excluded.model,
-                similarity=excluded.similarity,
-                text_value=excluded.text_value,
-                status='ok',
-                vector_json=excluded.vector_json,
-                updated_at=excluded.updated_at
-            WHERE embeddings_cache.status!='ok'
-               OR embeddings_cache.vector_json IS NOT excluded.vector_json
-               OR embeddings_cache.model IS NOT excluded.model
-               OR embeddings_cache.similarity IS NOT excluded.similarity
-               OR embeddings_cache.text_value IS NOT excluded.text_value
-            """,
-            (
-                cache_key,
-                model,
-                similarity,
-                text_value,
-                "ok",
-                json.dumps(vector, ensure_ascii=False),
-                int(time()),
-            ),
+        self.upsert_ok_many(
+            [
+                {
+                    "cache_key": cache_key,
+                    "model": model,
+                    "similarity": similarity,
+                    "text_value": text_value,
+                    "vector": vector,
+                }
+            ]
         )
 
-    def upsert_null(self, *, cache_key: str, model: str, similarity: str, text_value: str) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO embeddings_cache(cache_key, model, similarity, text_value, status, vector_json, updated_at)
-            VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(cache_key) DO NOTHING
-            """,
+    def upsert_ok_many(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        now = int(time())
+        values = [
             (
-                cache_key,
-                model,
-                similarity,
-                text_value,
+                str(row["cache_key"]),
+                str(row["model"]),
+                str(row["similarity"]),
+                str(row["text_value"]),
+                "ok",
+                json.dumps(row.get("vector", []), ensure_ascii=False),
+                now,
+            )
+            for row in rows
+        ]
+        self.conn.execute(
+            "BEGIN",
+        )
+        try:
+            self.conn.executemany(
+                """
+                INSERT INTO embeddings_cache(cache_key, model, similarity, text_value, status, vector_json, updated_at)
+                VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    model=excluded.model,
+                    similarity=excluded.similarity,
+                    text_value=excluded.text_value,
+                    status='ok',
+                    vector_json=excluded.vector_json,
+                    updated_at=excluded.updated_at
+                WHERE embeddings_cache.status!='ok'
+                   OR embeddings_cache.vector_json IS NOT excluded.vector_json
+                   OR embeddings_cache.model IS NOT excluded.model
+                   OR embeddings_cache.similarity IS NOT excluded.similarity
+                   OR embeddings_cache.text_value IS NOT excluded.text_value
+                """,
+                values,
+            )
+        finally:
+            self.conn.execute("COMMIT")
+
+    def upsert_null(self, *, cache_key: str, model: str, similarity: str, text_value: str) -> None:
+        self.upsert_null_many(
+            [
+                {
+                    "cache_key": cache_key,
+                    "model": model,
+                    "similarity": similarity,
+                    "text_value": text_value,
+                }
+            ]
+        )
+
+    def upsert_null_many(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        now = int(time())
+        values = [
+            (
+                str(row["cache_key"]),
+                str(row["model"]),
+                str(row["similarity"]),
+                str(row["text_value"]),
                 "null",
                 None,
-                int(time()),
-            ),
-        )
+                now,
+            )
+            for row in rows
+        ]
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.executemany(
+                """
+                INSERT INTO embeddings_cache(cache_key, model, similarity, text_value, status, vector_json, updated_at)
+                VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(cache_key) DO NOTHING
+                """,
+                values,
+            )
+        finally:
+            self.conn.execute("COMMIT")
 
     def commit(self) -> None:
         self.conn.commit()

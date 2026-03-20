@@ -12,14 +12,10 @@ dataset:
   source: "beir/trec-covid"
 manticore_default:
   type: "manticore"
-  manticore:
-    fulltext_ranker: "expr"
-    fulltext_ranker_expr: "1000*bm25a(1.2,0.75)"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75)')"
 manticore_bm25:
   base: "manticore_default"
-  manticore:
-    fulltext_ranker: "bm25"
-    fulltext_ranker_expr: ""
+  search_options: "ranker=bm25"
 qdrant_main:
   type: "qdrant"
   qdrant:
@@ -46,12 +42,10 @@ benchmark:
   concurrency: 2
 mant_a:
   type: "manticore"
-  manticore:
-    fulltext_ranker: "bm25"
+  search_options: "ranker=bm25"
 mant_b:
   base: "mant_a"
-  manticore:
-    fulltext_ranker: "proximity_bm25"
+  search_options: "ranker=proximity_bm25"
 qdr:
   type: "qdrant"
 """.strip()

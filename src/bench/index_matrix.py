@@ -8,6 +8,17 @@ import sys
 from typing import Any
 
 from .config import AppConfig, load_engine_targets
+from .discovery import discover_config_paths
+from .table_filters import (
+    draw_header_with_filters,
+    filter_block_height,
+    filter_rows,
+    fit_text,
+    prompt_filter_value,
+)
+from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
+
+_fit = fit_text
 
 
 @dataclass
@@ -38,17 +49,6 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
     return "Qdrant/bm25"
-
-
-def discover_config_paths() -> list[Path]:
-    out: list[Path] = []
-    for p in sorted(Path(".").glob("config*.yaml")):
-        if p.name.endswith(".template"):
-            continue
-        out.append(p)
-    return out
-
-
 def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVariant]:
     out: list[IndexVariant] = []
     for path in paths:
@@ -93,97 +93,6 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
     )
 
 
-def _fit(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text.ljust(width)
-    if width <= 1:
-        return text[:width]
-    return text[: width - 1] + "…"
-
-
-def _wrap_text_lines(text: str, width: int) -> list[str]:
-    if width <= 1:
-        return [text[: max(0, width)]]
-    src = str(text or "")
-    if not src:
-        return [""]
-    out: list[str] = []
-    while src:
-        if len(src) <= width:
-            out.append(src)
-            break
-        split_at = src.rfind(" ", 0, width + 1)
-        if split_at <= 0:
-            split_at = width
-        out.append(src[:split_at].rstrip())
-        src = src[split_at:].lstrip()
-    return out or [""]
-
-
-def _wrap_cell(text: str, width: int, max_lines: int = 2) -> list[str]:
-    if max_lines <= 1:
-        return [_fit(text, width)]
-    src = str(text or "")
-    out: list[str] = []
-    while src and len(out) < max_lines:
-        if len(src) <= width:
-            out.append(src.ljust(width))
-            src = ""
-            break
-        if len(out) == max_lines - 1:
-            out.append(_fit(src, width))
-            src = ""
-            break
-        out.append(src[:width].ljust(width))
-        src = src[width:]
-    while len(out) < max_lines:
-        out.append("".ljust(width))
-    return out
-
-
-def _dynamic_row_lines(total_rows: int, term_height: int) -> int:
-    available = max(1, term_height - 4)
-    target_rows = max(1, min(total_rows, 10))
-    lines = available // target_rows
-    if lines < 1:
-        return 1
-    if lines > 3:
-        return 3
-    return lines
-
-
-def _draw_header(
-    stdscr: Any,
-    y: int,
-    widths: dict[str, int],
-    max_width: int,
-    sort_key: str,
-    sort_desc: bool,
-) -> None:
-    cols = [
-        ("SEL", "sel"),
-        ("PROFILE", "entry"),
-        ("ENGINE", "engine"),
-        ("MODE", "mode"),
-        ("TARGET", "target"),
-        ("MODEL/OPTS", "model"),
-        ("BATCH", "batch"),
-    ]
-    x = 0
-    for title, key in cols:
-        if x >= max_width:
-            break
-        label = title
-        attrs = curses.A_UNDERLINE | curses.A_BOLD
-        if key == sort_key:
-            label = f"{title}{'↓' if sort_desc else '↑'}"
-            attrs |= curses.A_REVERSE
-        stdscr.addstr(y, x, _fit(label, widths[key]), attrs)
-        x += widths[key] + 1
-
-
 def _draw_row(
     stdscr: Any,
     y: int,
@@ -211,7 +120,7 @@ def _draw_row(
     x = 0
     stdscr.addstr(y, x, _fit("[x]" if selected else "[ ]", widths["sel"]), attrs)
     x += widths["sel"] + 1
-    entry_lines = _wrap_cell(v.entry, widths["entry"], max_lines=row_lines)
+    entry_lines = wrap_cell(v.entry, widths["entry"], max_lines=row_lines)
     stdscr.addstr(y, x, entry_lines[0], attrs)
     for i in range(1, row_lines):
         stdscr.addstr(y + i, x, entry_lines[i], attrs)
@@ -222,7 +131,7 @@ def _draw_row(
     x += widths["mode"] + 1
     stdscr.addstr(y, x, _fit(v.target, widths["target"]), attrs)
     x += widths["target"] + 1
-    model_lines = _wrap_cell(v.model, widths["model"], max_lines=row_lines)
+    model_lines = wrap_cell(v.model, widths["model"], max_lines=row_lines)
     stdscr.addstr(y, x, model_lines[0], attrs)
     for i in range(1, row_lines):
         stdscr.addstr(y + i, x, model_lines[i], attrs)
@@ -283,7 +192,7 @@ def _draw_details_panel(stdscr: Any, v: IndexVariant, widths: dict[str, int], w:
         if y > max_rows:
             break
         attrs = curses.A_BOLD if i == 0 else curses.A_DIM
-        wrapped = _wrap_text_lines(line, panel_w)
+        wrapped = wrap_text_lines(line, panel_w)
         for j, part in enumerate(wrapped):
             if y > max_rows:
                 break
@@ -296,9 +205,10 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
     selected_idx: set[int] = set()
     current = 0
     offset = 0
+    all_variants = list(variants)
 
     def _inner(stdscr: Any) -> list[int]:
-        nonlocal current, offset
+        nonlocal current, offset, variants, selected_idx
         curses.curs_set(0)
         stdscr.keypad(True)
         if curses.has_colors():
@@ -323,6 +233,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
         sort_idx = 0
         sort_key = sort_cols[sort_idx]
         sort_desc = False
+        filters: dict[str, str] = {}
 
         def _variant_id(v: IndexVariant) -> tuple[str, str, str, str, str, int]:
             return (v.entry, v.engine, v.mode, v.target, v.model, int(v.batch_size))
@@ -345,10 +256,26 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                 return int(v.batch_size)
             return v.entry.lower()
 
+        def _filter_value(v: IndexVariant, col: str) -> Any:
+            if col == "entry":
+                return v.entry
+            if col == "engine":
+                return v.engine
+            if col == "mode":
+                return _display_mode(v.mode)
+            if col == "target":
+                return v.target
+            if col == "model":
+                return v.model
+            if col == "batch":
+                return v.batch_size
+            return ""
+
         def _apply_sort() -> None:
             nonlocal variants, selected_idx, current, offset
             selected_ids = {_variant_id(variants[i]) for i in selected_idx if 0 <= i < len(variants)}
             current_id = _variant_id(variants[current]) if 0 <= current < len(variants) else None
+            variants = filter_rows(all_variants, filters, _filter_value)
             variants.sort(key=lambda v: _sort_value(v, sort_key), reverse=sort_desc)
             selected_idx = {i for i, v in enumerate(variants) if _variant_id(v) in selected_ids}
             if current_id is not None:
@@ -356,28 +283,42 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                     if _variant_id(v) == current_id:
                         current = i
                         break
+            current = min(max(0, current), max(0, len(variants) - 1))
             offset = 0
 
         _apply_sort()
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
-            row_h = _dynamic_row_lines(len(variants), h)
+            row_h = dynamic_row_lines(len(variants), h)
             stdscr.addstr(
                 0,
                 0,
-                _fit("↑/↓ move  ←/→ sort col  SPACE toggle  ENTER index selected  ESC/q cancel", max(1, w - 1)),
+                fit_text("↑/↓ move  ←/→ sort col  SPACE toggle  f filter  ENTER index selected  ESC/q cancel", max(1, w - 1)),
                 curses.A_BOLD,
             )
-            _draw_header(
+            filter_lines = filter_block_height(filters, widths)
+            draw_header_with_filters(
                 stdscr,
-                1,
+                y=1,
+                cols=[
+                    ("SEL", "sel"),
+                    ("PROFILE", "entry"),
+                    ("ENGINE", "engine"),
+                    ("MODE", "mode"),
+                    ("TARGET", "target"),
+                    ("MODEL/OPTS", "model"),
+                    ("BATCH", "batch"),
+                ],
                 widths=widths,
                 max_width=max(1, w - 1),
-                sort_key=sort_key,
+                active_col=sort_key,
                 sort_desc=sort_desc,
+                filters=filters,
+                filter_lines=filter_lines,
             )
-            visible = max(1, (h - 4) // row_h)
+            rows_y = 2 + filter_lines
+            visible = max(1, (h - rows_y - 2) // row_h)
             if current < offset:
                 offset = current
             if current >= offset + visible:
@@ -388,7 +329,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                     break
                 _draw_row(
                     stdscr,
-                    y=2 + i * row_h,
+                    y=rows_y + i * row_h,
                     v=variants[ridx],
                     selected=(ridx in selected_idx),
                     cursor=(ridx == current),
@@ -397,7 +338,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                 )
             if variants:
                 _draw_details_panel(stdscr, variants[current], widths=widths, w=w, h=h)
-            stdscr.addstr(h - 1, 0, _fit(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
+            stdscr.addstr(h - 1, 0, fit_text(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
             stdscr.refresh()
 
             ch = stdscr.getch()
@@ -413,6 +354,19 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                 sort_idx = (sort_idx + 1) % len(sort_cols)
                 sort_key = sort_cols[sort_idx]
                 _apply_sort()
+            elif ch in (ord("f"), ord("F")):
+                val = prompt_filter_value(
+                    stdscr,
+                    prompt=f"Filter {sort_key} (empty clears): ",
+                    initial=str(filters.get(sort_key, "") or ""),
+                )
+                if val is not None:
+                    val = val.strip()
+                    if val:
+                        filters[sort_key] = val
+                    else:
+                        filters.pop(sort_key, None)
+                    _apply_sort()
             elif ch == ord(" "):
                 if current in selected_idx:
                     selected_idx.remove(current)

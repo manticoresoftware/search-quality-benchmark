@@ -1,6 +1,6 @@
 # Search Benchmark (Manticore + Qdrant)
 
-This CLI benchmarks retrieval quality and performance on TREC-COVID across:
+This CLI benchmarks retrieval quality and performance on IR datasets (via `ir_datasets`) across:
 - Manticore full-text (`MATCH(...)`)
 - Manticore vector (`FLOAT_VECTOR` + auto-embeddings)
 - Qdrant full-text-like sparse retrieval (BM25 in Qdrant sparse vectors)
@@ -10,7 +10,7 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 
 ## Dataset
 
-- Source: `beir/trec-covid` via `ir_datasets`.
+- Default source: `beir/trec-covid` via `ir_datasets`.
 - Dataset catalog/docs: [ir-datasets.com](https://ir-datasets.com/).
 - Corpus: COVID-19 research documents with `title` and `abstract` fields.
 - Queries: official TREC-COVID topics.
@@ -33,13 +33,41 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
     - `map@k` and `recall@k`: treat documents with relevance `> 0` as relevant.
   - Qrels are filtered to the prepared document set.
 
-Prepared outputs:
-- `data/prepared/docs.jsonl`
-- `data/prepared/topics.jsonl`
-- `data/prepared/qrels.tsv`
+Prepared outputs (source-scoped):
+- `data/prepared/<source-slug>/docs.jsonl`
+- `data/prepared/<source-slug>/topics.jsonl`
+- `data/prepared/<source-slug>/qrels.tsv`
+
+Examples:
+- `beir/trec-covid` -> `data/prepared/beir-trec-covid/`
+- `msmarco-passage/dev/small` -> `data/prepared/msmarco-passage-dev-small/`
 
 Note:
 - Legacy prepared topic formats are no longer supported. If you have old prepared files, rerun `bench prepare`.
+
+### MSMARCO Profiles
+
+Recommended MSMARCO passage profiles in this repo:
+- default benchmark: `msmarco-passage/dev/small`
+- practical cheaper variant: `msmarco_lite_*` entries (`max_docs: 250000`, deterministic subset)
+- secondary validation: `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`
+
+Why this split:
+- `dev/small` gives a practical judged query set for day-to-day tuning.
+- TREC-DL judged sets provide higher-quality secondary validation on a small query set.
+
+Runtime note:
+- all of these still use the full MSMARCO passage corpus (~8.84M passages), so indexing/embedding remains heavy.
+- `msmarco_lite_*` entries reduce this by limiting prepared docs (`dataset.max_docs`) while still keeping judged docs (`dataset.keep_qrels_docs: true`).
+
+Example commands:
+```bash
+bench --config config.yaml prepare
+bench --config config.yaml run --engine manticore --mode both --entry msmarco_passage_manticore
+bench --config config.yaml run --engine manticore --mode both --entry msmarco_lite_manticore
+bench --config config.yaml run --engine manticore --mode both --entry msmarco_trecdl_2019_manticore
+bench --config config.yaml run --engine manticore --mode both --entry msmarco_trecdl_2020_manticore
+```
 
 ## How It Works and Usage
 
@@ -50,7 +78,7 @@ bench
 ```
 
 Main actions:
-1. `prepare`: download and prepare corpus/topics/qrels.
+1. `prepare`: choose one or more dataset sources and download/prepare corpus/topics/qrels.
 2. `index`: build search indexes/tables for selected engine+mode (opens interactive index matrix when selected from `bench`; prints live indexing progress with `processed/total`, percent, inserted rows, retries/failures, elapsed seconds).
 3. `run`: execute topic queries with fixed benchmark settings and compute metrics (opens interactive run matrix; variants come from named config profiles and include `PROFILE`, `ENGINE`, `MODE`, `MODEL/OPTS`).
 4. `report`: render a combined report from selected artifacts.
@@ -58,10 +86,12 @@ Main actions:
 Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-select is available).
 
 Note:
-- `cache-populate` is available as a direct CLI command (not a top-level menu item):
-  - `bench cache-populate --table trec_covid_vec --model openai/text-embedding-3-large --similarity cosine --vector-from title,abstract`
 
 The index selector combines options discovered from all local `config*.yaml` files (excluding templates).
+
+`prepare` also supports direct filtering:
+- `bench --config config.yaml prepare --source msmarco-passage/dev/small`
+- `bench --config config.yaml prepare --entry msmarco_lite_manticore`
 
 ## Installation
 
@@ -221,8 +251,12 @@ curl http://127.0.0.1:6333/
 
 ## Vector Cache
 
-Vector cache is stored as SQLite file (default):
-- `vector_cache/embeddings.sqlite`
+Vector cache is stored as SQLite file (configured by `manticore.vector_cache_path`).
+
+Recommended defaults in this repo:
+- `vector_cache/trec-covid-openai.sqlite`
+- `vector_cache/msmarco-passage-openai.sqlite`
+- `vector_cache/msmarco-lite-openai.sqlite`
 
 This directory is important:
 - regenerating cache can take a long time and may cost money (for API-based models),
@@ -230,7 +264,7 @@ This directory is important:
 
 Populate cache from existing Manticore vector table:
 ```bash
-bench cache-populate --table trec_covid_vec --model openai/text-embedding-3-large --similarity cosine --vector-from title,abstract
+The vector cache is populated automatically by Manticore vector indexing and then reused by later Manticore and Qdrant vector runs.
 ```
 
 Behavior:
@@ -249,7 +283,7 @@ Behavior:
 ## Metrics
 
 This benchmark reports two metric groups:
-- quality metrics (how relevant the returned ranking is against TREC-COVID qrels),
+- quality metrics (how relevant the returned ranking is against dataset qrels),
 - performance metrics (how fast and stable query/index execution is).
 
 Configured in `metrics` section:
@@ -260,6 +294,7 @@ metrics:
     - "ndcg@10"
     - "ndcg@20"
     - "map@10"
+    - "mrr@10"
     - "p@20"
     - "recall@100"
     - "latency"
@@ -267,6 +302,7 @@ metrics:
     - "error_rate"
   ndcg_ks: [10, 20]
   map_k: 10
+  mrr_k: 10
   precision_k: 20
   recall_k: 100
 ```
@@ -274,6 +310,7 @@ metrics:
 Meaning:
 - `ndcg@k`: ranking quality at top-k with graded relevance.
 - `map@k`: average precision at top-k across topics.
+- `mrr@k`: mean reciprocal rank at top-k (first relevant hit rank quality).
 - `p@k`: precision at top-k (fraction of top-k docs that are relevant).
 - `recall@k`: fraction of all relevant docs found in top-k.
 - `latency_p50/p95/p99`: median and tail query latency.
@@ -365,6 +402,34 @@ flowchart TB
   classDef yesRel fill:#6ea8dc,stroke:#6ea8dc,color:#111;
   class ML1,ML2,ML3,MH3,MH4,MH5 noRel;
   class ML4,ML5,MH1,MH2 yesRel;
+```
+
+### MRR@k
+Asks: "How early is the first relevant result?"
+  - It only looks at the **first** relevant hit.
+  - Formula intuition: `RR = 1 / (rank of first relevant)`, then average over queries.
+  - If first relevant is at rank 1, score is `1.0`; at rank 5, score is `0.2`.
+  - **Higher `mrr@k` means users see a good answer sooner.**
+```mermaid
+flowchart TB
+  subgraph MRL["Low MRR (first hit is late)"]
+    direction TB
+    MRL1["Top-5: X, Y, Z, W, A"]
+    MRL2["First relevant: A at rank 5"]
+    MRL3["RR = 1/5 = 0.20"]
+    MRL1 --> MRL2 --> MRL3
+  end
+  subgraph MRH["High MRR (first hit is early)"]
+    direction TB
+    MRH1["Top-5: A, X, Y, Z, W"]
+    MRH2["First relevant: A at rank 1"]
+    MRH3["RR = 1/1 = 1.00"]
+    MRH1 --> MRH2 --> MRH3
+  end
+  classDef low fill:#dce8f4,stroke:#dce8f4,color:#111;
+  classDef high fill:#79addd,stroke:#79addd,color:#111;
+  class MRL1,MRL2,MRL3 low;
+  class MRH1,MRH2,MRH3 high;
 ```
 
 ### P@k
