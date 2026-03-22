@@ -1,6 +1,6 @@
 # Search Benchmark (Manticore + Qdrant)
 
-This CLI benchmarks retrieval quality and performance on IR datasets (via `ir_datasets`) across:
+This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text (`MATCH(...)`)
 - Manticore vector (`FLOAT_VECTOR` + auto-embeddings)
 - Qdrant full-text-like sparse retrieval (BM25 in Qdrant sparse vectors)
@@ -11,7 +11,10 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 ## Dataset
 
 - Default source: `beir/trec-covid` via `ir_datasets`.
-- Dataset catalog/docs: [ir-datasets.com](https://ir-datasets.com/).
+- Additional ready examples: `beir/nfcorpus/test`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `hf-beir:theatticusproject/acord:test`.
+- Dataset catalogs/docs:
+  - [ir-datasets.com](https://ir-datasets.com/)
+  - [ACORD on Hugging Face](https://huggingface.co/datasets/theatticusproject/acord)
 - Corpus: COVID-19 research documents with `title` and `abstract` fields.
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
@@ -40,7 +43,14 @@ Prepared outputs (source-scoped):
 
 Examples:
 - `beir/trec-covid` -> `data/prepared/beir-trec-covid/`
+- `beir/nfcorpus/test` -> `data/prepared/beir-nfcorpus-test/`
 - `msmarco-passage/dev/small` -> `data/prepared/msmarco-passage-dev-small/`
+- `hf-beir:theatticusproject/acord:test` -> `data/prepared/hf-beir-theatticusproject-acord-test/`
+
+Hugging Face BEIR-style sources:
+- format: `hf-beir:<repo_id>:<split>`
+- current example in this repo: `hf-beir:theatticusproject/acord:test`
+- the loader expects a BEIR-style zip containing `corpus.jsonl`, `queries.jsonl`, and `qrels/<split>.tsv`
 
 Note:
 - Legacy prepared topic formats are no longer supported. If you have old prepared files, rerun `bench prepare`.
@@ -68,6 +78,19 @@ bench --config config.yaml run --engine manticore --mode both --entry msmarco_li
 bench --config config.yaml run --engine manticore --mode both --entry msmarco_trecdl_2019_manticore
 bench --config config.yaml run --engine manticore --mode both --entry msmarco_trecdl_2020_manticore
 ```
+
+### ACORD Profiles
+
+Ready ACORD entries in this repo:
+- `acord_manticore_ft`: Manticore full-text with lemmatization and `OR` query mode
+- `acord_manticore_1bit`: Manticore vector with 1-bit quantization
+- `acord_qdrant_ft`: Qdrant BM25
+- `acord_qdrant_bq`: Qdrant dense with binary quantization
+
+Prepared ACORD test split observed in this repo:
+- docs: `3,931`
+- queries: `57`
+- qrels: `61,988`
 
 ## How It Works and Usage
 
@@ -145,6 +168,11 @@ manticore:
   - default: `ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')`
   - examples: `ranker=bm25`, `ranker=proximity_bm25`, `ranker=bm25, fuzzy=1`
   - applies to both full-text and vector query paths
+- `manticore.fulltext_query_mode`: how full-text query terms are combined before sending them to `MATCH()`.
+  - `and` (default): implicit Manticore `AND`
+  - `or`: joins terms with `|`
+  - `quorum`: uses Manticore quorum syntax like `"term1 term2 term3"/0.5`
+- `manticore.fulltext_query_quorum`: quorum threshold used when `fulltext_query_mode: "quorum"` (default: `0.5`)
 - full-text queries also set: `idf='plain,tfidf_unnormalized'`
 
 ### Manticore Vector Quantization/Search Config

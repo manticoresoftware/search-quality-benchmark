@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0",
+  "huggingface_hub>=0.23.0",
   "ir-datasets>=0.5.10",
   "pymysql>=1.1.0",
   "qdrant-client>=1.17.1",

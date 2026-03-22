@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import curses
+from dataclasses import dataclass
+from hashlib import md5
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -10,6 +12,7 @@ from .config import AppConfig, load_config, load_engine_targets
 from .discovery import discover_config_paths
 from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
+from .io_utils import read_jsonl
 from .manticore import ManticoreClient
 from .io_utils import generate_run_id
 from .prepare import prepare_dataset
@@ -26,6 +29,7 @@ from .run_matrix import (
 )
 from .runbench import run_benchmark, write_run_artifacts
 from .summarize import generate_combined_report
+from .vector_cache import VectorCache, cache_key_from_doc, parse_vector_from_fields
 
 
 def _fit(text: str, width: int) -> str:
@@ -224,6 +228,114 @@ def _confirm_manticore_vector_reindex_for_configs(
     return answer == "yes"
 
 
+@dataclass
+class CacheSampleCheck:
+    sample_size: int
+    ok_count: int
+    null_count: int
+    missing_count: int
+    missing_keys: list[str]
+
+
+def _sample_docs_for_cache_check(docs: list[dict[str, object]], *, ratio: int = 100) -> list[dict[str, object]]:
+    total = len(docs)
+    if total <= ratio:
+        return docs
+    out: list[dict[str, object]] = []
+    for i, doc in enumerate(docs):
+        raw = str(doc.get("doc_id") or doc.get("id") or i)
+        bucket = int(md5(raw.encode("utf-8")).hexdigest()[:8], 16) % ratio
+        if bucket == 0:
+            out.append(doc)
+    if not out:
+        return docs[: min(total, max(1, total // ratio))]
+    return out
+
+
+def _check_vector_cache_sample(cfg: AppConfig) -> CacheSampleCheck | None:
+    docs_path = Path(cfg.dataset.prepared_dir) / "docs.jsonl"
+    if not docs_path.exists():
+        return None
+    docs = read_jsonl(docs_path)
+    sampled = _sample_docs_for_cache_check(docs)
+    fields = parse_vector_from_fields(cfg.manticore.vector_from)
+    cache = VectorCache(cfg.manticore.vector_cache_path)
+    try:
+        status_map = cache.get_status_map(
+            model=cfg.manticore.vector_model,
+            similarity=cfg.manticore.vector_similarity,
+        )
+    finally:
+        cache.close()
+    ok_count = 0
+    null_count = 0
+    missing_count = 0
+    missing_keys: list[str] = []
+    for doc in sampled:
+        key = cache_key_from_doc(
+            doc,
+            fields=fields,
+            model=cfg.manticore.vector_model,
+            similarity=cfg.manticore.vector_similarity,
+        )
+        status = status_map.get(key, "missing")
+        if status == "ok":
+            ok_count += 1
+        elif status == "null":
+            null_count += 1
+        else:
+            missing_count += 1
+            if len(missing_keys) < 5:
+                missing_keys.append(key)
+    return CacheSampleCheck(
+        sample_size=len(sampled),
+        ok_count=ok_count,
+        null_count=null_count,
+        missing_count=missing_count,
+        missing_keys=missing_keys,
+    )
+
+
+def _confirm_vector_cache_coverage(
+    *,
+    cfg: AppConfig,
+    engine: str,
+    entry_name: str,
+    auto_yes: bool = False,
+) -> bool:
+    check = _check_vector_cache_sample(cfg)
+    if check is None:
+        return True
+    if check.missing_count <= 0 and check.null_count <= 0:
+        return True
+    if auto_yes:
+        return True
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Vector cache preflight found missing entries in non-interactive mode. "
+            "Re-run with `bench index --yes ...` to continue anyway."
+        )
+    sample_pct = (100.0 * check.missing_count / check.sample_size) if check.sample_size > 0 else 0.0
+    engine_note = (
+        "Qdrant vector indexing is likely to fail if cache misses remain."
+        if engine == "qdrant"
+        else "Manticore vector indexing will auto-embed cache misses and may call the remote embedding model."
+    )
+    sample_text = ", ".join(check.missing_keys) if check.missing_keys else "-"
+    prompt = (
+        f"\nVector cache preflight for entry '{entry_name}':\n"
+        f"- cache: {cfg.manticore.vector_cache_path}\n"
+        f"- sample size: {check.sample_size}\n"
+        f"- cache hits: {check.ok_count}\n"
+        f"- cache nulls: {check.null_count}\n"
+        f"- cache misses: {check.missing_count} ({sample_pct:.1f}%)\n"
+        f"- sample missing keys: {sample_text}\n\n"
+        f"{engine_note}\n"
+        "Type 'yes' to continue anyway: "
+    )
+    return input(prompt).strip().lower() == "yes"
+
+
 def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
     selected: list[PrepareVariant] = []
     raw_sources: list[str] = []
@@ -236,7 +348,7 @@ def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
         raw_entries.extend([x.strip() for x in str(value).split(",") if x.strip()])
     entry_filter = {s for s in raw_entries}
 
-    variants = build_prepare_variants_from_config_paths(discover_prepare_config_paths())
+    variants = build_prepare_variants_from_config_paths(discover_config_paths())
     if source_filter or entry_filter:
         for v in variants:
             if source_filter and v.source.lower() not in source_filter:
@@ -363,6 +475,16 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                     f"- bench --config {v.config_path} index --engine {v.engine} "
                     f"--mode {v.mode} --entry {v.entry}"
                 )
+            vector_variants = [v for v in selected if v.mode == "vector"]
+            for v in vector_variants:
+                if not _confirm_vector_cache_coverage(
+                    cfg=v.cfg,
+                    engine=v.engine,
+                    entry_name=v.entry,
+                    auto_yes=bool(args.yes),
+                ):
+                    print("Index canceled: vector cache coverage not confirmed.")
+                    return 0
             manticore_vector_cfgs = [v.cfg for v in selected if v.engine == "manticore" and v.mode == "vector"]
             if not _confirm_manticore_vector_reindex_for_configs(
                 manticore_vector_cfgs, auto_yes=bool(args.yes)
@@ -395,10 +517,27 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             )
         if engine == "manticore":
             needs_vector_reindex = args.mode == "vector"
+            if needs_vector_reindex and not _confirm_vector_cache_coverage(
+                cfg=cfg_for_engine,
+                engine=engine,
+                entry_name=entry_name,
+                auto_yes=bool(args.yes),
+            ):
+                print("Index canceled: vector cache coverage not confirmed.")
+                return 0
             if not _confirm_manticore_vector_reindex_if_needed(
                 cfg_for_engine, needs_vector_reindex=needs_vector_reindex, auto_yes=bool(args.yes)
             ):
                 print("Index canceled: Manticore vector reindex not confirmed.")
+                return 0
+        elif args.mode == "vector":
+            if not _confirm_vector_cache_coverage(
+                cfg=cfg_for_engine,
+                engine=engine,
+                entry_name=entry_name,
+                auto_yes=bool(args.yes),
+            ):
+                print("Index canceled: vector cache coverage not confirmed.")
                 return 0
         started_by_key.clear()
         last_by_key.clear()

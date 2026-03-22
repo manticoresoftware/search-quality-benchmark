@@ -74,7 +74,7 @@ def _run_single_query_manticore(
         started = perf_counter()
         if mode == "fulltext":
             option_clause = _manticore_fulltext_option_clause(cfg)
-            qlit = client.conn.escape(_sanitize_manticore_fulltext_query(query_text))
+            qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, query_text))
             rows = client.query(
                 f"""
                 SELECT doc_id, WEIGHT() AS score
@@ -140,7 +140,7 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
                 try:
                     if mode == "fulltext":
                         option_clause = _manticore_fulltext_option_clause(cfg)
-                        qlit = client.conn.escape(_sanitize_manticore_fulltext_query(qtext))
+                        qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, qtext))
                         client.query(
                             f"""
                             SELECT doc_id
@@ -187,6 +187,20 @@ def _sanitize_manticore_fulltext_query(query_text: str) -> str:
     return q or str(query_text or "").strip()
 
 
+def _manticore_fulltext_match_query(cfg: AppConfig, query_text: str) -> str:
+    sanitized = _sanitize_manticore_fulltext_query(query_text)
+    terms = re.findall(r"[^\W_]+", sanitized, flags=re.UNICODE)
+    if not terms:
+        return sanitized
+    mode = str(cfg.manticore.fulltext_query_mode or "and").strip().lower()
+    if mode == "or":
+        return " | ".join(terms)
+    if mode == "quorum":
+        quorum = float(cfg.manticore.fulltext_query_quorum or 0.5)
+        return f"\"{' '.join(terms)}\"/{quorum}"
+    return " ".join(terms)
+
+
 def _manticore_fulltext_option_clause(cfg: AppConfig) -> str:
     parts: list[str] = []
     extra = normalize_search_options(cfg.manticore.search_options)
@@ -210,6 +224,11 @@ def _manticore_fulltext_ranker_label(cfg: AppConfig) -> str:
     search_opts = normalize_search_options(cfg.manticore.search_options)
     if search_opts:
         extras.append(f"search:{search_opts}")
+    qmode = str(cfg.manticore.fulltext_query_mode or "and").strip().lower()
+    if qmode == "quorum":
+        extras.append(f"query:quorum/{float(cfg.manticore.fulltext_query_quorum or 0.5)}")
+    elif qmode != "and":
+        extras.append(f"query:{qmode}")
     opts = (cfg.manticore.fulltext_options or "").strip()
     if opts:
         extras.append(f"opts:{opts}")

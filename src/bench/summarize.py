@@ -26,6 +26,7 @@ _fit = fit_text
 @dataclass
 class ArtifactRow:
     run_id: str
+    profile: str
     run_at_unix: int
     run_at: str
     path: Path
@@ -135,6 +136,7 @@ def discover_artifacts() -> list[ArtifactRow]:
             out.append(
                 ArtifactRow(
                     run_id=run_id_val,
+                    profile=str(payload.get("profile", "") or ""),
                     run_at_unix=run_at_unix_val,
                     run_at=_run_at_from_unix(run_at_unix_val),
                     path=p,
@@ -158,6 +160,7 @@ def discover_artifacts() -> list[ArtifactRow]:
             out.append(
                 ArtifactRow(
                     run_id=p.name,
+                    profile="",
                     run_at_unix=int(p.stat().st_mtime),
                     run_at=_run_at_from_unix(int(p.stat().st_mtime)),
                     path=p,
@@ -415,7 +418,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
             row_h = dynamic_row_lines(len(rows), h)
-            help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  f filter  a select all  1-0 sort  d delete  ENTER submit  ESC/q cancel"
+            help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  f filter  a select all  d delete  ENTER submit  ESC/q cancel"
             stdscr.addstr(0, 0, fit_text(help1, max(1, w - 1)), curses.A_BOLD)
             filter_lines = filter_block_height(filters, widths)
             draw_header_with_filters(
@@ -512,27 +515,6 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                     else:
                         filters.pop(sort_by, None)
                     _apply_sort(sort_by, sort_desc)
-            elif ch in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5"), ord("6"), ord("7"), ord("8"), ord("9"), ord("0")):
-                key_to_col = {
-                    ord("1"): "run_at",
-                    ord("2"): "dataset",
-                    ord("3"): "engine",
-                    ord("4"): "mode",
-                    ord("5"): "docs",
-                    ord("6"): "model",
-                    ord("7"): "status",
-                    ord("8"): "ndcg",
-                    ord("9"): "mrr",
-                    ord("0"): "run_id",
-                }
-                new_col = key_to_col[ch]
-                if sort_by == new_col:
-                    sort_desc = not sort_desc
-                else:
-                    sort_by = new_col
-                    sort_idx = sort_cols.index(sort_by)
-                    sort_desc = _default_sort_desc(new_col)
-                _apply_sort(sort_by, sort_desc)
             elif ch in (ord("d"), ord("D")):
                 if not rows:
                     continue
@@ -641,73 +623,79 @@ def _performance_sort_key(r: ArtifactRow) -> tuple[float, float, float, float]:
     return (-qps, p50, p95, p99)
 
 
+def _profile_system_model_label(r: ArtifactRow) -> str:
+    profile = f"**{r.profile}**" if (r.profile or "").strip() else "-"
+    return " / ".join([profile, _system_label(r.engine, r.mode), r.model or "n/a"])
+
+
 def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines: list[str] = []
     lines.append(f"# {title}")
     lines.append("")
     lines.append(f"Generated at: `{datetime.now().isoformat(timespec='seconds')}`")
     lines.append("")
-    lines.append("## Relevance")
-    lines.append("")
-    rel_keys = _collect_relevance_keys(rows)
-    header = "| Run ID | System | Dataset | Docs | Run At | Model/Opts | Status | " + " | ".join([k.upper() for k in rel_keys]) + " |"
-    sep = "|" + "---|" * (7 + len(rel_keys))
-    lines.append(header)
-    lines.append(sep)
-    rel_rows = sorted(rows, key=_relevance_sort_key)
-    for r in rel_rows:
-        run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
-        vals = [f"{r.relevance.get(k, 0.0):.4f}" for k in rel_keys]
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    run_id_link,
-                    _system_label(r.engine, r.mode),
-                    r.dataset_source or "-",
-                    f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
-                    r.run_at,
-                    r.model or "n/a",
-                    r.status,
-                    *vals,
-                ]
+    by_dataset: dict[str, list[ArtifactRow]] = {}
+    for row in rows:
+        by_dataset.setdefault(row.dataset_source or "-", []).append(row)
+
+    for dataset in sorted(by_dataset.keys()):
+        dataset_rows = by_dataset[dataset]
+        lines.append(f"## Relevance for `{dataset}`")
+        lines.append("")
+        rel_keys = _collect_relevance_keys(dataset_rows)
+        header = "| Run ID | Profile/System/Model | Docs | Run At | " + " | ".join([k.upper() for k in rel_keys]) + " |"
+        sep = "|" + "---|" * (4 + len(rel_keys))
+        lines.append(header)
+        lines.append(sep)
+        rel_rows = sorted(dataset_rows, key=_relevance_sort_key)
+        for r in rel_rows:
+            run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
+            vals = [f"{r.relevance.get(k, 0.0):.4f}" for k in rel_keys]
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        run_id_link,
+                        _profile_system_model_label(r),
+                        f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
+                        r.run_at,
+                        *vals,
+                    ]
+                )
+                + " |"
             )
-            + " |"
-        )
-    lines.append("")
-    lines.append("## Query Performance")
-    lines.append("")
-    lines.append(
-        "| Run ID | System | Dataset | Docs | Run At | Model/Opts | Status | Concurrency | P50 (ms) | P95 (ms) | P99 (ms) | QPS | Error rate | Queries |"
-    )
-    lines.append("|---|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
-    perf_rows = sorted(rows, key=_performance_sort_key)
-    for r in perf_rows:
-        run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
-        p = r.performance
+        lines.append("")
+        lines.append(f"## Query Performance for `{dataset}`")
+        lines.append("")
         lines.append(
-            "| "
-            + " | ".join(
-                [
-                    run_id_link,
-                    _system_label(r.engine, r.mode),
-                    r.dataset_source or "-",
-                    f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
-                    r.run_at,
-                    r.model or "n/a",
-                    r.status,
-                    str(r.concurrency if r.concurrency is not None else "-"),
-                    f"{p.get('latency_p50_ms', 0.0):.2f}",
-                    f"{p.get('latency_p95_ms', 0.0):.2f}",
-                    f"{p.get('latency_p99_ms', 0.0):.2f}",
-                    f"{p.get('qps', 0.0):.2f}",
-                    f"{p.get('error_rate', 0.0):.4f}",
-                    f"{p.get('queries_total', 0.0):.0f}",
-                ]
-            )
-            + " |"
+            "| Run ID | Profile/System/Model | Docs | Run At | Concurrency | P50 (ms) | P95 (ms) | P99 (ms) | QPS | Error rate | Queries |"
         )
-    lines.append("")
+        lines.append("|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|")
+        perf_rows = sorted(dataset_rows, key=_performance_sort_key)
+        for r in perf_rows:
+            run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
+            p = r.performance
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        run_id_link,
+                        _profile_system_model_label(r),
+                        f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
+                        r.run_at,
+                        str(r.concurrency if r.concurrency is not None else "-"),
+                        f"{p.get('latency_p50_ms', 0.0):.2f}",
+                        f"{p.get('latency_p95_ms', 0.0):.2f}",
+                        f"{p.get('latency_p99_ms', 0.0):.2f}",
+                        f"{p.get('qps', 0.0):.2f}",
+                        f"{p.get('error_rate', 0.0):.4f}",
+                        f"{p.get('queries_total', 0.0):.0f}",
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+
     lines.append(metric_definitions_markdown().strip())
     lines.append("")
     return "\n".join(lines)

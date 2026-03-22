@@ -99,6 +99,11 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     search_opts = normalize_search_options(cfg.manticore.search_options)
                     if search_opts:
                         extras.append(f"search:{search_opts}")
+                    qmode = str(cfg.manticore.fulltext_query_mode or "and").strip().lower()
+                    if qmode == "quorum":
+                        extras.append(f"query:quorum/{float(cfg.manticore.fulltext_query_quorum or 0.5)}")
+                    elif qmode != "and":
+                        extras.append(f"query:{qmode}")
                     opts = (cfg.manticore.fulltext_options or "").strip()
                     if opts:
                         extras.append(f"opts:{opts}")
@@ -225,29 +230,70 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
         return None, str(exc)
 
 
-def _details_lines(v: RunVariant, rows_line: str | None = None) -> list[str]:
-    def _mask_value(path: str, value: Any) -> Any:
-        p = path.lower()
-        if any(k in p for k in ("password", "api_key")) and str(value or "").strip():
-            return "***"
-        return value
+def _mask_detail_value(path: str, value: Any) -> Any:
+    p = path.lower()
+    if any(k in p for k in ("password", "api_key")) and str(value or "").strip():
+        return "***"
+    return value
 
-    def _fmt(value: Any) -> str:
-        if isinstance(value, list):
-            return "[" + ", ".join(str(x) for x in value) + "]"
-        if value is None:
-            return "null"
-        return str(value)
 
-    def _flatten(prefix: str, obj: Any, out: list[str]) -> None:
-        if is_dataclass(obj):
-            obj = asdict(obj)
-        if isinstance(obj, dict):
-            for k in sorted(obj.keys()):
-                key = f"{prefix}.{k}" if prefix else str(k)
-                _flatten(key, obj[k], out)
-            return
-        out.append(f"{prefix}: {_fmt(_mask_value(prefix, obj))}")
+def _format_detail_value(value: Any) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(str(x) for x in value) + "]"
+    if value is None:
+        return "null"
+    return str(value)
+
+
+def _flatten_detail_values(prefix: str, obj: Any, out: dict[str, str]) -> None:
+    if is_dataclass(obj):
+        obj = asdict(obj)
+    if isinstance(obj, dict):
+        for k in sorted(obj.keys()):
+            key = f"{prefix}.{k}" if prefix else str(k)
+            _flatten_detail_values(key, obj[k], out)
+        return
+    out[prefix] = _format_detail_value(_mask_detail_value(prefix, obj))
+
+
+def _variant_detail_values(v: RunVariant) -> dict[str, str]:
+    visible_sections = {"dataset", "benchmark", "metrics", v.engine}
+    cfg_obj = asdict(v.cfg)
+    filtered_cfg = {k: val for k, val in cfg_obj.items() if k in visible_sections}
+    flattened: dict[str, str] = {}
+    _flatten_detail_values("", filtered_cfg, flattened)
+    return flattened
+
+
+def _comparison_variants(variants: list[RunVariant], current: RunVariant) -> list[RunVariant]:
+    same_engine = [v for v in variants if v.engine == current.engine]
+    return same_engine or [current]
+
+
+def _common_detail_keys(variants: list[RunVariant], current: RunVariant) -> set[str]:
+    variants = _comparison_variants(variants, current)
+    if len(variants) <= 1:
+        return set()
+    flattened = [_variant_detail_values(v) for v in variants]
+    common_keys = set(flattened[0].keys())
+    for values in flattened[1:]:
+        common_keys &= set(values.keys())
+    out: set[str] = set()
+    for key in common_keys:
+        first = flattened[0][key]
+        if all(values.get(key) == first for values in flattened[1:]):
+            out.add(key)
+    return out
+
+
+def _details_lines(
+    v: RunVariant,
+    rows_line: str | None = None,
+    *,
+    hidden_common_keys: set[str] | None = None,
+    comparison_scope: str | None = None,
+) -> list[str]:
+    hidden_common_keys = hidden_common_keys or set()
 
     lines: list[str] = ["Resolved Config"]
     meta = [
@@ -257,12 +303,16 @@ def _details_lines(v: RunVariant, rows_line: str | None = None) -> list[str]:
         f"target: {_variant_target_name(v)}",
     ]
     lines.extend(meta)
-    flattened: list[str] = []
-    visible_sections = {"dataset", "benchmark", "metrics", v.engine}
-    cfg_obj = asdict(v.cfg)
-    filtered_cfg = {k: val for k, val in cfg_obj.items() if k in visible_sections}
-    _flatten("", filtered_cfg, flattened)
-    lines.extend(flattened)
+    if hidden_common_keys:
+        scope = comparison_scope or "visible rows"
+        lines.append(f"common across {scope}: {len(hidden_common_keys)} hidden")
+    flattened = _variant_detail_values(v)
+    detail_lines = [
+        f"{key}: {value}"
+        for key, value in flattened.items()
+        if key not in hidden_common_keys
+    ]
+    lines.extend(detail_lines)
     if rows_line:
         lines.extend(["", "Live State", rows_line])
     return lines
@@ -271,6 +321,7 @@ def _details_lines(v: RunVariant, rows_line: str | None = None) -> list[str]:
 def _draw_details_panel(
     stdscr: Any,
     v: RunVariant,
+    variants: list[RunVariant],
     widths: dict[str, int],
     w: int,
     h: int,
@@ -291,7 +342,14 @@ def _draw_details_panel(
         else:
             rows_line = f"rows ({target}): {int(cnt or 0):,}"
         row_count_cache[ck] = rows_line
-    lines = _details_lines(v, rows_line=rows_line)
+    comparison_variants = _comparison_variants(variants, v)
+    hidden_common_keys = _common_detail_keys(variants, v)
+    lines = _details_lines(
+        v,
+        rows_line=rows_line,
+        hidden_common_keys=hidden_common_keys,
+        comparison_scope=f"visible {v.engine} rows ({len(comparison_variants)})",
+    )
     max_rows = max(0, h - 3)
     y = 1
     for line in lines:
@@ -435,6 +493,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                 _draw_details_panel(
                     stdscr,
                     variants[current],
+                    variants,
                     widths=widths,
                     w=w,
                     h=h,

@@ -6,6 +6,7 @@ from bench.summarize import ArtifactRow, _collect_relevance_keys
 def test_collect_relevance_keys_includes_mrr_order():
     row = ArtifactRow(
         run_id="r1",
+        profile="manticore_bm25",
         run_at_unix=1,
         run_at="2026-01-01 00:00:00",
         path=Path("artifacts/r1"),

@@ -32,12 +32,14 @@ class ManticoreConfig:
     vector_quantization: str = ""
     vector_search_oversampling: float | None = None
     vector_search_rescore: int | None = None
-    vector_cache_path: str = "vector_cache/embeddings.sqlite"
+    vector_cache_path: str = "vector_cache/trec-covid-openai.sqlite"
     vector_cache_fetch_batch_size: int = 1000
     vector_api_key: str = ""
     vector_api_key_file: str = ""
     search_options: str = "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
     fulltext_options: str = "morphology='stem_en' index_field_lengths='1'"
+    fulltext_query_mode: str = "and"
+    fulltext_query_quorum: float = 0.5
     batch_size: int = 500
     insert_retries: int = 3
     connect_timeout_seconds: int = 10
