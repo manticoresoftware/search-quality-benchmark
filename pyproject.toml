@@ -12,6 +12,7 @@ dependencies = [
   "PyYAML>=6.0",
   "huggingface_hub>=0.23.0",
   "ir-datasets>=0.5.10",
+  "meilisearch>=0.40.0",
   "pymysql>=1.1.0",
   "qdrant-client>=1.17.1",
 ]

@@ -174,7 +174,12 @@ def prepare_dataset(cfg: AppConfig) -> PrepareResult:
 
     started = perf_counter()
     ds = ir_datasets.load(cfg.dataset.source)
-    if not ds.has_qrels():
+    has_qrels = True
+    if hasattr(ds, "has_qrels"):
+        has_qrels = bool(ds.has_qrels())
+    else:
+        has_qrels = hasattr(ds, "qrels_iter")
+    if not has_qrels:
         raise ValueError(
             f"Dataset source '{cfg.dataset.source}' does not expose qrels in ir_datasets. "
             "Choose a split/source that has relevance judgments."

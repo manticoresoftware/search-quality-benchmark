@@ -2,8 +2,8 @@
 # Inheritance mode (flat entries):
 # - each top-level entry is a runnable profile
 # - derived entries use `base: <entry_name>` and override only needed fields
-# - flat keys are routed automatically to manticore/qdrant/benchmark/dataset/metrics
-# - optional mode filter per entry: `type: vector` or `type: full-text`
+# - flat keys are routed automatically to manticore/meilisearch/qdrant/benchmark/dataset/metrics
+# - optional mode filter per entry: `type: vector`, `type: hybrid`, or `type: full-text`
 
 dataset:
   source: "beir/trec-covid"  # default: "beir/trec-covid"
@@ -74,6 +74,40 @@ qdrant:
   dense_search_quantization_oversampling:
   dense_search_quantization_ignore: false  # default: false
 
+meilisearch:
+  type: "meilisearch"  # default engine base entry for Meilisearch
+  host: "http://127.0.0.1:7700"  # default: "http://127.0.0.1:7700"
+  api_key: ""  # default: ""
+  api_key_file: ""  # default: ""
+  index_name: "trec_covid"  # default: "trec_covid"; lexical index becomes "<name>_lexical"
+  timeout_sec: 30  # default: 30
+  batch_size: 500  # default: 500
+  searchable_attributes: ["title", "abstract"]  # default: ["title","abstract"]
+  ranking_rules: ["words", "typo", "proximity", "attribute", "sort", "exactness"]  # default lexical ranking rules
+  stop_words: []  # default: []
+  synonyms: {}  # default: {}
+  typo_tolerance: true  # default: true
+  embedder_name: "default"  # default: "default"
+  vector_index: "vector"  # default: "vector"; vector/hybrid index becomes "<name>_<vector_index>"
+  hybrid_semantic_ratio: 0.5  # default: 0.5
+  binary_quantized: false  # default: false
+
+meilisearch_vector:
+  base: "meilisearch"
+  type: "vector"
+
+meilisearch_hybrid:
+  base: "meilisearch"
+  type: "hybrid"
+
+meilisearch_vector_1bit:
+  base: "meilisearch_vector"
+  binary_quantized: true
+
+meilisearch_hybrid_1bit:
+  base: "meilisearch_hybrid"
+  binary_quantized: true
+
 # Derived examples:
 manticore_bm25:
   base: "manticore"
@@ -140,13 +174,44 @@ msmarco_lite_qdrant:
   bm25_collection: "msmarco_lite_qdrant_bm25"
   dense_collection: "msmarco_lite_qdrant_dense"
 
+msmarco_lite_qdrant_ft:
+  base: "msmarco_passage_qdrant"
+  type: "full-text"
+  max_docs: 250000
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  bm25_collection: "msmarco_lite_qdrant_bm25"
+
 msmarco_trecdl_2019_qdrant:
   base: "msmarco_passage_qdrant"
   source: "msmarco-passage/trec-dl-2019/judged"
   vector_cache_path: "vector_cache/msmarco-trecdl-2019-openai.sqlite"
 
+msmarco_trecdl_2019_qdrant_ft:
+  base: "msmarco_passage_qdrant"
+  type: "full-text"
+  source: "msmarco-passage/trec-dl-2019/judged"
+  vector_cache_path: "vector_cache/msmarco-trecdl-2019-openai.sqlite"
+
+msmarco_trecdl_2019_qdrant_vec:
+  base: "msmarco_passage_qdrant"
+  type: "vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+  vector_cache_path: "vector_cache/msmarco-trecdl-2019-openai.sqlite"
+
 msmarco_trecdl_2020_qdrant:
   base: "msmarco_passage_qdrant"
+  source: "msmarco-passage/trec-dl-2020/judged"
+  vector_cache_path: "vector_cache/msmarco-trecdl-2020-openai.sqlite"
+
+msmarco_trecdl_2020_qdrant_ft:
+  base: "msmarco_passage_qdrant"
+  type: "full-text"
+  source: "msmarco-passage/trec-dl-2020/judged"
+  vector_cache_path: "vector_cache/msmarco-trecdl-2020-openai.sqlite"
+
+msmarco_trecdl_2020_qdrant_vec:
+  base: "msmarco_passage_qdrant"
+  type: "vector"
   source: "msmarco-passage/trec-dl-2020/judged"
   vector_cache_path: "vector_cache/msmarco-trecdl-2020-openai.sqlite"
 
@@ -306,6 +371,168 @@ acord_qdrant_bq:
   vector_cache_path: "vector_cache/acord-openai.sqlite"
   dense_collection: "acord_qdrant_1bit"
   dense_binary_quantization: true
+
+# Meilisearch examples:
+trec_covid_meilisearch_ft:
+  base: "meilisearch"
+  type: "full-text"
+  index_name: "trec_covid"
+
+trec_covid_meilisearch_vec:
+  base: "meilisearch_vector"
+  index_name: "trec_covid"
+
+trec_covid_meilisearch_hybrid:
+  base: "meilisearch_hybrid"
+  index_name: "trec_covid"
+
+trec_covid_meilisearch_1bit:
+  base: "meilisearch_vector_1bit"
+  index_name: "trec_covid_q1bit"
+
+trec_covid_meilisearch_hybrid_1bit:
+  base: "meilisearch_hybrid_1bit"
+  index_name: "trec_covid_q1bit"
+
+msmarco_passage_meilisearch_ft:
+  base: "meilisearch"
+  type: "full-text"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  index_name: "msmarco_passage"
+  searchable_attributes: ["abstract", "title"]
+
+msmarco_passage_meilisearch_vec:
+  base: "meilisearch_vector"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  index_name: "msmarco_passage"
+  searchable_attributes: ["abstract", "title"]
+
+msmarco_passage_meilisearch_hybrid:
+  base: "meilisearch_hybrid"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  index_name: "msmarco_passage"
+  searchable_attributes: ["abstract", "title"]
+
+msmarco_lite_meilisearch_ft:
+  base: "msmarco_passage_meilisearch_ft"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite"
+
+msmarco_lite_meilisearch_vec:
+  base: "msmarco_passage_meilisearch_vec"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite"
+
+msmarco_lite_meilisearch_hybrid:
+  base: "msmarco_passage_meilisearch_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite"
+
+msmarco_lite_meilisearch_1bit:
+  base: "msmarco_passage_meilisearch_vec"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_q1bit"
+  binary_quantized: true
+
+msmarco_lite_meilisearch_hybrid_1bit:
+  base: "msmarco_passage_meilisearch_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_q1bit"
+  binary_quantized: true
+
+msmarco_trecdl_2019_meilisearch_ft:
+  base: "msmarco_passage_meilisearch_ft"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_meilisearch_vec:
+  base: "msmarco_passage_meilisearch_vec"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_meilisearch_hybrid:
+  base: "msmarco_passage_meilisearch_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2020_meilisearch_ft:
+  base: "msmarco_passage_meilisearch_ft"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_meilisearch_vec:
+  base: "msmarco_passage_meilisearch_vec"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_meilisearch_hybrid:
+  base: "msmarco_passage_meilisearch_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+nfcorpus_meilisearch_ft:
+  base: "meilisearch"
+  type: "full-text"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus"
+
+nfcorpus_meilisearch_vec:
+  base: "meilisearch_vector"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus"
+
+nfcorpus_meilisearch_hybrid:
+  base: "meilisearch_hybrid"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus"
+
+nfcorpus_meilisearch_1bit:
+  base: "meilisearch_vector_1bit"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus_q1bit"
+
+nfcorpus_meilisearch_hybrid_1bit:
+  base: "meilisearch_hybrid_1bit"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus_q1bit"
+
+acord_meilisearch_ft:
+  base: "meilisearch"
+  type: "full-text"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord"
+
+acord_meilisearch_vec:
+  base: "meilisearch_vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord"
+
+acord_meilisearch_hybrid:
+  base: "meilisearch_hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord"
+
+acord_meilisearch_1bit:
+  base: "meilisearch_vector_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord_q1bit"
+
+acord_meilisearch_hybrid_1bit:
+  base: "meilisearch_hybrid_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord_q1bit"
   dense_binary_always_ram: true
   dense_search_quantization_rescore: true
   dense_search_quantization_oversampling: 3.0

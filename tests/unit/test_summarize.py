@@ -12,3 +12,5 @@ def test_parse_selection_bounds():
 def test_system_label():
     assert _system_label("manticore", "fulltext") == "Manticore full-text (manticore)"
     assert _system_label("qdrant", "fulltext") == "Qdrant full-text (qdrant)"
+    assert _system_label("meilisearch", "fulltext") == "Meilisearch full-text (meilisearch)"
+    assert _system_label("meilisearch", "hybrid") == "Meilisearch hybrid (meilisearch)"

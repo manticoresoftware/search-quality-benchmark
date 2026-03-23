@@ -1,10 +1,13 @@
-# Search Benchmark (Manticore + Qdrant)
+# Search Benchmark (Manticore + Qdrant + Meilisearch)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text (`MATCH(...)`)
 - Manticore vector (`FLOAT_VECTOR` + auto-embeddings)
 - Qdrant full-text-like sparse retrieval (BM25 in Qdrant sparse vectors)
 - Qdrant dense vector retrieval (vectors sourced from Manticore)
+- Meilisearch lexical search
+- Meilisearch vector search (user-provided vectors from the shared cache)
+- Meilisearch hybrid search (query text + cached query vector)
 
 It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md`, diagnostics) per run.
 
@@ -19,8 +22,8 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
   - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`) use the shorter query variant.
-    - vector modes (`manticore vector`, `qdrant vector`) use the longer query variant.
+    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`) use the shorter query variant.
+    - vector/hybrid modes (`manticore vector`, `qdrant vector`, `meilisearch vector`, `meilisearch hybrid`) use the longer query variant.
   - Prepared topic fields are explicit: `query_short` and `query_long`.
   - Example topics from TREC-COVID:
     - Topic `1`
@@ -139,7 +142,7 @@ Unit tests:
 ```bash
 ./.venv/bin/pytest -q tests/unit
 ```
-They validate core benchmark logic (for example metric calculations and run/report matrix behavior) without requiring live Manticore/Qdrant services.
+They validate core benchmark logic (for example metric calculations and run/report matrix behavior) without requiring live Manticore/Qdrant/Meilisearch services.
 
 ## Configuration
 
@@ -188,12 +191,28 @@ manticore:
 - `qdrant.dense_search_quantization_oversampling`: query-time oversampling
 - `qdrant.dense_search_quantization_ignore`: bypass quantized vectors and use full-precision vectors
 
+### Meilisearch Config
+- `meilisearch.host`: server URL (default: `http://127.0.0.1:7700`)
+- `meilisearch.api_key` / `meilisearch.api_key_file`: optional Meilisearch API key
+- `meilisearch.index_name`: base name used to derive index names
+  - lexical index: `<index_name>_lexical`
+  - vector/hybrid index: `<index_name>_<vector_index>`
+- `meilisearch.searchable_attributes`: fields searched by lexical and hybrid search
+- `meilisearch.ranking_rules`: lexical ranking rules used by Meilisearch
+- `meilisearch.stop_words`: optional stop word list
+- `meilisearch.synonyms`: optional synonym map
+- `meilisearch.typo_tolerance`: enable/disable typo tolerance
+- `meilisearch.embedder_name`: name of the user-provided embedder configured on the vector index
+- `meilisearch.vector_index`: suffix for the vector index name
+- `meilisearch.hybrid_semantic_ratio`: hybrid search blend between lexical and semantic search
+- `meilisearch.binary_quantized`: enable Meilisearch 1-bit vector storage for the configured embedder
+
 ### Inheritance Mode
 - use top-level named entries (`manticore`, `qdrant`, `manticore_bm25`, ...).
 - derived entries define `base: "<entry_name>"` and only overrides.
 - any unspecified field is inherited from base.
 - keys are flat; loader routes them to the right section automatically.
-- optional mode filter: set `type: "vector"` or `type: "full-text"` on an entry (or its base) to expose only that mode in interactive `bench index`/`bench run`.
+- optional mode filter: set `type: "vector"`, `type: "hybrid"`, or `type: "full-text"` on an entry (or its base) to expose only that mode in interactive `bench index`/`bench run`.
 
 Example:
 ```yaml
@@ -242,6 +261,11 @@ manticore_vector_only:
   - vector dimensionality inferred from cached vectors
   - payload fields: `doc_id`, `title`, `abstract`, `doi`, `date`
   - vectors are loaded from local vector cache
+- Meilisearch indexes:
+  - lexical index name: `<meilisearch.index_name>_lexical`
+  - vector/hybrid index name: `<meilisearch.index_name>_<meilisearch.vector_index>`
+  - lexical and hybrid use `searchable_attributes`, `ranking_rules`, `stop_words`, `synonyms`, and `typo_tolerance`
+  - vector and hybrid use a `userProvided` embedder and load document vectors from the local SQLite vector cache
 - Note: native BM25 mode may download model artifacts on first use.
 
 ## Engine Setup
@@ -276,6 +300,28 @@ docker run -d --name trec-qdrant \
 curl http://127.0.0.1:6333/
 ```
 
+### Meilisearch
+
+Quick start (Docker):
+```bash
+docker run -d --name trec-meilisearch \
+  -p 7700:7700 \
+  -e MEILI_NO_ANALYTICS=true \
+  -v "$(pwd)/data/meilisearch_data:/meili_data" \
+  getmeili/meilisearch:latest
+
+curl http://127.0.0.1:7700/health
+```
+
+Meilisearch modes in this benchmark:
+- lexical (`fulltext` in CLI): Meilisearch native lexical ranking
+- vector: user-provided cached vectors only
+- hybrid: lexical query text + cached query vector with `meilisearch.hybrid_semantic_ratio`
+
+Note:
+- Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25.
+- Treat Meilisearch lexical results as a separate retrieval model in reports.
+
 
 ## Vector Cache
 
@@ -307,6 +353,10 @@ Behavior:
 - Qdrant vector indexing:
   - uses cache only,
   - fails on cache misses (no auto-embedding path in Qdrant indexing flow).
+- Meilisearch vector indexing:
+  - uses cache only,
+  - fails on cache misses,
+  - reuses the same cached document/query vectors as Manticore and Qdrant for fair comparison.
 
 ## Metrics
 

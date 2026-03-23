@@ -42,6 +42,23 @@ class ArtifactRow:
     status: str
 
 
+_DATASET_URLS: dict[str, str] = {
+    "beir/trec-covid": "https://ir-datasets.com/beir.html#beir/trec-covid",
+    "beir/nfcorpus/test": "https://ir-datasets.com/beir.html#beir/nfcorpus/test",
+    "msmarco-passage/dev/small": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/dev/small",
+    "msmarco-passage/trec-dl-2019/judged": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/trec-dl-2019/judged",
+    "msmarco-passage/trec-dl-2020/judged": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/trec-dl-2020/judged",
+    "hf-beir:theatticusproject/acord:test": "https://huggingface.co/datasets/theatticusproject/acord",
+}
+
+
+def _dataset_label(dataset: str) -> str:
+    url = _DATASET_URLS.get(dataset)
+    if url:
+        return f"[`{dataset}`]({url})"
+    return f"`{dataset}`"
+
+
 def _system_label(engine: str, mode: str) -> str:
     if engine == "manticore" and mode == "fulltext":
         return "Manticore full-text (manticore)"
@@ -51,6 +68,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "Qdrant full-text (qdrant)"
     if engine == "qdrant" and mode == "vector":
         return "Qdrant vector (qdrant)"
+    if engine == "meilisearch" and mode == "fulltext":
+        return "Meilisearch full-text (meilisearch)"
+    if engine == "meilisearch" and mode == "vector":
+        return "Meilisearch vector (meilisearch)"
+    if engine == "meilisearch" and mode == "hybrid":
+        return "Meilisearch hybrid (meilisearch)"
     return f"{engine} {mode}"
 
 
@@ -60,6 +83,8 @@ def _display_mode(mode: str) -> str:
         return "full-text"
     if m == "vector":
         return "vector"
+    if m == "hybrid":
+        return "hybrid"
     return mode
 
 
@@ -207,6 +232,8 @@ def _color_pair_for_engine(engine: str) -> int:
         return 1
     if e == "qdrant":
         return 2
+    if e == "meilisearch":
+        return 5
     return 0
 
 
@@ -216,6 +243,8 @@ def _color_pair_for_mode(mode: str) -> int:
         return 3
     if m == "vector":
         return 4
+    if m == "hybrid":
+        return 6
     return 0
 
 
@@ -231,56 +260,31 @@ def _draw_row(
 ) -> None:
     prefix = "[x]" if selected else "[ ]"
     attrs = curses.A_REVERSE if cursor else curses.A_NORMAL
-    x = 0
-    stdscr.addstr(y, x, _fit(prefix, widths["sel"]), attrs)
-    x += widths["sel"] + 1
-    stdscr.addstr(y, x, _fit(str(idx), widths["idx"]), attrs)
-    x += widths["idx"] + 1
-    stdscr.addstr(y, x, _fit(row.run_id, widths["run_id"]), attrs)
-    x += widths["run_id"] + 1
-    stdscr.addstr(y, x, _fit(row.run_at, widths["run_at"]), attrs)
-    x += widths["run_at"] + 1
-    stdscr.addstr(y, x, _fit(row.dataset_source or "-", widths["dataset"]), attrs)
-    x += widths["dataset"] + 1
     e_pair = _color_pair_for_engine(row.engine)
-    stdscr.addstr(y, x, _fit(row.engine or "-", widths["engine"]), attrs | curses.color_pair(e_pair))
-    x += widths["engine"] + 1
     m_pair = _color_pair_for_mode(row.mode)
-    stdscr.addstr(y, x, _fit(_display_mode(row.mode or "-"), widths["mode"]), attrs | curses.color_pair(m_pair))
-    x += widths["mode"] + 1
-    stdscr.addstr(y, x, _fit(f"{int(row.doc_count):,}" if row.doc_count is not None else "-", widths["docs"]), attrs)
-    x += widths["docs"] + 1
-    model_lines = wrap_cell(row.model or "n/a", widths["model"], max_lines=model_lines_max)
-    stdscr.addstr(y, x, model_lines[0], attrs)
-    x += widths["model"] + 1
-    stdscr.addstr(y, x, _fit(row.status, widths["status"]), attrs)
-    x += widths["status"] + 1
-    ndcg_val = row.relevance.get("ndcg@10", 0.0)
-    stdscr.addstr(y, x, _fit(f"{ndcg_val:.4f}", widths["ndcg"]), attrs)
-    x += widths["ndcg"] + 1
-    mrr_val = row.relevance.get("mrr@10", 0.0)
-    stdscr.addstr(y, x, _fit(f"{mrr_val:.4f}", widths["mrr"]), attrs)
-    x += widths["mrr"] + 1
-    map_val = row.relevance.get("map@10", 0.0)
-    stdscr.addstr(y, x, _fit(f"{map_val:.4f}", widths["map"]), attrs)
-    x += widths["map"] + 1
-    p20_val = row.relevance.get("p@20", 0.0)
-    stdscr.addstr(y, x, _fit(f"{p20_val:.4f}", widths["p20"]), attrs)
-    x += widths["p20"] + 1
-    recall_val = row.relevance.get("recall@100", 0.0)
-    stdscr.addstr(y, x, _fit(f"{recall_val:.4f}", widths["recall"]), attrs)
-    x_model = (
-        widths["sel"] + 1
-        + widths["idx"] + 1
-        + widths["run_id"] + 1
-        + widths["run_at"] + 1
-        + widths["dataset"] + 1
-        + widths["engine"] + 1
-        + widths["mode"] + 1
-        + widths["docs"] + 1
-    )
-    for i in range(1, model_lines_max):
-        stdscr.addstr(y + i, x_model, model_lines[i], attrs)
+    columns: list[tuple[str, int, int]] = [
+        (prefix, attrs, widths["sel"]),
+        (str(idx), attrs, widths["idx"]),
+        (row.run_id, attrs, widths["run_id"]),
+        (row.run_at, attrs, widths["run_at"]),
+        (row.dataset_source or "-", attrs, widths["dataset"]),
+        (row.engine or "-", attrs | curses.color_pair(e_pair), widths["engine"]),
+        (_display_mode(row.mode or "-"), attrs | curses.color_pair(m_pair), widths["mode"]),
+        (f"{int(row.doc_count):,}" if row.doc_count is not None else "-", attrs, widths["docs"]),
+        (row.model or "n/a", attrs, widths["model"]),
+        (row.status, attrs, widths["status"]),
+        (f"{row.relevance.get('ndcg@10', 0.0):.4f}", attrs, widths["ndcg"]),
+        (f"{row.relevance.get('mrr@10', 0.0):.4f}", attrs, widths["mrr"]),
+        (f"{row.relevance.get('map@10', 0.0):.4f}", attrs, widths["map"]),
+        (f"{row.relevance.get('p@20', 0.0):.4f}", attrs, widths["p20"]),
+        (f"{row.relevance.get('recall@100', 0.0):.4f}", attrs, widths["recall"]),
+    ]
+    x = 0
+    for text, cell_attrs, width in columns:
+        cell_lines = wrap_cell(text, width, max_lines=model_lines_max)
+        for i in range(model_lines_max):
+            stdscr.addstr(y + i, x, cell_lines[i], cell_attrs)
+        x += width + 1
 
 
 def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
@@ -308,6 +312,8 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             curses.init_pair(2, curses.COLOR_YELLOW, -1)    # qdrant
             curses.init_pair(3, curses.COLOR_BLUE, -1)      # full-text
             curses.init_pair(4, curses.COLOR_RED, -1)       # vector
+            curses.init_pair(5, curses.COLOR_CYAN, -1)      # meilisearch
+            curses.init_pair(6, curses.COLOR_MAGENTA, -1)   # hybrid
 
         widths = {
             "sel": 3,
@@ -628,6 +634,53 @@ def _profile_system_model_label(r: ArtifactRow) -> str:
     return " / ".join([profile, _system_label(r.engine, r.mode), r.model or "n/a"])
 
 
+def _best_metric_bar_rows(rows: list[ArtifactRow], metric: str) -> list[tuple[str, float]]:
+    best: dict[tuple[str, str, int | None], dict[str, float]] = {}
+    for row in rows:
+        if row.mode not in {"fulltext", "vector"}:
+            continue
+        if metric not in row.relevance:
+            continue
+        key = (row.engine or "-", row.mode, row.doc_count)
+        ndcg_val = float(row.relevance.get("ndcg@10", 0.0))
+        mrr_val = float(row.relevance.get("mrr@10", 0.0))
+        prev = best.get(key)
+        current_metric_val = float(row.relevance.get(metric, 0.0))
+        if prev is None or current_metric_val > float(prev.get(metric, 0.0)):
+            best[key] = {"ndcg@10": ndcg_val, "mrr@10": mrr_val}
+    if not best:
+        return []
+
+    items = sorted(
+        best.items(),
+        key=lambda item: (-float(item[1].get(metric, 0.0)), (item[0][0] or "").lower(), item[0][1], item[0][2] or 0),
+    )
+    pairs: list[tuple[str, float]] = []
+    show_docs = len({r.doc_count for r in rows}) > 1
+    for (engine, mode, doc_count), metrics in items:
+        label = f"{engine} / {_display_mode(mode)}"
+        if show_docs:
+            docs_text = str(int(doc_count)) if doc_count is not None else "unknown"
+            label = f"{label} / {docs_text}"
+        pairs.append((label, float(metrics.get(metric, 0.0))))
+    return pairs
+
+
+def _metric_table_lines(rows: list[ArtifactRow], metric: str) -> list[str]:
+    pairs = _best_metric_bar_rows(rows, metric)
+    if not pairs:
+        return []
+    width = 24
+    lines = [f"Best {metric.upper()}:", ""]
+    lines.append(f"| Category | {metric.upper()} |")
+    lines.append("|---|---:|")
+    for label, val in pairs:
+        blocks = max(1, int(round(val * width))) if val > 0 else 0
+        bar = "█" * blocks if blocks > 0 else "·"
+        lines.append(f"| {label} | `{bar} {val:.4f}` |")
+    return lines
+
+
 def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines: list[str] = []
     lines.append(f"# {title}")
@@ -640,59 +693,73 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
 
     for dataset in sorted(by_dataset.keys()):
         dataset_rows = by_dataset[dataset]
-        lines.append(f"## Relevance for `{dataset}`")
+        lines.append(f"## Relevance for {_dataset_label(dataset)}")
         lines.append("")
+        ndcg_table_lines = _metric_table_lines(dataset_rows, "ndcg@10")
+        lines.extend(ndcg_table_lines)
+        if ndcg_table_lines:
+            lines.append("")
+        mrr_table_lines = _metric_table_lines(dataset_rows, "mrr@10")
+        lines.extend(mrr_table_lines)
+        if mrr_table_lines:
+            lines.append("")
+        show_docs = len({r.doc_count for r in dataset_rows}) > 1
         rel_keys = _collect_relevance_keys(dataset_rows)
-        header = "| Run ID | Profile/System/Model | Docs | Run At | " + " | ".join([k.upper() for k in rel_keys]) + " |"
-        sep = "|" + "---|" * (4 + len(rel_keys))
+        rel_cols = ["Run ID", "Profile/System/Model"]
+        if show_docs:
+            rel_cols.append("Docs")
+        rel_cols.extend(["Run At", *[k.upper() for k in rel_keys]])
+        header = "| " + " | ".join(rel_cols) + " |"
+        sep = "|" + "---|" * len(rel_cols)
         lines.append(header)
         lines.append(sep)
         rel_rows = sorted(dataset_rows, key=_relevance_sort_key)
         for r in rel_rows:
             run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
             vals = [f"{r.relevance.get(k, 0.0):.4f}" for k in rel_keys]
+            row_vals = [
+                run_id_link,
+                _profile_system_model_label(r),
+            ]
+            if show_docs:
+                row_vals.append(f"{int(r.doc_count):,}" if r.doc_count is not None else "-")
+            row_vals.extend([r.run_at, *vals])
             lines.append(
-                "| "
-                + " | ".join(
-                    [
-                        run_id_link,
-                        _profile_system_model_label(r),
-                        f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
-                        r.run_at,
-                        *vals,
-                    ]
-                )
-                + " |"
+                "| " + " | ".join(row_vals) + " |"
             )
         lines.append("")
-        lines.append(f"## Query Performance for `{dataset}`")
+        lines.append(f"## Query Performance for {_dataset_label(dataset)}")
         lines.append("")
-        lines.append(
-            "| Run ID | Profile/System/Model | Docs | Run At | Concurrency | P50 (ms) | P95 (ms) | P99 (ms) | QPS | Error rate | Queries |"
-        )
-        lines.append("|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|")
+        perf_cols = ["Run ID", "Profile/System/Model"]
+        if show_docs:
+            perf_cols.append("Docs")
+        perf_cols.extend(["Run At", "Concurrency", "P50 (ms)", "P95 (ms)", "P99 (ms)", "QPS", "Error rate", "Queries"])
+        lines.append("| " + " | ".join(perf_cols) + " |")
+        lines.append("|" + "---|" * len(perf_cols))
         perf_rows = sorted(dataset_rows, key=_performance_sort_key)
         for r in perf_rows:
             run_id_link = f"[{r.run_id}]({r.run_id}/summary.md)"
             p = r.performance
+            row_vals = [
+                run_id_link,
+                _profile_system_model_label(r),
+            ]
+            if show_docs:
+                row_vals.append(f"{int(r.doc_count):,}" if r.doc_count is not None else "-")
+            row_vals.extend(
+                [
+                    r.run_at,
+                    str(r.concurrency if r.concurrency is not None else "-"),
+                    f"{p.get('latency_p50_ms', 0.0):.2f}",
+                    f"{p.get('latency_p95_ms', 0.0):.2f}",
+                    f"{p.get('latency_p99_ms', 0.0):.2f}",
+                    f"{p.get('qps', 0.0):.2f}",
+                    f"{p.get('error_rate', 0.0):.4f}",
+                    f"{p.get('queries_total', 0.0):.0f}",
+                ]
+            )
             lines.append(
-                "| "
-                + " | ".join(
-                    [
-                        run_id_link,
-                        _profile_system_model_label(r),
-                        f"{int(r.doc_count):,}" if r.doc_count is not None else "-",
-                        r.run_at,
-                        str(r.concurrency if r.concurrency is not None else "-"),
-                        f"{p.get('latency_p50_ms', 0.0):.2f}",
-                        f"{p.get('latency_p95_ms', 0.0):.2f}",
-                        f"{p.get('latency_p99_ms', 0.0):.2f}",
-                        f"{p.get('qps', 0.0):.2f}",
-                        f"{p.get('error_rate', 0.0):.4f}",
-                        f"{p.get('queries_total', 0.0):.0f}",
-                    ]
-                )
-                + " |"
+                "| " + " | ".join(row_vals) + " |"
             )
         lines.append("")
 

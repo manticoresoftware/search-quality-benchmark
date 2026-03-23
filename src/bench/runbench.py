@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .config import AppConfig
 from .io_utils import ensure_dir, generate_run_id, read_jsonl
 from .manticore import ManticoreClient
+from .meilisearch_backend import MeilisearchBackend
 from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k, reciprocal_rank_at_k
 from .qdrant_backend import QdrantBackend
 from .search_options import normalize_search_options
@@ -219,6 +220,15 @@ def _manticore_vector_option_clause(cfg: AppConfig) -> str:
     return normalize_search_options(cfg.manticore.search_options)
 
 
+def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
+    if engine == "manticore":
+        return cfg.manticore.fulltext_table if mode == "fulltext" else cfg.manticore.vector_table
+    if engine == "qdrant":
+        return cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
+    backend = MeilisearchBackend(cfg.meilisearch)
+    return backend.lexical_index_name() if mode == "fulltext" else backend.vector_index_name()
+
+
 def _manticore_fulltext_ranker_label(cfg: AppConfig) -> str:
     extras: list[str] = []
     search_opts = normalize_search_options(cfg.manticore.search_options)
@@ -288,6 +298,36 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
     return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
 
 
+def _meilisearch_fulltext_label(cfg: AppConfig) -> str:
+    extras: list[str] = []
+    if cfg.meilisearch.searchable_attributes:
+        extras.append(f"searchable:{','.join(cfg.meilisearch.searchable_attributes)}")
+    if cfg.meilisearch.ranking_rules:
+        extras.append(f"rules:{','.join(cfg.meilisearch.ranking_rules)}")
+    if cfg.meilisearch.stop_words:
+        extras.append(f"stopwords:{len(cfg.meilisearch.stop_words)}")
+    if not bool(cfg.meilisearch.typo_tolerance):
+        extras.append("typo:off")
+    return f"[{' '.join(extras)}]" if extras else "(meilisearch lexical)"
+
+
+def _meilisearch_vector_label(cfg: AppConfig) -> str:
+    extras = [f"embedder:{cfg.meilisearch.embedder_name}"]
+    if bool(cfg.meilisearch.binary_quantized):
+        extras.append("q=1bit")
+    return f"{cfg.manticore.vector_model} [{' '.join(extras)}]"
+
+
+def _meilisearch_hybrid_label(cfg: AppConfig) -> str:
+    extras = [
+        f"embedder:{cfg.meilisearch.embedder_name}",
+        f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}",
+    ]
+    if bool(cfg.meilisearch.binary_quantized):
+        extras.append("q=1bit")
+    return f"{cfg.manticore.vector_model} [{' '.join(extras)}]"
+
+
 def _get_query_vectors_from_cache_or_embed(cfg: AppConfig, query_texts: list[str]) -> dict[str, list[float]]:
     unique_queries = [q for q in dict.fromkeys(query_texts) if str(q or "").strip()]
     if not unique_queries:
@@ -354,6 +394,58 @@ def _get_query_vectors_from_cache_or_embed(cfg: AppConfig, query_texts: list[str
     return out
 
 
+def _collect_diagnostics_meilisearch(
+    cfg: AppConfig,
+    modes: list[str],
+    topics: list[dict[str, str]],
+    *,
+    query_vectors: dict[str, list[float]],
+) -> dict[str, list[dict[str, Any]]]:
+    diagnostics: dict[str, list[dict[str, Any]]] = {}
+    backend = MeilisearchBackend(cfg.meilisearch)
+    diagnostics_topics = topics[: cfg.benchmark.diagnostics_queries]
+    for mode in modes:
+        diagnostics[mode] = []
+        for t in diagnostics_topics:
+            qtext = query_text_for_mode(t, mode)
+            entry: dict[str, Any] = {"topic_id": t["topic_id"], "query": qtext}
+            try:
+                if mode == "fulltext":
+                    rows = backend.search_lexical(qtext, limit=min(cfg.benchmark.limit, 5))
+                    entry["request"] = {
+                        "index": backend.lexical_index_name(),
+                        "query": qtext,
+                        "limit": min(cfg.benchmark.limit, 5),
+                    }
+                elif mode == "vector":
+                    qvec = query_vectors.get(query_text_for_mode(t, "vector"), [])
+                    if not qvec:
+                        raise RuntimeError("Missing query vector for diagnostics.")
+                    rows = backend.search_vector(qvec, limit=min(cfg.benchmark.limit, 5))
+                    entry["request"] = {
+                        "index": backend.vector_index_name(),
+                        "vector_dim": len(qvec),
+                        "limit": min(cfg.benchmark.limit, 5),
+                    }
+                else:
+                    qvec = query_vectors.get(query_text_for_mode(t, "vector"), [])
+                    if not qvec:
+                        raise RuntimeError("Missing query vector for diagnostics.")
+                    rows = backend.search_hybrid(qtext, qvec, limit=min(cfg.benchmark.limit, 5))
+                    entry["request"] = {
+                        "index": backend.vector_index_name(),
+                        "query": qtext,
+                        "vector_dim": len(qvec),
+                        "semanticRatio": float(cfg.meilisearch.hybrid_semantic_ratio),
+                        "limit": min(cfg.benchmark.limit, 5),
+                    }
+                entry["top_hits"] = rows[:5]
+            except Exception as exc:
+                entry["error"] = str(exc)
+            diagnostics[mode].append(entry)
+    return diagnostics
+
+
 def _run_single_query_qdrant(
     cfg: AppConfig,
     backend: QdrantBackend,
@@ -369,6 +461,54 @@ def _run_single_query_qdrant(
             rows = backend.query_bm25_text(query_text, limit=cfg.benchmark.limit)
         else:
             rows = backend.query_dense(query_vector or [], limit=cfg.benchmark.limit)
+        latency_ms = (perf_counter() - started) * 1000.0
+        doc_ids = [str(r["doc_id"]) for r in rows if r.get("doc_id")]
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=latency_ms,
+            success=True,
+            error="",
+            hit_count=len(doc_ids),
+            doc_ids=doc_ids,
+        )
+    except Exception as exc:
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=0.0,
+            success=False,
+            error=str(exc),
+            hit_count=0,
+            doc_ids=[],
+        )
+
+
+def _run_single_query_meilisearch(
+    cfg: AppConfig,
+    backend: MeilisearchBackend,
+    mode: str,
+    topic_id: str,
+    query_text: str,
+    repeat_idx: int,
+    query_vector: list[float] | None = None,
+) -> QueryResult:
+    try:
+        started = perf_counter()
+        if mode == "fulltext":
+            rows = backend.search_lexical(query_text, limit=cfg.benchmark.limit)
+        elif mode == "vector":
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Meilisearch vector search.")
+            rows = backend.search_vector(query_vector, limit=cfg.benchmark.limit)
+        else:
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Meilisearch hybrid search.")
+            rows = backend.search_hybrid(query_text, query_vector, limit=cfg.benchmark.limit)
         latency_ms = (perf_counter() - started) * 1000.0
         doc_ids = [str(r["doc_id"]) for r in rows if r.get("doc_id")]
         return QueryResult(
@@ -453,6 +593,17 @@ def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> li
             client.close()
         return lines
 
+    if engine == "meilisearch":
+        backend = MeilisearchBackend(cfg.meilisearch)
+        for m in modes:
+            index_name = backend.lexical_index_name() if m == "fulltext" else backend.vector_index_name()
+            try:
+                cnt = backend.get_document_count(index_name)
+                lines.append(f"rows ({index_name}): {int(cnt):,}")
+            except Exception as exc:
+                lines.append(f"rows ({index_name}): n/a ({exc})")
+        return lines
+
     backend = QdrantBackend(cfg.qdrant)
     for m in modes:
         collection = cfg.qdrant.bm25_collection if m == "fulltext" else cfg.qdrant.dense_collection
@@ -487,6 +638,10 @@ def run_benchmark(
         if mode not in ("fulltext", "vector", "both"):
             raise ValueError("For engine=qdrant, mode must be one of: fulltext, vector, both")
         modes = [mode] if mode in ("fulltext", "vector") else ["fulltext", "vector"]
+    elif engine == "meilisearch":
+        if mode not in ("fulltext", "vector", "hybrid"):
+            raise ValueError("For engine=meilisearch, mode must be one of: fulltext, vector, hybrid")
+        modes = [mode]
     else:
         raise ValueError(f"Unsupported engine: {engine}")
     tasks: list[tuple[str, str, str, int]] = []
@@ -499,11 +654,14 @@ def run_benchmark(
     warmup_topics = topics[: cfg.benchmark.warmup_queries]
     query_vectors: dict[str, list[float]] = {}
     qdrant_backend: QdrantBackend | None = None
-    if "vector" in modes:
+    meili_backend: MeilisearchBackend | None = None
+    if "vector" in modes or "hybrid" in modes:
         vector_queries = [query_text_for_mode(t, "vector") for t in topics]
         query_vectors = _get_query_vectors_from_cache_or_embed(cfg, vector_queries)
     if engine == "qdrant":
         qdrant_backend = QdrantBackend(cfg.qdrant)
+    elif engine == "meilisearch":
+        meili_backend = MeilisearchBackend(cfg.meilisearch)
 
     for m in modes:
         for t in warmup_topics:
@@ -518,6 +676,17 @@ def run_benchmark(
                     query_vector=query_vectors.get(qtext, []) if m == "vector" else None,
                 )
             else:
+                if engine == "meilisearch":
+                    _run_single_query_meilisearch(
+                        cfg,
+                        meili_backend,  # type: ignore[arg-type]
+                        m,
+                        t["topic_id"],
+                        qtext,
+                        repeat_idx=-1,
+                        query_vector=query_vectors.get(query_text_for_mode(t, "vector"), []),
+                    )
+                    continue
                 _run_single_query_qdrant(
                     cfg,
                     qdrant_backend,  # type: ignore[arg-type]
@@ -553,7 +722,7 @@ def run_benchmark(
                 )
                 for (m, tid, q, r) in tasks
             ]
-        else:
+        elif engine == "qdrant":
             futures = [
                 pool.submit(
                     _run_single_query_qdrant,
@@ -564,6 +733,20 @@ def run_benchmark(
                     q,
                     r,
                     query_vectors.get(q, []),
+                )
+                for (m, tid, q, r) in tasks
+            ]
+        else:
+            futures = [
+                pool.submit(
+                    _run_single_query_meilisearch,
+                    cfg,
+                    meili_backend,  # type: ignore[arg-type]
+                    m,
+                    tid,
+                    q,
+                    r,
+                    query_vectors.get(q, []) if m in ("vector", "hybrid") else None,
                 )
                 for (m, tid, q, r) in tasks
             ]
@@ -685,13 +868,27 @@ def run_benchmark(
     diagnostics: dict[str, list[dict[str, Any]]]
     if engine == "manticore":
         diagnostics = _collect_diagnostics_manticore(cfg, modes, topics)
+    elif engine == "meilisearch":
+        diagnostics = _collect_diagnostics_meilisearch(cfg, modes, topics, query_vectors=query_vectors)
     else:
         diagnostics = {m: [] for m in modes}
 
     if mode == "vector":
-        model_label = _manticore_vector_label(cfg) if engine == "manticore" else _qdrant_vector_label(cfg)
+        if engine == "manticore":
+            model_label = _manticore_vector_label(cfg)
+        elif engine == "qdrant":
+            model_label = _qdrant_vector_label(cfg)
+        else:
+            model_label = _meilisearch_vector_label(cfg)
+    elif mode == "hybrid":
+        model_label = _meilisearch_hybrid_label(cfg)
     elif mode == "fulltext":
-        model_label = _manticore_fulltext_ranker_label(cfg) if engine == "manticore" else "Qdrant/bm25"
+        if engine == "manticore":
+            model_label = _manticore_fulltext_ranker_label(cfg)
+        elif engine == "qdrant":
+            model_label = "Qdrant/bm25"
+        else:
+            model_label = _meilisearch_fulltext_label(cfg)
     else:
         if "vector" in modes:
             model_label = _manticore_vector_label(cfg) if engine == "manticore" else _qdrant_vector_label(cfg)
@@ -706,6 +903,7 @@ def run_benchmark(
         "engine": engine,
         "mode": mode,
         "model": model_label,
+        "target": _target_name_for_run(cfg, engine=engine, mode=mode),
         "benchmark_settings": {
             "concurrency": concurrency,
             "limit": cfg.benchmark.limit,

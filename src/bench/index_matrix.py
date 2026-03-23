@@ -3,12 +3,16 @@ from __future__ import annotations
 import curses
 from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import sys
 from typing import Any
 
 from .config import AppConfig, load_engine_targets
 from .discovery import discover_config_paths
+from .manticore import ManticoreClient
+from .meilisearch_backend import MeilisearchBackend
+from .qdrant_backend import QdrantBackend
 from .table_filters import (
     draw_header_with_filters,
     filter_block_height,
@@ -31,6 +35,15 @@ class IndexVariant:
     batch_size: int
     target: str
     cfg: AppConfig
+    base_entry: str = ""
+
+
+@dataclass(frozen=True)
+class TargetStatus:
+    state: str
+    actual_count: int | None
+    expected_count: int | None
+    error: str | None = None
 
 
 def _display_mode(mode: str) -> str:
@@ -38,6 +51,8 @@ def _display_mode(mode: str) -> str:
         return "full-text"
     if mode == "vector":
         return "vector"
+    if mode == "hybrid":
+        return "hybrid"
     if mode == "both":
         return "both"
     return mode
@@ -45,10 +60,26 @@ def _display_mode(mode: str) -> str:
 
 def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
     if mode == "vector":
+        if engine == "meilisearch":
+            extra = [f"embedder:{cfg.meilisearch.embedder_name}"]
+            if bool(cfg.meilisearch.binary_quantized):
+                extra.append("q=1bit")
+            return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
         return cfg.manticore.vector_model
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
+    if engine == "meilisearch":
+        extras: list[str] = []
+        if cfg.meilisearch.searchable_attributes:
+            extras.append(f"searchable:{','.join(cfg.meilisearch.searchable_attributes)}")
+        if cfg.meilisearch.ranking_rules:
+            extras.append(f"rules:{','.join(cfg.meilisearch.ranking_rules)}")
+        if not bool(cfg.meilisearch.typo_tolerance):
+            extras.append("typo:off")
+        return " ".join(extras) or "(meilisearch lexical)"
     return "Qdrant/bm25"
+
+
 def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVariant]:
     out: list[IndexVariant] = []
     for path in paths:
@@ -63,16 +94,24 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             for mode in modes:
                 if engine == "manticore":
                     target = cfg.manticore.fulltext_table if mode == "fulltext" else cfg.manticore.vector_table
+                elif engine == "meilisearch":
+                    base = str(cfg.meilisearch.index_name or "").strip()
+                    target = f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.meilisearch.vector_index}"
                 else:
                     target = cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
                 out.append(
                     IndexVariant(
                         config_path=str(path),
                         entry=target_cfg.name,
+                        base_entry=target_cfg.base_name,
                         engine=engine,
                         mode=mode,
                         model=_model_opts_label(cfg, engine=engine, mode=mode),
-                        batch_size=(cfg.manticore.batch_size if engine == "manticore" else cfg.qdrant.batch_size),
+                        batch_size=(
+                            cfg.manticore.batch_size
+                            if engine == "manticore"
+                            else (cfg.meilisearch.batch_size if engine == "meilisearch" else cfg.qdrant.batch_size)
+                        ),
                         target=target,
                         cfg=cfg,
                     )
@@ -81,16 +120,67 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
     dedup: dict[tuple[str, str, str, int, str], IndexVariant] = {}
     for v in out:
         key = (v.engine, v.mode, v.model, v.batch_size, v.target)
-        if key in dedup:
+        prev = dedup.get(key)
+        if prev is None:
+            dedup[key] = v
             continue
-        dedup[key] = v
+        if prev.entry == v.base_entry:
+            dedup[key] = v
+            continue
+        if v.entry == prev.base_entry:
+            continue
 
-    engine_order = {"manticore": 0, "qdrant": 1}
+    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2}
     mode_order = {"fulltext": 0, "vector": 1}
     return sorted(
         list(dedup.values()),
         key=lambda v: (engine_order.get(v.engine, 99), mode_order.get(v.mode, 99), v.entry, v.model, v.target),
     )
+
+
+def _expected_doc_count(v: IndexVariant) -> int | None:
+    manifest_path = Path(v.cfg.dataset.prepared_dir) / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    count = payload.get("doc_count")
+    try:
+        return int(count) if count is not None else None
+    except Exception:
+        return None
+
+
+def _resolve_target_status(v: IndexVariant) -> TargetStatus:
+    expected = _expected_doc_count(v)
+    try:
+        if v.engine == "manticore":
+            client = ManticoreClient(v.cfg.manticore)
+            try:
+                if not client.table_exists(v.target):
+                    return TargetStatus("pending", None, expected)
+                actual = client.count_rows(v.target)
+            finally:
+                client.close()
+        elif v.engine == "qdrant":
+            backend = QdrantBackend(v.cfg.qdrant)
+            collection_exists = getattr(backend.client, "collection_exists", None)
+            if callable(collection_exists) and not bool(collection_exists(v.target)):
+                return TargetStatus("pending", None, expected)
+            actual = int(backend._count_points(v.target))
+        else:
+            backend = MeilisearchBackend(v.cfg.meilisearch)
+            backend.ensure_accessible()
+            if not backend.index_exists(v.target):
+                return TargetStatus("pending", None, expected)
+            actual = int(backend.get_document_count(v.target))
+    except Exception as exc:
+        return TargetStatus("pending", None, expected, str(exc))
+    if expected is not None and actual != expected:
+        return TargetStatus("unexpected", actual, expected)
+    return TargetStatus("ok", actual, expected)
 
 
 def _draw_row(
@@ -101,42 +191,47 @@ def _draw_row(
     cursor: bool,
     widths: dict[str, int],
     row_lines: int,
+    target_status: TargetStatus,
 ) -> None:
     attrs = curses.A_REVERSE if cursor else curses.A_NORMAL
     color_engine = 0
     color_mode = 0
+    color_target = 0
     if curses.has_colors():
         if v.engine == "manticore":
             color_engine = curses.color_pair(1)
         elif v.engine == "qdrant":
             color_engine = curses.color_pair(2)
+        elif v.engine == "meilisearch":
+            color_engine = curses.color_pair(5)
         if v.mode == "fulltext":
             color_mode = curses.color_pair(3)
         elif v.mode == "vector":
             color_mode = curses.color_pair(4)
         elif v.mode == "both":
             color_mode = curses.color_pair(5)
+        if target_status.state == "ok":
+            color_target = curses.color_pair(6)
+        elif target_status.state == "pending":
+            color_target = curses.color_pair(7)
+        elif target_status.state == "unexpected":
+            color_target = curses.color_pair(8)
 
+    columns: list[tuple[str, int, int]] = [
+        ("[x]" if selected else "[ ]", 0, widths["sel"]),
+        (v.entry, attrs, widths["entry"]),
+        (v.engine, attrs | color_engine, widths["engine"]),
+        (_display_mode(v.mode), attrs | color_mode, widths["mode"]),
+        (v.target, attrs | color_target, widths["target"]),
+        (v.model, attrs, widths["model"]),
+        (str(v.batch_size), attrs, widths["batch"]),
+    ]
     x = 0
-    stdscr.addstr(y, x, _fit("[x]" if selected else "[ ]", widths["sel"]), attrs)
-    x += widths["sel"] + 1
-    entry_lines = wrap_cell(v.entry, widths["entry"], max_lines=row_lines)
-    stdscr.addstr(y, x, entry_lines[0], attrs)
-    for i in range(1, row_lines):
-        stdscr.addstr(y + i, x, entry_lines[i], attrs)
-    x += widths["entry"] + 1
-    stdscr.addstr(y, x, _fit(v.engine, widths["engine"]), attrs | color_engine)
-    x += widths["engine"] + 1
-    stdscr.addstr(y, x, _fit(_display_mode(v.mode), widths["mode"]), attrs | color_mode)
-    x += widths["mode"] + 1
-    stdscr.addstr(y, x, _fit(v.target, widths["target"]), attrs)
-    x += widths["target"] + 1
-    model_lines = wrap_cell(v.model, widths["model"], max_lines=row_lines)
-    stdscr.addstr(y, x, model_lines[0], attrs)
-    for i in range(1, row_lines):
-        stdscr.addstr(y + i, x, model_lines[i], attrs)
-    x += widths["model"] + 1
-    stdscr.addstr(y, x, _fit(str(v.batch_size), widths["batch"]), attrs)
+    for text, cell_attrs, width in columns:
+        cell_lines = wrap_cell(text, width, max_lines=row_lines)
+        for i in range(row_lines):
+            stdscr.addstr(y + i, x, cell_lines[i], cell_attrs)
+        x += width + 1
 
 
 def _mask_detail_value(path: str, value: Any) -> Any:
@@ -200,6 +295,7 @@ def _details_lines(
     *,
     hidden_common_keys: set[str] | None = None,
     comparison_scope: str | None = None,
+    target_status: TargetStatus | None = None,
 ) -> list[str]:
     hidden_common_keys = hidden_common_keys or set()
 
@@ -210,6 +306,22 @@ def _details_lines(
         f"mode: {_display_mode(v.mode)}",
         f"target: {v.target}",
     ]
+    if target_status is not None:
+        state_label = {
+            "ok": "indexed",
+            "pending": "pending indexing",
+            "unexpected": "row count mismatch",
+        }.get(target_status.state, target_status.state)
+        if target_status.actual_count is not None and target_status.expected_count is not None:
+            lines.append(f"target status: {state_label} ({target_status.actual_count:,}/{target_status.expected_count:,})")
+        elif target_status.actual_count is not None:
+            lines.append(f"target status: {state_label} ({target_status.actual_count:,})")
+        elif target_status.expected_count is not None:
+            lines.append(f"target status: {state_label} (expected {target_status.expected_count:,})")
+        else:
+            lines.append(f"target status: {state_label}")
+        if target_status.error:
+            lines.append(f"target error: {target_status.error}")
     if hidden_common_keys:
         scope = comparison_scope or "visible rows"
         lines.append(f"common across {scope}: {len(hidden_common_keys)} hidden")
@@ -222,7 +334,15 @@ def _details_lines(
     return lines
 
 
-def _draw_details_panel(stdscr: Any, v: IndexVariant, variants: list[IndexVariant], widths: dict[str, int], w: int, h: int) -> None:
+def _draw_details_panel(
+    stdscr: Any,
+    v: IndexVariant,
+    variants: list[IndexVariant],
+    widths: dict[str, int],
+    w: int,
+    h: int,
+    target_status: TargetStatus,
+) -> None:
     table_width = sum(widths.values()) + (len(widths) - 1)
     panel_x = table_width + 3
     panel_w = w - panel_x - 1
@@ -233,6 +353,7 @@ def _draw_details_panel(stdscr: Any, v: IndexVariant, variants: list[IndexVarian
         v,
         hidden_common_keys=_common_detail_keys(variants, v),
         comparison_scope=f"visible {v.engine} rows ({len(comparison_variants)})",
+        target_status=target_status,
     )
     max_rows = max(0, h - 3)
     y = 1
@@ -266,7 +387,10 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(2, curses.COLOR_YELLOW, -1)  # qdrant
             curses.init_pair(3, curses.COLOR_BLUE, -1)    # full-text
             curses.init_pair(4, curses.COLOR_WHITE, -1)   # vector
-            curses.init_pair(5, curses.COLOR_CYAN, -1)    # both
+            curses.init_pair(5, curses.COLOR_CYAN, -1)    # meilisearch
+            curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_GREEN)   # target ok
+            curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending
+            curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # target unexpected
 
         widths = {
             "sel": 3,
@@ -282,9 +406,16 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
         sort_key = sort_cols[sort_idx]
         sort_desc = False
         filters: dict[str, str] = {}
+        status_cache: dict[tuple[str, str, str, str, str, int], TargetStatus] = {}
 
         def _variant_id(v: IndexVariant) -> tuple[str, str, str, str, str, int]:
             return (v.entry, v.engine, v.mode, v.target, v.model, int(v.batch_size))
+
+        def _get_status(v: IndexVariant) -> TargetStatus:
+            key = _variant_id(v)
+            if key not in status_cache:
+                status_cache[key] = _resolve_target_status(v)
+            return status_cache[key]
 
         def _mode_ord(mode: str) -> int:
             return 0 if mode == "fulltext" else (1 if mode == "vector" else 99)
@@ -383,9 +514,18 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                     cursor=(ridx == current),
                     widths=widths,
                     row_lines=row_h,
+                    target_status=_get_status(variants[ridx]),
                 )
             if variants:
-                _draw_details_panel(stdscr, variants[current], variants, widths=widths, w=w, h=h)
+                _draw_details_panel(
+                    stdscr,
+                    variants[current],
+                    variants,
+                    widths=widths,
+                    w=w,
+                    h=h,
+                    target_status=_get_status(variants[current]),
+                )
             stdscr.addstr(h - 1, 0, fit_text(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
             stdscr.refresh()
 

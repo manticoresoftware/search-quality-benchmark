@@ -12,6 +12,8 @@ def _display_mode(mode: str) -> str:
         return "full-text"
     if m == "vector":
         return "vector"
+    if m == "hybrid":
+        return "hybrid"
     return mode
 
 

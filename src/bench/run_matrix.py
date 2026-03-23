@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from .config import AppConfig, load_engine_targets
 from .discovery import discover_config_paths
 from .manticore import ManticoreClient
+from .meilisearch_backend import MeilisearchBackend
 from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
 from .search_options import normalize_search_options
@@ -34,6 +36,7 @@ class RunVariant:
     model: str
     default_concurrency: int
     cfg: AppConfig
+    base_entry: str = ""
 
 
 @dataclass
@@ -43,12 +46,35 @@ class RunExecutionResult:
     artifacts_dir: str
 
 
+@dataclass(frozen=True)
+class RunHistoryStatus:
+    has_previous_run: bool
+    run_count: int
+
+
+@dataclass(frozen=True)
+class RunTargetStatus:
+    runnable: bool
+    error: str | None = None
+
+
+def _legacy_history_key(
+    profile: str,
+    engine: str,
+    mode: str,
+    model: str,
+) -> tuple[str, str, str, str]:
+    return (profile, engine.lower(), mode.lower(), model)
+
+
 def _display_mode(mode: str) -> str:
     m = mode.lower()
     if m == "fulltext":
         return "full-text"
     if m == "vector":
         return "vector"
+    if m == "hybrid":
+        return "hybrid"
     return mode
 
 
@@ -80,6 +106,23 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
     return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
 
 
+def _meilisearch_vector_label(cfg: AppConfig) -> str:
+    extra = [f"embedder:{cfg.meilisearch.embedder_name}"]
+    if bool(cfg.meilisearch.binary_quantized):
+        extra.append("q=1bit")
+    return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+
+
+def _meilisearch_hybrid_label(cfg: AppConfig) -> str:
+    extra = [
+        f"embedder:{cfg.meilisearch.embedder_name}",
+        f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}",
+    ]
+    if bool(cfg.meilisearch.binary_quantized):
+        extra.append("q=1bit")
+    return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+
+
 def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     variants: list[RunVariant] = []
     for p in paths:
@@ -90,10 +133,17 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
         for target in targets:
             cfg = target.cfg
             engine = target.type
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector") else ["fulltext", "vector"]
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine == "meilisearch" else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
-                    model_or_ranker = _manticore_vector_label(cfg) if engine == "manticore" else _qdrant_vector_label(cfg)
+                    if engine == "manticore":
+                        model_or_ranker = _manticore_vector_label(cfg)
+                    elif engine == "qdrant":
+                        model_or_ranker = _qdrant_vector_label(cfg)
+                    else:
+                        model_or_ranker = _meilisearch_vector_label(cfg)
+                elif mode == "hybrid":
+                    model_or_ranker = _meilisearch_hybrid_label(cfg)
                 elif engine == "manticore":
                     extras: list[str] = []
                     search_opts = normalize_search_options(cfg.manticore.search_options)
@@ -108,12 +158,22 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     if opts:
                         extras.append(f"opts:{opts}")
                     model_or_ranker = f"[{' '.join(extras)}]" if extras else "(manticore default)"
-                else:
+                elif engine == "qdrant":
                     model_or_ranker = "Qdrant/bm25"
+                else:
+                    extras: list[str] = []
+                    if cfg.meilisearch.searchable_attributes:
+                        extras.append(f"searchable:{','.join(cfg.meilisearch.searchable_attributes)}")
+                    if cfg.meilisearch.ranking_rules:
+                        extras.append(f"rules:{','.join(cfg.meilisearch.ranking_rules)}")
+                    if not bool(cfg.meilisearch.typo_tolerance):
+                        extras.append("typo:off")
+                    model_or_ranker = f"[{' '.join(extras)}]" if extras else "(meilisearch lexical)"
                 variants.append(
                     RunVariant(
                         config_path=str(p),
                         entry=target.name,
+                        base_entry=target.base_name,
                         engine=engine,
                         mode=mode,
                         model=model_or_ranker,
@@ -123,12 +183,18 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 )
     dedup: dict[tuple[str, str, str, str], RunVariant] = {}
     for v in variants:
-        key = (v.entry, v.engine, v.mode, v.model)
-        if key in dedup:
+        key = (v.engine, v.mode, v.model, _variant_target_name(v))
+        prev = dedup.get(key)
+        if prev is None:
+            dedup[key] = v
             continue
-        dedup[key] = v
+        if prev.entry == v.base_entry:
+            dedup[key] = v
+            continue
+        if v.entry == prev.base_entry:
+            continue
 
-    mode_order = {"fulltext": 0, "vector": 1}
+    mode_order = {"fulltext": 0, "vector": 1, "hybrid": 2}
     return sorted(
         list(dedup.values()),
         key=lambda v: (
@@ -141,6 +207,51 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     )
 
 
+def _history_key(
+    profile: str,
+    engine: str,
+    mode: str,
+    model: str,
+    target: str,
+) -> tuple[str, str, str, str, str]:
+    return (profile, engine.lower(), mode.lower(), model, target)
+
+
+def _variant_history_key(v: RunVariant) -> tuple[str, str, str, str, str]:
+    return _history_key(v.entry, v.engine, v.mode, v.model, _variant_target_name(v))
+
+
+def _load_run_history_status() -> tuple[
+    dict[tuple[str, str, str, str, str], RunHistoryStatus],
+    dict[tuple[str, str, str, str], RunHistoryStatus],
+]:
+    out_exact: dict[tuple[str, str, str, str, str], RunHistoryStatus] = {}
+    out_legacy: dict[tuple[str, str, str, str], RunHistoryStatus] = {}
+    artifacts_dir = Path("artifacts")
+    if not artifacts_dir.exists():
+        return out_exact, out_legacy
+    for metrics_path in artifacts_dir.glob("*/metrics.json"):
+        try:
+            payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        profile = str(payload.get("profile", "") or "").strip()
+        engine = str(payload.get("engine", "") or "").strip().lower()
+        mode = str(payload.get("mode", "") or "").strip().lower()
+        model = str(payload.get("model", "") or "").strip()
+        target = str(payload.get("target", "") or "").strip()
+        if not profile or not engine or not mode or not model:
+            continue
+        legacy_key = _legacy_history_key(profile, engine, mode, model)
+        legacy_prev = out_legacy.get(legacy_key)
+        out_legacy[legacy_key] = RunHistoryStatus(True, (legacy_prev.run_count if legacy_prev else 0) + 1)
+        if target:
+            key = _history_key(profile, engine, mode, model, target)
+            prev = out_exact.get(key)
+            out_exact[key] = RunHistoryStatus(True, (prev.run_count if prev else 0) + 1)
+    return out_exact, out_legacy
+
+
 def _draw_row(
     stdscr: Any,
     y: int,
@@ -150,44 +261,55 @@ def _draw_row(
     cursor: bool,
     widths: dict[str, int],
     model_lines_max: int,
+    history_status: RunHistoryStatus,
+    target_status: RunTargetStatus,
 ) -> None:
     attrs = curses.A_REVERSE if cursor else curses.A_NORMAL
+    color_entry = 0
     color_engine = 0
     color_mode = 0
+    color_target = 0
     if curses.has_colors():
+        if not history_status.has_previous_run:
+            color_entry = curses.color_pair(8)
         if v.engine == "manticore":
             color_engine = curses.color_pair(1)
         elif v.engine == "qdrant":
             color_engine = curses.color_pair(2)
+        elif v.engine == "meilisearch":
+            color_engine = curses.color_pair(5)
 
         if v.mode == "fulltext":
             color_mode = curses.color_pair(3)
         elif v.mode == "vector":
             color_mode = curses.color_pair(4)
-    entry_lines = wrap_cell(v.entry, widths["entry"], max_lines=model_lines_max)
-    model_lines = wrap_cell(v.model, widths["model"], max_lines=model_lines_max)
+        elif v.mode == "hybrid":
+            color_mode = curses.color_pair(6)
+        if not target_status.runnable:
+            color_target = curses.color_pair(10)
+    columns: list[tuple[str, int, int]] = [
+        ("[x]" if selected else "[ ]", attrs, widths["sel"]),
+        (v.entry, attrs | color_entry, widths["entry"]),
+        (v.engine, attrs | color_engine, widths["engine"]),
+        (_display_mode(v.mode), attrs | color_mode, widths["mode"]),
+        (_variant_target_name(v), attrs | color_target, widths["target"]),
+        (v.model, attrs, widths["model"]),
+    ]
     x = 0
-    stdscr.addstr(y, x, _fit("[x]" if selected else "[ ]", widths["sel"]), attrs)
-    x += widths["sel"] + 1
-    stdscr.addstr(y, x, entry_lines[0], attrs)
-    for i in range(1, model_lines_max):
-        stdscr.addstr(y + i, x, entry_lines[i], attrs)
-    x += widths["entry"] + 1
-    stdscr.addstr(y, x, _fit(v.engine, widths["engine"]), attrs | color_engine)
-    x += widths["engine"] + 1
-    stdscr.addstr(y, x, _fit(_display_mode(v.mode), widths["mode"]), attrs | color_mode)
-    x += widths["mode"] + 1
-    stdscr.addstr(y, x, _fit(_variant_target_name(v), widths["target"]), attrs)
-    x += widths["target"] + 1
-    stdscr.addstr(y, x, model_lines[0], attrs)
-    for i in range(1, model_lines_max):
-        stdscr.addstr(y + i, x, model_lines[i], attrs)
+    for text, cell_attrs, width in columns:
+        cell_lines = wrap_cell(text, width, max_lines=model_lines_max)
+        for i in range(model_lines_max):
+            stdscr.addstr(y + i, x, cell_lines[i], cell_attrs)
+        x += width + 1
 
 
 def _variant_target_name(v: RunVariant) -> str:
     if v.engine == "manticore":
         return v.cfg.manticore.fulltext_table if v.mode == "fulltext" else v.cfg.manticore.vector_table
-    return v.cfg.qdrant.bm25_collection if v.mode == "fulltext" else v.cfg.qdrant.dense_collection
+    if v.engine == "qdrant":
+        return v.cfg.qdrant.bm25_collection if v.mode == "fulltext" else v.cfg.qdrant.dense_collection
+    backend = MeilisearchBackend(v.cfg.meilisearch)
+    return backend.lexical_index_name() if v.mode == "fulltext" else backend.vector_index_name()
 
 
 def is_variant_runnable(v: RunVariant) -> bool:
@@ -199,19 +321,29 @@ def is_variant_runnable(v: RunVariant) -> bool:
                 return bool(client.table_exists(target))
             finally:
                 client.close()
-        backend = QdrantBackend(v.cfg.qdrant)
-        collection_exists = getattr(backend.client, "collection_exists", None)
-        if callable(collection_exists):
-            return bool(collection_exists(target))
-        # Fallback for older clients: count() raises if collection does not exist.
-        backend._count_points(target)
-        return True
+        if v.engine == "qdrant":
+            backend = QdrantBackend(v.cfg.qdrant)
+            collection_exists = getattr(backend.client, "collection_exists", None)
+            if callable(collection_exists):
+                return bool(collection_exists(target))
+            backend._count_points(target)
+            return True
+        backend = MeilisearchBackend(v.cfg.meilisearch)
+        backend.ensure_accessible()
+        return backend.index_exists(target)
     except Exception:
         return False
 
 
 def filter_runnable_variants(variants: list[RunVariant]) -> list[RunVariant]:
     return [v for v in variants if is_variant_runnable(v)]
+
+
+def _resolve_target_status(v: RunVariant) -> RunTargetStatus:
+    try:
+        return RunTargetStatus(runnable=is_variant_runnable(v), error=None)
+    except Exception as exc:
+        return RunTargetStatus(runnable=False, error=str(exc))
 
 
 def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
@@ -223,9 +355,12 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
                 return client.count_rows(table), None
             finally:
                 client.close()
-        backend = QdrantBackend(v.cfg.qdrant)
-        collection = _variant_target_name(v)
-        return int(backend._count_points(collection)), None
+        if v.engine == "qdrant":
+            backend = QdrantBackend(v.cfg.qdrant)
+            collection = _variant_target_name(v)
+            return int(backend._count_points(collection)), None
+        backend = MeilisearchBackend(v.cfg.meilisearch)
+        return int(backend.get_document_count(_variant_target_name(v))), None
     except Exception as exc:
         return None, str(exc)
 
@@ -292,6 +427,8 @@ def _details_lines(
     *,
     hidden_common_keys: set[str] | None = None,
     comparison_scope: str | None = None,
+    history_status: RunHistoryStatus | None = None,
+    target_status: RunTargetStatus | None = None,
 ) -> list[str]:
     hidden_common_keys = hidden_common_keys or set()
 
@@ -302,6 +439,12 @@ def _details_lines(
         f"mode: {_display_mode(v.mode)}",
         f"target: {_variant_target_name(v)}",
     ]
+    if history_status is not None:
+        meta.append(f"previous runs: {history_status.run_count}")
+    if target_status is not None:
+        meta.append(f"target status: {'ready' if target_status.runnable else 'missing'}")
+        if target_status.error:
+            meta.append(f"target error: {target_status.error}")
     lines.extend(meta)
     if hidden_common_keys:
         scope = comparison_scope or "visible rows"
@@ -326,6 +469,8 @@ def _draw_details_panel(
     w: int,
     h: int,
     row_count_cache: dict[tuple[str, str, str], str],
+    history_status: RunHistoryStatus,
+    target_status: RunTargetStatus,
 ) -> None:
     table_width = sum(widths.values()) + (len(widths) - 1)
     panel_x = table_width + 3
@@ -349,6 +494,8 @@ def _draw_details_panel(
         rows_line=rows_line,
         hidden_common_keys=hidden_common_keys,
         comparison_scope=f"visible {v.engine} rows ({len(comparison_variants)})",
+        history_status=history_status,
+        target_status=target_status,
     )
     max_rows = max(0, h - 3)
     y = 1
@@ -370,6 +517,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
     current = 0
     offset = 0
     row_count_cache: dict[tuple[str, str, str], str] = {}
+    history_cache, legacy_history_cache = _load_run_history_status()
+    target_status_cache: dict[tuple[str, str, str, str], RunTargetStatus] = {}
     all_variants = list(variants)
 
     def _inner(stdscr: Any) -> list[int]:
@@ -383,6 +532,10 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.init_pair(2, curses.COLOR_YELLOW, -1)    # engine: qdrant
             curses.init_pair(3, curses.COLOR_BLUE, -1)      # mode: full-text
             curses.init_pair(4, curses.COLOR_WHITE, -1)     # mode: vector
+            curses.init_pair(5, curses.COLOR_CYAN, -1)      # engine: meilisearch
+            curses.init_pair(6, curses.COLOR_MAGENTA, -1)   # mode: hybrid
+            curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # profile: no previous run
+            curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_RED)    # target: missing
         widths = {
             "sel": 3,
             "entry": 18,
@@ -400,8 +553,23 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
         def _variant_id(v: RunVariant) -> tuple[str, str, str, str]:
             return (v.entry, v.engine, v.mode, v.model)
 
+        def _history_status(v: RunVariant) -> RunHistoryStatus:
+            exact = history_cache.get(_variant_history_key(v))
+            if exact is not None:
+                return exact
+            return legacy_history_cache.get(
+                _legacy_history_key(v.entry, v.engine, v.mode, v.model),
+                RunHistoryStatus(False, 0),
+            )
+
+        def _target_status(v: RunVariant) -> RunTargetStatus:
+            key = _variant_id(v)
+            if key not in target_status_cache:
+                target_status_cache[key] = _resolve_target_status(v)
+            return target_status_cache[key]
+
         def _mode_ord(mode: str) -> int:
-            return 0 if mode == "fulltext" else (1 if mode == "vector" else 99)
+            return 0 if mode == "fulltext" else (1 if mode == "vector" else (2 if mode == "hybrid" else 99))
 
         def _sort_value(v: RunVariant, col: str) -> Any:
             if col == "entry":
@@ -488,6 +656,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                     cursor=(ridx == current),
                     widths=widths,
                     model_lines_max=row_h,
+                    history_status=_history_status(variants[ridx]),
+                    target_status=_target_status(variants[ridx]),
                 )
             if variants:
                 _draw_details_panel(
@@ -498,6 +668,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                     w=w,
                     h=h,
                     row_count_cache=row_count_cache,
+                    history_status=_history_status(variants[current]),
+                    target_status=_target_status(variants[current]),
                 )
             stdscr.addstr(h - 1, 0, fit_text(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
             stdscr.refresh()

@@ -47,6 +47,27 @@ class ManticoreConfig:
 
 
 @dataclass
+class MeilisearchConfig:
+    host: str = "http://127.0.0.1:7700"
+    api_key: str = ""
+    api_key_file: str = ""
+    index_name: str = "trec_covid"
+    timeout_sec: int = 30
+    batch_size: int = 500
+    searchable_attributes: list[str] = field(default_factory=lambda: ["title", "abstract"])
+    ranking_rules: list[str] = field(
+        default_factory=lambda: ["words", "typo", "proximity", "attribute", "sort", "exactness"]
+    )
+    stop_words: list[str] = field(default_factory=list)
+    synonyms: dict[str, list[str]] = field(default_factory=dict)
+    typo_tolerance: bool = True
+    embedder_name: str = "default"
+    vector_index: str = "vector"
+    hybrid_semantic_ratio: float = 0.5
+    binary_quantized: bool = False
+
+
+@dataclass
 class BenchmarkConfig:
     limit: int = 100
     warmup_queries: int = 5
@@ -106,6 +127,7 @@ class MetricsConfig:
 class AppConfig:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     manticore: ManticoreConfig = field(default_factory=ManticoreConfig)
+    meilisearch: MeilisearchConfig = field(default_factory=MeilisearchConfig)
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -115,6 +137,7 @@ class AppConfig:
 class EngineTarget:
     source_path: str
     name: str
+    base_name: str
     type: str
     mode_filter: str | None
     cfg: AppConfig
@@ -160,11 +183,12 @@ def _apply_dataset_source_prepared_dir(cfg: AppConfig) -> AppConfig:
 
 
 _MANTICORE_FIELDS = set(vars(ManticoreConfig()).keys())
+_MEILISEARCH_FIELDS = set(vars(MeilisearchConfig()).keys())
 _QDRANT_FIELDS = set(vars(QdrantConfig()).keys())
 _BENCHMARK_FIELDS = set(vars(BenchmarkConfig()).keys())
 _DATASET_FIELDS = set(vars(DatasetConfig()).keys())
 _METRICS_FIELDS = set(vars(MetricsConfig()).keys())
-_SECTION_NAMES = {"manticore", "qdrant", "benchmark", "dataset", "metrics"}
+_SECTION_NAMES = {"manticore", "meilisearch", "qdrant", "benchmark", "dataset", "metrics"}
 
 
 def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -182,6 +206,7 @@ def _defaults_dict() -> dict[str, Any]:
     return {
         "dataset": vars(defaults.dataset),
         "manticore": vars(defaults.manticore),
+        "meilisearch": vars(defaults.meilisearch),
         "qdrant": vars(defaults.qdrant),
         "benchmark": vars(defaults.benchmark),
         "metrics": vars(defaults.metrics),
@@ -193,6 +218,7 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
     return AppConfig(
         dataset=DatasetConfig(**merged["dataset"]),
         manticore=ManticoreConfig(**merged["manticore"]),
+        meilisearch=MeilisearchConfig(**merged["meilisearch"]),
         qdrant=QdrantConfig(**merged["qdrant"]),
         benchmark=BenchmarkConfig(**merged["benchmark"]),
         metrics=MetricsConfig(**merged["metrics"]),
@@ -237,25 +263,34 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "qdrant"):
+        if e_type in ("manticore", "meilisearch", "qdrant"):
             return e_type
         if isinstance(ent.get("manticore"), dict) and not isinstance(ent.get("qdrant"), dict):
             return "manticore"
+        if isinstance(ent.get("meilisearch"), dict) and not isinstance(ent.get("manticore"), dict) and not isinstance(ent.get("qdrant"), dict):
+            return "meilisearch"
         if isinstance(ent.get("qdrant"), dict) and not isinstance(ent.get("manticore"), dict):
             return "qdrant"
         m_hits = 0
+        meili_hits = 0
         q_hits = 0
         for k in ent.keys():
             if k in ("type", "base") or k in _SECTION_NAMES:
                 continue
             if k in _MANTICORE_FIELDS:
                 m_hits += 1
+            if k in _MEILISEARCH_FIELDS:
+                meili_hits += 1
             if k in _QDRANT_FIELDS:
                 q_hits += 1
+        if meili_hits > max(m_hits, q_hits):
+            return "meilisearch"
         if q_hits > m_hits:
             return "qdrant"
         if m_hits > q_hits:
             return "manticore"
+        if name.lower().startswith("meili"):
+            return "meilisearch"
         if name.lower().startswith("qdrant"):
             return "qdrant"
         return "manticore"
@@ -264,6 +299,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
         raw = str(ent.get("type", "")).strip().lower()
         if raw in ("vector",):
             return "vector"
+        if raw in ("hybrid",):
+            return "hybrid"
         if raw in ("fulltext", "full-text"):
             return "fulltext"
         return None
@@ -281,6 +318,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             candidates: list[str] = []
             if k in _MANTICORE_FIELDS:
                 candidates.append("manticore")
+            if k in _MEILISEARCH_FIELDS:
+                candidates.append("meilisearch")
             if k in _QDRANT_FIELDS:
                 candidates.append("qdrant")
             if k in _BENCHMARK_FIELDS:
@@ -292,7 +331,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             if not candidates:
                 continue
 
-            preferred = "manticore" if e_type == "manticore" else "qdrant"
+            preferred = e_type if e_type in ("manticore", "meilisearch", "qdrant") else "manticore"
             if preferred in candidates:
                 sec = preferred
             elif len(candidates) == 1:
@@ -321,6 +360,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             EngineTarget(
                 source_path=str(cfg_path),
                 name=name,
+                base_name=str(entry_defs.get(name, {}).get("base", "") or "").strip(),
                 type=e_type,
                 mode_filter=mode_filter,
                 cfg=cfg,

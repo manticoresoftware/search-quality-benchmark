@@ -8,6 +8,7 @@ from .config import AppConfig
 from .cache_populate import populate_cache_from_manticore
 from .io_utils import read_jsonl
 from .manticore import ManticoreClient
+from .meilisearch_backend import MeilisearchBackend
 from .qdrant_backend import QdrantBackend
 from .vector_cache import VectorCache, cache_key_from_doc, parse_vector_from_fields
 
@@ -440,6 +441,198 @@ def _run_index_qdrant(
     return out
 
 
+def _run_index_meilisearch(
+    cfg: AppConfig,
+    mode: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> list[ModeIndexResult]:
+    docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    docs = read_jsonl(docs_path)
+    backend = MeilisearchBackend(cfg.meilisearch)
+    backend.ensure_accessible()
+    out: list[ModeIndexResult] = []
+
+    if mode not in ("fulltext", "vector"):
+        raise ValueError("For engine=meilisearch, mode must be one of: fulltext, vector")
+
+    if mode == "fulltext":
+        backend.recreate_lexical_index()
+        started = perf_counter()
+        inserted = 0
+        processed = 0
+        index_name = backend.lexical_index_name()
+        last_task_uid: int | None = None
+        for i in range(0, len(docs), cfg.meilisearch.batch_size):
+            batch = [
+                {
+                    "id": int(row["id"]),
+                    "doc_id": row["doc_id"],
+                    "title": row.get("title", ""),
+                    "abstract": row.get("abstract", ""),
+                    "doi": row.get("doi", ""),
+                    "date": row.get("date", ""),
+                }
+                for row in docs[i : i + cfg.meilisearch.batch_size]
+            ]
+            last_task_uid = backend.enqueue_documents(index_name, batch)
+            inserted += len(batch)
+            processed += len(batch)
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "engine": "meilisearch",
+                        "mode": "fulltext",
+                        "stage": "ingest",
+                        "processed": processed,
+                        "total": len(docs),
+                        "inserted": inserted,
+                        "failed_batches": 0,
+                        "retried_batches": 0,
+                    }
+                )
+        if last_task_uid is not None:
+            backend.wait_for_task(last_task_uid, timeout_ms=max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000))
+        elapsed = perf_counter() - started
+        out.append(
+            ModeIndexResult(
+                mode="fulltext",
+                duration_seconds=elapsed,
+                rows_inserted=inserted,
+                docs_per_second=(inserted / elapsed) if elapsed > 0 else 0.0,
+                failed_batches=0,
+                retried_batches=0,
+            )
+        )
+
+    if mode == "vector":
+        fields = parse_vector_from_fields(cfg.manticore.vector_from)
+        cache = VectorCache(cfg.manticore.vector_cache_path)
+        docs_cached: list[tuple[dict[str, Any], str]] = []
+        missing_keys: list[str] = []
+        missing_total = 0
+        try:
+            status_map = cache.get_status_map(
+                model=cfg.manticore.vector_model,
+                similarity=cfg.manticore.vector_similarity,
+            )
+            for i, d in enumerate(docs, start=1):
+                key = cache_key_from_doc(
+                    d,
+                    fields=fields,
+                    model=cfg.manticore.vector_model,
+                    similarity=cfg.manticore.vector_similarity,
+                )
+                st = status_map.get(key, "missing")
+                if st == "missing":
+                    missing_total += 1
+                    if len(missing_keys) < 5:
+                        missing_keys.append(key)
+                    continue
+                if st == "null":
+                    continue
+                docs_cached.append((d, key))
+                if progress_callback is not None and (i == 1 or i % 1000 == 0 or i == len(docs)):
+                    progress_callback(
+                        {
+                            "engine": "meilisearch",
+                            "mode": "vector",
+                            "stage": "cache_lookup",
+                            "processed": i,
+                            "total": len(docs),
+                            "inserted": len(docs_cached),
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                        }
+                    )
+        finally:
+            cache.close()
+        if missing_keys:
+            raise RuntimeError(
+                "Vector cache miss during Meilisearch vector indexing. "
+                f"Missing keys={missing_total} sample={missing_keys}. "
+                "Build the corresponding Manticore vector index first so the cache is populated."
+            )
+        if not docs_cached:
+            raise RuntimeError("No vector documents available in cache (all missing/null).")
+
+        cache2 = VectorCache(cfg.manticore.vector_cache_path)
+        try:
+            first_key = docs_cached[0][1]
+            first_vec = (cache2.get_vectors_many([first_key]).get(first_key) or [])
+            dim = len(first_vec)
+        finally:
+            cache2.close()
+        if dim <= 0:
+            raise RuntimeError("Cached vectors have invalid dimension.")
+        backend.recreate_vector_index(dimension=dim)
+        started = perf_counter()
+        inserted = 0
+        processed = 0
+        index_name = backend.vector_index_name()
+        last_task_uid: int | None = None
+        cache3 = VectorCache(cfg.manticore.vector_cache_path)
+        try:
+            total_cached = len(docs_cached)
+            fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
+            insert_batch_size = max(1, int(cfg.meilisearch.batch_size))
+            for fetch_start in range(0, total_cached, fetch_batch_size):
+                fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
+                vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
+                for ins_start in range(0, len(fetch_chunk), insert_batch_size):
+                    chunk = fetch_chunk[ins_start : ins_start + insert_batch_size]
+                    batch: list[dict[str, Any]] = []
+                    for doc, key in chunk:
+                        vec = vecs.get(key, [])
+                        if not vec:
+                            continue
+                        batch.append(
+                            {
+                                "id": int(doc["id"]),
+                                "doc_id": doc["doc_id"],
+                                "title": doc.get("title", ""),
+                                "abstract": doc.get("abstract", ""),
+                                "doi": doc.get("doi", ""),
+                                "date": doc.get("date", ""),
+                                "_vectors": {
+                                    cfg.meilisearch.embedder_name: [float(x) for x in vec],
+                                },
+                            }
+                        )
+                    last_task_uid = backend.enqueue_documents(index_name, batch)
+                    inserted += len(batch)
+                    processed += len(chunk)
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "engine": "meilisearch",
+                                "mode": "vector",
+                                "stage": "ingest",
+                                "processed": processed,
+                                "total": total_cached,
+                                "inserted": inserted,
+                                "failed_batches": 0,
+                                "retried_batches": 0,
+                            }
+                        )
+        finally:
+            cache3.close()
+        if last_task_uid is not None:
+            backend.wait_for_task(last_task_uid, timeout_ms=max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000))
+        elapsed = perf_counter() - started
+        out.append(
+            ModeIndexResult(
+                mode="vector",
+                duration_seconds=elapsed,
+                rows_inserted=inserted,
+                docs_per_second=(inserted / elapsed) if elapsed > 0 else 0.0,
+                failed_batches=0,
+                retried_batches=0,
+            )
+        )
+
+    return out
+
+
 def run_index(
     cfg: AppConfig,
     engine: str,
@@ -450,4 +643,6 @@ def run_index(
         return _run_index_manticore(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "qdrant":
         return _run_index_qdrant(cfg, mode=mode, progress_callback=progress_callback)
+    if engine == "meilisearch":
+        return _run_index_meilisearch(cfg, mode=mode, progress_callback=progress_callback)
     raise ValueError(f"Unsupported engine: {engine}")

@@ -316,11 +316,12 @@ def _confirm_vector_cache_coverage(
             "Re-run with `bench index --yes ...` to continue anyway."
         )
     sample_pct = (100.0 * check.missing_count / check.sample_size) if check.sample_size > 0 else 0.0
-    engine_note = (
-        "Qdrant vector indexing is likely to fail if cache misses remain."
-        if engine == "qdrant"
-        else "Manticore vector indexing will auto-embed cache misses and may call the remote embedding model."
-    )
+    if engine == "qdrant":
+        engine_note = "Qdrant vector indexing is likely to fail if cache misses remain."
+    elif engine == "meilisearch":
+        engine_note = "Meilisearch vector indexing is likely to fail if cache misses remain."
+    else:
+        engine_note = "Manticore vector indexing will auto-embed cache misses and may call the remote embedding model."
     sample_text = ", ".join(check.missing_keys) if check.missing_keys else "-"
     prompt = (
         f"\nVector cache preflight for entry '{entry_name}':\n"
@@ -384,7 +385,7 @@ def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
         replay.append(f"bench --config {args.config} prepare --source {v.source}")
     print("Replay commands:")
     for cmd in replay:
-        print(f"- {cmd}")
+        print(cmd)
 
     for v in selected:
         print(f"Preparing: source={v.source} output={v.cfg.dataset.prepared_dir}")
@@ -472,7 +473,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             print("Replay commands:")
             for v in selected:
                 print(
-                    f"- bench --config {v.config_path} index --engine {v.engine} "
+                    f"bench --config {v.config_path} index --engine {v.engine} "
                     f"--mode {v.mode} --entry {v.entry}"
                 )
             vector_variants = [v for v in selected if v.mode == "vector"]
@@ -560,16 +561,9 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
 
 def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
     if args.mode is None and args.engine is None:
-        variants_all = build_variants_from_config_paths([Path(args.config)])
-        variants = filter_runnable_variants(variants_all)
-        skipped = len(variants_all) - len(variants)
-        if skipped > 0:
-            print(
-                f"Skipping {skipped} run variant(s) because index/collection is missing.",
-                flush=True,
-            )
+        variants = build_variants_from_config_paths([Path(args.config)])
         if not variants:
-            print("Run canceled: no runnable variants (indexes/collections missing).")
+            print("Run canceled: no variants available.")
             return 0
         selected = select_variants_interactive(variants)
         if not selected:
@@ -598,7 +592,7 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
         entry=args.entry,
         fallback_cfg=cfg,
     )
-    if entry_mode_filter in ("fulltext", "vector") and args.mode != entry_mode_filter:
+    if entry_mode_filter in ("fulltext", "vector", "hybrid") and args.mode != entry_mode_filter:
         raise ValueError(
             f"Entry '{entry_name}' is restricted to mode '{entry_mode_filter}'. "
             f"Requested mode '{args.mode}' is not allowed."
@@ -669,7 +663,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--entry", action="append", default=None, help="Entry name(s) to prepare source from")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -679,8 +673,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant"])
-    p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "both"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch"])
+    p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)
 
