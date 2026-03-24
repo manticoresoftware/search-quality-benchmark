@@ -24,18 +24,23 @@ meili_main:
   type: "meilisearch"
   meilisearch:
     host: "http://127.0.0.1:7700"
+osearch_main:
+  type: "opensearch"
+  opensearch:
+    url: "http://127.0.0.1:9200"
 """.strip()
         + "\n",
         encoding="utf-8",
     )
     targets = load_engine_targets(cfg)
-    assert len(targets) == 4
+    assert len(targets) == 5
     by_name = {t.name: t.type for t in targets}
     assert by_name == {
         "manticore_default": "manticore",
         "manticore_bm25": "manticore",
         "qdrant_main": "qdrant",
         "meili_main": "meilisearch",
+        "osearch_main": "opensearch",
     }
 
 
@@ -55,13 +60,16 @@ qdr:
   type: "qdrant"
 meili:
   type: "meilisearch"
+osearch:
+  type: "opensearch"
 """.strip()
         + "\n",
         encoding="utf-8",
     )
     variants = build_variants_from_config_paths([cfg])
-    # 3 classic entries * 2 modes, plus 1 meilisearch entry * 3 modes
-    assert len(variants) == 9
-    assert {v.entry for v in variants} == {"mant_a", "mant_b", "qdr", "meili"}
+    # 3 classic entries * 2 modes, plus 2 modern entries * 3 modes
+    assert len(variants) == 12
+    assert {v.entry for v in variants} == {"mant_a", "mant_b", "qdr", "meili", "osearch"}
     assert all(v.default_concurrency == 2 for v in variants)
     assert {v.mode for v in variants if v.entry == "meili"} == {"fulltext", "vector", "hybrid"}
+    assert {v.mode for v in variants if v.entry == "osearch"} == {"fulltext", "vector", "hybrid"}

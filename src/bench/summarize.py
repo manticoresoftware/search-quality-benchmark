@@ -74,6 +74,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "Meilisearch vector (meilisearch)"
     if engine == "meilisearch" and mode == "hybrid":
         return "Meilisearch hybrid (meilisearch)"
+    if engine == "opensearch" and mode == "fulltext":
+        return "OpenSearch full-text (opensearch)"
+    if engine == "opensearch" and mode == "vector":
+        return "OpenSearch vector (opensearch)"
+    if engine == "opensearch" and mode == "hybrid":
+        return "OpenSearch hybrid (opensearch)"
     return f"{engine} {mode}"
 
 
@@ -234,6 +240,8 @@ def _color_pair_for_engine(engine: str) -> int:
         return 2
     if e == "meilisearch":
         return 5
+    if e == "opensearch":
+        return 9
     return 0
 
 
@@ -314,6 +322,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             curses.init_pair(4, curses.COLOR_RED, -1)       # vector
             curses.init_pair(5, curses.COLOR_CYAN, -1)      # meilisearch
             curses.init_pair(6, curses.COLOR_MAGENTA, -1)   # hybrid
+            curses.init_pair(9, curses.COLOR_MAGENTA, -1)   # opensearch
 
         widths = {
             "sel": 3,

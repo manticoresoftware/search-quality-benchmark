@@ -39,6 +39,21 @@ def _doc_hash_u64(doc_id: str) -> int:
     return int.from_bytes(d[:8], "big", signed=False)
 
 
+def _docs_iter_or_raise(ds: Any, source: str):
+    try:
+        yield from ds.docs_iter()
+    except FileNotFoundError as exc:
+        source_text = str(source or "").strip()
+        if source_text.startswith("wapo/"):
+            raise RuntimeError(
+                "TREC-NEWS requires the Washington Post collection to be installed for ir_datasets. "
+                "Request access at https://trec.nist.gov/data/wapost/ and follow "
+                "https://ir-datasets.com/wapo.html#DataAccess . "
+                f"Expected local file: {exc}"
+            ) from exc
+        raise
+
+
 def _prepare_hf_beir_dataset(cfg: AppConfig) -> PrepareResult:
     from huggingface_hub import hf_hub_download
 
@@ -225,7 +240,7 @@ def prepare_dataset(cfg: AppConfig) -> PrepareResult:
     selected_qrel_docs = 0
     selected_extra_docs = 0
     if max_docs <= 0:
-        for idx, doc in enumerate(ds.docs_iter(), start=1):
+        for idx, doc in enumerate(_docs_iter_or_raise(ds, cfg.dataset.source), start=1):
             doc_id = _doc_attr(doc, ["doc_id", "id"])
             if not doc_id:
                 continue
@@ -249,7 +264,7 @@ def prepare_dataset(cfg: AppConfig) -> PrepareResult:
         target_extra = max(max_docs - target_qrels, 0)
         extra_heap: list[tuple[int, int, dict[str, Any]]] = []
         seq = 0
-        for doc in ds.docs_iter():
+        for doc in _docs_iter_or_raise(ds, cfg.dataset.source):
             doc_id = _doc_attr(doc, ["doc_id", "id"])
             if not doc_id:
                 continue

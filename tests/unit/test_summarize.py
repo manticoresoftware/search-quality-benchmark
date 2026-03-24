@@ -14,3 +14,5 @@ def test_system_label():
     assert _system_label("qdrant", "fulltext") == "Qdrant full-text (qdrant)"
     assert _system_label("meilisearch", "fulltext") == "Meilisearch full-text (meilisearch)"
     assert _system_label("meilisearch", "hybrid") == "Meilisearch hybrid (meilisearch)"
+    assert _system_label("opensearch", "fulltext") == "OpenSearch full-text (opensearch)"
+    assert _system_label("opensearch", "hybrid") == "OpenSearch hybrid (opensearch)"

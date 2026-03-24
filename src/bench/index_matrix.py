@@ -12,6 +12,7 @@ from .config import AppConfig, load_engine_targets
 from .discovery import discover_config_paths
 from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
+from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .table_filters import (
     draw_header_with_filters,
@@ -65,6 +66,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             if bool(cfg.meilisearch.binary_quantized):
                 extra.append("q=1bit")
             return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+        if engine == "opensearch":
+            return f"{cfg.manticore.vector_model} [field:{cfg.opensearch.vector_field}]"
         return cfg.manticore.vector_model
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
@@ -77,6 +80,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         if not bool(cfg.meilisearch.typo_tolerance):
             extras.append("typo:off")
         return " ".join(extras) or "(meilisearch lexical)"
+    if engine == "opensearch":
+        return f"fields:{','.join(cfg.opensearch.text_fields or ['title', 'abstract'])}"
     return "Qdrant/bm25"
 
 
@@ -90,6 +95,8 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
         for target_cfg in targets:
             cfg = target_cfg.cfg
             engine = target_cfg.type
+            if target_cfg.mode_filter == "hybrid":
+                continue
             modes = [target_cfg.mode_filter] if target_cfg.mode_filter in ("fulltext", "vector") else ["fulltext", "vector"]
             for mode in modes:
                 if engine == "manticore":
@@ -97,6 +104,9 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                 elif engine == "meilisearch":
                     base = str(cfg.meilisearch.index_name or "").strip()
                     target = f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.meilisearch.vector_index}"
+                elif engine == "opensearch":
+                    base = str(cfg.opensearch.index_name or "").strip()
+                    target = f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.opensearch.vector_index}"
                 else:
                     target = cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
                 out.append(
@@ -110,7 +120,11 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                         batch_size=(
                             cfg.manticore.batch_size
                             if engine == "manticore"
-                            else (cfg.meilisearch.batch_size if engine == "meilisearch" else cfg.qdrant.batch_size)
+                            else (
+                                cfg.meilisearch.batch_size
+                                if engine == "meilisearch"
+                                else (cfg.opensearch.batch_size if engine == "opensearch" else cfg.qdrant.batch_size)
+                            )
                         ),
                         target=target,
                         cfg=cfg,
@@ -130,7 +144,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
         if v.entry == prev.base_entry:
             continue
 
-    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2}
+    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3}
     mode_order = {"fulltext": 0, "vector": 1}
     return sorted(
         list(dedup.values()),
@@ -170,6 +184,12 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
             if callable(collection_exists) and not bool(collection_exists(v.target)):
                 return TargetStatus("pending", None, expected)
             actual = int(backend._count_points(v.target))
+        elif v.engine == "opensearch":
+            backend = OpenSearchBackend(v.cfg.opensearch)
+            backend.ensure_accessible()
+            if not backend.index_exists(v.target):
+                return TargetStatus("pending", None, expected)
+            actual = int(backend.get_document_count(v.target))
         else:
             backend = MeilisearchBackend(v.cfg.meilisearch)
             backend.ensure_accessible()
@@ -202,6 +222,8 @@ def _draw_row(
             color_engine = curses.color_pair(1)
         elif v.engine == "qdrant":
             color_engine = curses.color_pair(2)
+        elif v.engine == "opensearch":
+            color_engine = curses.color_pair(9)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
         if v.mode == "fulltext":
@@ -388,6 +410,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(3, curses.COLOR_BLUE, -1)    # full-text
             curses.init_pair(4, curses.COLOR_WHITE, -1)   # vector
             curses.init_pair(5, curses.COLOR_CYAN, -1)    # meilisearch
+            curses.init_pair(9, curses.COLOR_MAGENTA, -1) # opensearch
             curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_GREEN)   # target ok
             curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # target unexpected

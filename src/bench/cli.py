@@ -320,6 +320,8 @@ def _confirm_vector_cache_coverage(
         engine_note = "Qdrant vector indexing is likely to fail if cache misses remain."
     elif engine == "meilisearch":
         engine_note = "Meilisearch vector indexing is likely to fail if cache misses remain."
+    elif engine == "opensearch":
+        engine_note = "OpenSearch vector indexing is likely to fail if cache misses remain."
     else:
         engine_note = "Manticore vector indexing will auto-embed cache misses and may call the remote embedding model."
     sample_text = ", ".join(check.missing_keys) if check.missing_keys else "-"
@@ -338,60 +340,64 @@ def _confirm_vector_cache_coverage(
 
 
 def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
-    selected: list[PrepareVariant] = []
-    raw_sources: list[str] = []
-    for value in list(getattr(args, "source", []) or []):
-        raw_sources.extend([x.strip() for x in str(value).split(",") if x.strip()])
-    source_filter = {s.lower() for s in raw_sources}
+    try:
+        selected: list[PrepareVariant] = []
+        raw_sources: list[str] = []
+        for value in list(getattr(args, "source", []) or []):
+            raw_sources.extend([x.strip() for x in str(value).split(",") if x.strip()])
+        source_filter = {s.lower() for s in raw_sources}
 
-    raw_entries: list[str] = []
-    for value in list(getattr(args, "entry", []) or []):
-        raw_entries.extend([x.strip() for x in str(value).split(",") if x.strip()])
-    entry_filter = {s for s in raw_entries}
+        raw_entries: list[str] = []
+        for value in list(getattr(args, "entry", []) or []):
+            raw_entries.extend([x.strip() for x in str(value).split(",") if x.strip()])
+        entry_filter = {s for s in raw_entries}
 
-    variants = build_prepare_variants_from_config_paths(discover_config_paths())
-    if source_filter or entry_filter:
-        for v in variants:
-            if source_filter and v.source.lower() not in source_filter:
-                continue
-            if entry_filter:
-                entry_tokens = {x.strip() for x in v.entry.split(",")}
-                if not any(e in entry_tokens for e in entry_filter):
+        variants = build_prepare_variants_from_config_paths(discover_config_paths())
+        if source_filter or entry_filter:
+            for v in variants:
+                if source_filter and v.source.lower() not in source_filter:
                     continue
-            selected.append(v)
-        if not selected:
-            raise ValueError(
-                "No matching dataset sources/entries found. "
-                "Check `--source` / `--entry` values against config entries."
-            )
-    elif sys.stdin.isatty() and sys.stdout.isatty():
-        selected = select_prepare_variants_interactive(variants)
-        if not selected:
-            print("Prepare canceled: no sources selected.")
-            return 0
-    else:
-        selected = [
-            PrepareVariant(
-                config_path=args.config,
-                entry="(default)",
-                source=cfg.dataset.source,
-                prepared_dir=cfg.dataset.prepared_dir,
-                cfg=cfg,
-            )
-        ]
+                if entry_filter:
+                    entry_tokens = {x.strip() for x in v.entry.split(",")}
+                    if not any(e in entry_tokens for e in entry_filter):
+                        continue
+                selected.append(v)
+            if not selected:
+                raise ValueError(
+                    "No matching dataset sources/entries found. "
+                    "Check `--source` / `--entry` values against config entries."
+                )
+        elif sys.stdin.isatty() and sys.stdout.isatty():
+            selected = select_prepare_variants_interactive(variants)
+            if not selected:
+                print("Prepare canceled: no sources selected.")
+                return 0
+        else:
+            selected = [
+                PrepareVariant(
+                    config_path=args.config,
+                    entry="(default)",
+                    source=cfg.dataset.source,
+                    prepared_dir=cfg.dataset.prepared_dir,
+                    cfg=cfg,
+                )
+            ]
 
-    replay: list[str] = []
-    for v in selected:
-        replay.append(f"bench --config {args.config} prepare --source {v.source}")
-    print("Replay commands:")
-    for cmd in replay:
-        print(cmd)
+        replay: list[str] = []
+        for v in selected:
+            replay.append(f"bench --config {args.config} prepare --source {v.source}")
+        print("Replay commands:")
+        for cmd in replay:
+            print(cmd)
 
-    for v in selected:
-        print(f"Preparing: source={v.source} output={v.cfg.dataset.prepared_dir}")
-        result = prepare_dataset(v.cfg)
-        print(f"Prepared dataset written to {result.docs_path.parent}")
-    return 0
+        for v in selected:
+            print(f"Preparing: source={v.source} output={v.cfg.dataset.prepared_dir}")
+            result = prepare_dataset(v.cfg)
+            print(f"Prepared dataset written to {result.docs_path.parent}")
+        return 0
+    except Exception as exc:
+        print(f"FATAL: {exc}")
+        return 1
 
 
 def _resolve_entry_cfg(
@@ -663,7 +669,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--entry", action="append", default=None, help="Entry name(s) to prepare source from")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -673,7 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)

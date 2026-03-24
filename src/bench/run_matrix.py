@@ -12,6 +12,7 @@ from .config import AppConfig, load_engine_targets
 from .discovery import discover_config_paths
 from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
+from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
 from .search_options import normalize_search_options
@@ -123,6 +124,18 @@ def _meilisearch_hybrid_label(cfg: AppConfig) -> str:
     return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
 
 
+def _opensearch_vector_label(cfg: AppConfig) -> str:
+    return f"{cfg.manticore.vector_model} [field:{cfg.opensearch.vector_field}]"
+
+
+def _opensearch_hybrid_label(cfg: AppConfig) -> str:
+    extra = [
+        f"textBoost={float(cfg.opensearch.hybrid_text_boost):.2f}",
+        f"vectorBoost={float(cfg.opensearch.hybrid_vector_boost):.2f}",
+    ]
+    return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+
+
 def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     variants: list[RunVariant] = []
     for p in paths:
@@ -133,17 +146,19 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
         for target in targets:
             cfg = target.cfg
             engine = target.type
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine == "meilisearch" else ["fulltext", "vector"])
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
                     if engine == "manticore":
                         model_or_ranker = _manticore_vector_label(cfg)
                     elif engine == "qdrant":
                         model_or_ranker = _qdrant_vector_label(cfg)
+                    elif engine == "opensearch":
+                        model_or_ranker = _opensearch_vector_label(cfg)
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
-                    model_or_ranker = _meilisearch_hybrid_label(cfg)
+                    model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
                 elif engine == "manticore":
                     extras: list[str] = []
                     search_opts = normalize_search_options(cfg.manticore.search_options)
@@ -160,6 +175,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = f"[{' '.join(extras)}]" if extras else "(manticore default)"
                 elif engine == "qdrant":
                     model_or_ranker = "Qdrant/bm25"
+                elif engine == "opensearch":
+                    model_or_ranker = f"[fields:{','.join(cfg.opensearch.text_fields or ['title', 'abstract'])}]"
                 else:
                     extras: list[str] = []
                     if cfg.meilisearch.searchable_attributes:
@@ -276,6 +293,8 @@ def _draw_row(
             color_engine = curses.color_pair(1)
         elif v.engine == "qdrant":
             color_engine = curses.color_pair(2)
+        elif v.engine == "opensearch":
+            color_engine = curses.color_pair(9)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
 
@@ -308,8 +327,11 @@ def _variant_target_name(v: RunVariant) -> str:
         return v.cfg.manticore.fulltext_table if v.mode == "fulltext" else v.cfg.manticore.vector_table
     if v.engine == "qdrant":
         return v.cfg.qdrant.bm25_collection if v.mode == "fulltext" else v.cfg.qdrant.dense_collection
-    backend = MeilisearchBackend(v.cfg.meilisearch)
-    return backend.lexical_index_name() if v.mode == "fulltext" else backend.vector_index_name()
+    if v.engine == "opensearch":
+        base = str(v.cfg.opensearch.index_name or "").strip()
+        return f"{base}_lexical" if v.mode == "fulltext" else f"{base}_{v.cfg.opensearch.vector_index}"
+    base = str(v.cfg.meilisearch.index_name or "").strip()
+    return f"{base}_lexical" if v.mode == "fulltext" else f"{base}_{v.cfg.meilisearch.vector_index}"
 
 
 def is_variant_runnable(v: RunVariant) -> bool:
@@ -328,6 +350,10 @@ def is_variant_runnable(v: RunVariant) -> bool:
                 return bool(collection_exists(target))
             backend._count_points(target)
             return True
+        if v.engine == "opensearch":
+            backend = OpenSearchBackend(v.cfg.opensearch)
+            backend.ensure_accessible()
+            return backend.index_exists(target)
         backend = MeilisearchBackend(v.cfg.meilisearch)
         backend.ensure_accessible()
         return backend.index_exists(target)
@@ -359,6 +385,9 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
             backend = QdrantBackend(v.cfg.qdrant)
             collection = _variant_target_name(v)
             return int(backend._count_points(collection)), None
+        if v.engine == "opensearch":
+            backend = OpenSearchBackend(v.cfg.opensearch)
+            return int(backend.get_document_count(_variant_target_name(v))), None
         backend = MeilisearchBackend(v.cfg.meilisearch)
         return int(backend.get_document_count(_variant_target_name(v))), None
     except Exception as exc:
@@ -535,6 +564,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.init_pair(5, curses.COLOR_CYAN, -1)      # engine: meilisearch
             curses.init_pair(6, curses.COLOR_MAGENTA, -1)   # mode: hybrid
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # profile: no previous run
+            curses.init_pair(9, curses.COLOR_MAGENTA, -1)   # engine: opensearch
             curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_RED)    # target: missing
         widths = {
             "sel": 3,

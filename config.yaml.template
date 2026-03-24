@@ -108,6 +108,32 @@ meilisearch_hybrid_1bit:
   base: "meilisearch_hybrid"
   binary_quantized: true
 
+opensearch:
+  type: "opensearch"  # default engine base entry for OpenSearch
+  url: "http://127.0.0.1:9200"  # default: "http://127.0.0.1:9200"
+  username: ""  # default: ""
+  password: ""  # default: ""
+  api_key: ""  # default: ""
+  api_key_file: ""  # default: ""
+  verify_certs: false  # default: false
+  timeout_sec: 30  # default: 30
+  batch_size: 500  # default: 500
+  index_name: "trec_covid"  # default: "trec_covid"; lexical index becomes "<name>_lexical"
+  text_fields: ["title", "abstract"]  # default: ["title","abstract"]
+  vector_index: "vector"  # default: "vector"; vector/hybrid index becomes "<name>_<vector_index>"
+  vector_field: "embedding"  # default: "embedding"
+  space_type: "cosinesimil"  # default: "cosinesimil"
+  hybrid_text_boost: 1.0  # default: 1.0
+  hybrid_vector_boost: 1.0  # default: 1.0
+
+opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+
+opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+
 # Derived examples:
 manticore_bm25:
   base: "manticore"
@@ -394,6 +420,19 @@ trec_covid_meilisearch_hybrid_1bit:
   base: "meilisearch_hybrid_1bit"
   index_name: "trec_covid_q1bit"
 
+trec_covid_opensearch_ft:
+  base: "opensearch"
+  type: "full-text"
+  index_name: "trec_covid"
+
+trec_covid_opensearch_vec:
+  base: "opensearch_vector"
+  index_name: "trec_covid"
+
+trec_covid_opensearch_hybrid:
+  base: "opensearch_hybrid"
+  index_name: "trec_covid"
+
 msmarco_passage_meilisearch_ft:
   base: "meilisearch"
   type: "full-text"
@@ -415,6 +454,28 @@ msmarco_passage_meilisearch_hybrid:
   vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
   index_name: "msmarco_passage"
   searchable_attributes: ["abstract", "title"]
+
+msmarco_passage_opensearch_ft:
+  base: "opensearch"
+  type: "full-text"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  index_name: "msmarco_passage"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_opensearch_vec:
+  base: "opensearch_vector"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  index_name: "msmarco_passage"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_opensearch_hybrid:
+  base: "opensearch_hybrid"
+  source: "msmarco-passage/dev/small"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  index_name: "msmarco_passage"
+  text_fields: ["abstract", "title"]
 
 msmarco_lite_meilisearch_ft:
   base: "msmarco_passage_meilisearch_ft"
@@ -448,6 +509,24 @@ msmarco_lite_meilisearch_hybrid_1bit:
   index_name: "msmarco_lite_q1bit"
   binary_quantized: true
 
+msmarco_lite_opensearch_ft:
+  base: "msmarco_passage_opensearch_ft"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite"
+
+msmarco_lite_opensearch_vec:
+  base: "msmarco_passage_opensearch_vec"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite"
+
+msmarco_lite_opensearch_hybrid:
+  base: "msmarco_passage_opensearch_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite"
+
 msmarco_trecdl_2019_meilisearch_ft:
   base: "msmarco_passage_meilisearch_ft"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -460,6 +539,18 @@ msmarco_trecdl_2019_meilisearch_hybrid:
   base: "msmarco_passage_meilisearch_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_opensearch_ft:
+  base: "msmarco_passage_opensearch_ft"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_opensearch_vec:
+  base: "msmarco_passage_opensearch_vec"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_opensearch_hybrid:
+  base: "msmarco_passage_opensearch_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2020_meilisearch_ft:
   base: "msmarco_passage_meilisearch_ft"
   source: "msmarco-passage/trec-dl-2020/judged"
@@ -470,6 +561,18 @@ msmarco_trecdl_2020_meilisearch_vec:
 
 msmarco_trecdl_2020_meilisearch_hybrid:
   base: "msmarco_passage_meilisearch_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_opensearch_ft:
+  base: "msmarco_passage_opensearch_ft"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_opensearch_vec:
+  base: "msmarco_passage_opensearch_vec"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_opensearch_hybrid:
+  base: "msmarco_passage_opensearch_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 nfcorpus_meilisearch_ft:
@@ -502,6 +605,25 @@ nfcorpus_meilisearch_hybrid_1bit:
   source: "beir/nfcorpus/test"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
   index_name: "nfcorpus_q1bit"
+
+nfcorpus_opensearch_ft:
+  base: "opensearch"
+  type: "full-text"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus"
+
+nfcorpus_opensearch_vec:
+  base: "opensearch_vector"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus"
+
+nfcorpus_opensearch_hybrid:
+  base: "opensearch_hybrid"
+  source: "beir/nfcorpus/test"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  index_name: "nfcorpus"
 
 acord_meilisearch_ft:
   base: "meilisearch"
@@ -536,6 +658,99 @@ acord_meilisearch_hybrid_1bit:
   dense_binary_always_ram: true
   dense_search_quantization_rescore: true
   dense_search_quantization_oversampling: 3.0
+
+acord_opensearch_ft:
+  base: "opensearch"
+  type: "full-text"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord"
+
+acord_opensearch_vec:
+  base: "opensearch_vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord"
+
+acord_opensearch_hybrid:
+  base: "opensearch_hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  index_name: "acord"
+
+# DBPedia-Entity examples:
+dbpedia_entity_manticore_ft:
+  base: "manticore_bm25"
+  type: "full-text"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  fulltext_table: "dbpedia_entity_ft_lem"
+  fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
+  fulltext_query_mode: "or"
+
+dbpedia_entity_manticore_1bit:
+  base: "manticore_vector"
+  type: "vector"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  vector_table: "dbpedia_entity_vec_q1bit"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  search_options: ""
+
+dbpedia_entity_qdrant_ft:
+  base: "qdrant"
+  type: "full-text"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  bm25_collection: "dbpedia_entity_qdrant_bm25"
+
+dbpedia_entity_qdrant_bq:
+  base: "qdrant_vector"
+  type: "vector"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  dense_collection: "dbpedia_entity_qdrant_1bit"
+  dense_binary_quantization: true
+
+dbpedia_entity_meilisearch_ft:
+  base: "meilisearch"
+  type: "full-text"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  index_name: "dbpedia_entity"
+
+dbpedia_entity_meilisearch_1bit:
+  base: "meilisearch_vector_1bit"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  index_name: "dbpedia_entity_q1bit"
+
+dbpedia_entity_meilisearch_hybrid_1bit:
+  base: "meilisearch_hybrid_1bit"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  index_name: "dbpedia_entity_q1bit"
+
+dbpedia_entity_opensearch_ft:
+  base: "opensearch"
+  type: "full-text"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  index_name: "dbpedia_entity"
+
+dbpedia_entity_opensearch_vec:
+  base: "opensearch_vector"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  index_name: "dbpedia_entity"
+
+dbpedia_entity_opensearch_hybrid:
+  base: "opensearch_hybrid"
+  source: "beir/dbpedia-entity/test"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  index_name: "dbpedia_entity"
 
 msmarco_trecdl_2019_manticore:
   base: "msmarco_passage_manticore"

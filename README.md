@@ -1,4 +1,4 @@
-# Search Benchmark (Manticore + Qdrant + Meilisearch)
+# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text (`MATCH(...)`)
@@ -8,6 +8,9 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Meilisearch lexical search
 - Meilisearch vector search (user-provided vectors from the shared cache)
 - Meilisearch hybrid search (query text + cached query vector)
+- OpenSearch lexical search
+- OpenSearch vector search (user-provided vectors from the shared cache)
+- OpenSearch hybrid search (query text + cached query vector)
 
 It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md`, diagnostics) per run.
 
@@ -22,8 +25,8 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
   - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`) use the shorter query variant.
-    - vector/hybrid modes (`manticore vector`, `qdrant vector`, `meilisearch vector`, `meilisearch hybrid`) use the longer query variant.
+    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`) use the shorter query variant.
+    - vector/hybrid modes (`manticore vector`, `qdrant vector`, `meilisearch vector`, `meilisearch hybrid`, `opensearch vector`, `opensearch hybrid`) use the longer query variant.
   - Prepared topic fields are explicit: `query_short` and `query_long`.
   - Example topics from TREC-COVID:
     - Topic `1`
@@ -292,7 +295,7 @@ Run Qdrant as a server (Docker).
 
 Quick start (Docker):
 ```bash
-docker run -d --name trec-qdrant \
+docker run --rm -d --name qdrant \
   -p 6333:6333 -p 6334:6334 \
   -v "$(pwd)/data/qdrant_storage:/qdrant/storage" \
   qdrant/qdrant:latest
@@ -304,7 +307,7 @@ curl http://127.0.0.1:6333/
 
 Quick start (Docker):
 ```bash
-docker run -d --name trec-meilisearch \
+docker run --rm -d --name meilisearch \
   -p 7700:7700 \
   -e MEILI_NO_ANALYTICS=true \
   -v "$(pwd)/data/meilisearch_data:/meili_data" \
@@ -321,6 +324,49 @@ Meilisearch modes in this benchmark:
 Note:
 - Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25.
 - Treat Meilisearch lexical results as a separate retrieval model in reports.
+
+### OpenSearch
+
+Quick start (Docker):
+```bash
+docker run --rm -d --name opensearch \
+  -p 9200:9200 -p 9600:9600 \
+  -e discovery.type=single-node \
+  -e plugins.security.disabled=true \
+  -e plugins.security.ssl.http.enabled=false \
+  -e OPENSEARCH_INITIAL_ADMIN_PASSWORD='YourStrongPassword123!' \
+  -v "$(pwd)/data/opensearch_data:/usr/share/opensearch/data" \
+  opensearchproject/opensearch:3.5.0
+
+docker logs -f opensearch
+```
+
+Wait until OpenSearch is ready, then verify the node and plugins:
+```bash
+for i in $(seq 1 90); do
+  if curl -fsS 'http://127.0.0.1:9200/_cat/plugins?v' | grep -q knn; then
+    break
+  fi
+  sleep 1
+done
+
+curl http://127.0.0.1:9200/
+curl -s 'http://127.0.0.1:9200/_cat/plugins?v' | grep knn
+```
+
+Vector and hybrid modes in this benchmark require the `opensearch-knn` plugin.
+
+OpenSearch modes in this benchmark:
+- lexical (`fulltext` in CLI): `multi_match` over configured `opensearch.text_fields`
+- vector: `knn_vector` search using cached user-provided vectors
+- hybrid: lexical text query + `knn_vector` query over the same vector index
+
+Config fields:
+- `opensearch.url`: server URL (default `http://127.0.0.1:9200`)
+- `opensearch.index_name`: base name; lexical index becomes `<index_name>_lexical`, vector/hybrid index becomes `<index_name>_<vector_index>`
+- `opensearch.vector_field`: vector field name in OpenSearch mappings
+- `opensearch.text_fields`: text fields used by lexical and hybrid search
+- `opensearch.hybrid_text_boost` / `opensearch.hybrid_vector_boost`: relative weighting in hybrid search
 
 
 ## Vector Cache
