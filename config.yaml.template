@@ -219,6 +219,54 @@ trec_covid_opensearch_hybrid:
   type: "hybrid"
   index_name: "trec_covid_opensearch"
 
+trec_covid_topic13_manticore_fulltext:
+  base: "trec_covid_manticore_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_manticore_vector:
+  base: "trec_covid_manticore_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_manticore_hybrid:
+  base: "trec_covid_manticore_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_qdrant_fulltext:
+  base: "trec_covid_qdrant_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_qdrant_vector:
+  base: "trec_covid_qdrant_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_qdrant_hybrid:
+  base: "trec_covid_qdrant_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_meilisearch_fulltext:
+  base: "trec_covid_meilisearch_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_meilisearch_vector:
+  base: "trec_covid_meilisearch_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_meilisearch_hybrid:
+  base: "trec_covid_meilisearch_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_opensearch_fulltext:
+  base: "trec_covid_opensearch_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_opensearch_vector:
+  base: "trec_covid_opensearch_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_opensearch_hybrid:
+  base: "trec_covid_opensearch_hybrid"
+  source: "beir/trec-covid-topic-13"
+
 msmarco_passage_manticore_fulltext:
   base: "manticore"
   type: "fulltext"

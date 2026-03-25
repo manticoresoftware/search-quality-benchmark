@@ -10,7 +10,7 @@ from time import perf_counter
 
 from .config import AppConfig, load_config, load_engine_targets
 from .configmap import generate_configmap
-from .discovery import discover_config_paths
+from .discovery import discover_config_paths, resolve_config_path
 from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
 from .io_utils import read_jsonl
@@ -750,6 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    args.config = str(resolve_config_path(args.config))
     if args.command is None:
         picked = _select_top_command_interactive()
         if picked is None:

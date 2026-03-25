@@ -1,0 +1,821 @@
+# Canonical benchmark configuration.
+# Runnable profile names follow:
+#   <dataset>_<engine>_<type>
+#
+# Internal helper bases remain non-canonical and are hidden from menus.
+# OpenSearch vector/hybrid profiles are intentionally omitted here because the
+# current OpenSearch backend in this repo does not implement 1-bit vectors.
+
+dataset:
+  source: "beir/trec-covid"
+  prepared_dir: "data/prepared"
+  max_docs: 0
+  keep_qrels_docs: true
+
+benchmark:
+  limit: 100
+  warmup_queries: 5
+  repeats: 1
+  concurrency: 1
+  timeout_seconds: 60
+  diagnostics_queries: 3
+
+metrics:
+  enabled: ["ndcg@10", "ndcg@20", "map@10", "mrr@10", "p@20", "recall@100", "latency", "qps", "error_rate"]
+  ndcg_ks: [10, 20]
+  map_k: 10
+  mrr_k: 10
+  precision_k: 20
+  recall_k: 100
+
+manticore:
+  type: "manticore"
+  host: "127.0.0.1"
+  sql_port: 9306
+  http_port: 9308
+  user: ""
+  password: ""
+  fulltext_table: "trec_covid_manticore"
+  vector_table: "trec_covid_manticore"
+  vector_field: "embedding"
+  vector_model: "openai/text-embedding-3-large"
+  vector_from: "title,abstract"
+  vector_similarity: "cosine"
+  vector_quantization: ""
+  vector_search_oversampling:
+  vector_search_rescore:
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+  vector_cache_fetch_batch_size: 1000
+  vector_api_key: ""
+  vector_api_key_file: "/Users/sn/openai_key_sergey_for_tests"
+  fulltext_options: "morphology='stem_en' index_field_lengths='1'"
+  search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
+  fulltext_query_mode: "and"
+  fulltext_query_quorum: 0.5
+  batch_size: 2000
+  insert_retries: 3
+  connect_timeout_seconds: 10
+  query_timeout_seconds: 60
+
+manticore_vector_1bit:
+  base: "manticore"
+  type: "vector"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+  search_options: ""
+
+qdrant:
+  type: "qdrant"
+  path: ""
+  host: "127.0.0.1"
+  port: 6333
+  api_key: ""
+  https: false
+  timeout_seconds: 60
+  batch_size: 2000
+  dense_collection: "trec_covid_qdrant_vector"
+  bm25_collection: "trec_covid_qdrant_fulltext"
+  dense_vector_name: "dense"
+  sparse_vector_name: "bm25"
+  dense_binary_quantization: false
+  dense_binary_always_ram: true
+  dense_binary_query_encoding: "default"
+  dense_search_quantization_rescore:
+  dense_search_quantization_oversampling:
+  dense_search_quantization_ignore: false
+
+qdrant_vector_1bit:
+  base: "qdrant"
+  type: "vector"
+  dense_binary_quantization: true
+  dense_binary_always_ram: true
+  dense_search_quantization_rescore: true
+  dense_search_quantization_oversampling: 3.0
+  batch_size: 500
+
+qdrant_hybrid_1bit:
+  base: "qdrant_vector_1bit"
+  type: "hybrid"
+
+meilisearch:
+  type: "meilisearch"
+  host: "http://127.0.0.1:7700"
+  api_key: ""
+  api_key_file: ""
+  index_name: "trec_covid_meilisearch"
+  timeout_sec: 30
+  batch_size: 1000
+  searchable_attributes: ["title", "abstract"]
+  ranking_rules: ["words", "typo", "proximity", "attribute", "sort", "exactness"]
+  stop_words: []
+  synonyms: {}
+  typo_tolerance: true
+  embedder_name: "default"
+  vector_index: "vector"
+  hybrid_semantic_ratio: 0.5
+  binary_quantized: false
+
+meilisearch_vector_1bit:
+  base: "meilisearch"
+  type: "vector"
+  binary_quantized: true
+  batch_size: 250
+
+meilisearch_hybrid_1bit:
+  base: "meilisearch_vector_1bit"
+  type: "hybrid"
+
+opensearch:
+  type: "opensearch"
+  url: "http://127.0.0.1:9200"
+  username: ""
+  password: ""
+  api_key: ""
+  api_key_file: ""
+  verify_certs: false
+  timeout_sec: 30
+  batch_size: 500
+  index_name: "trec_covid_opensearch"
+  text_fields: ["title", "abstract"]
+  vector_index: "vector"
+  vector_field: "embedding"
+  space_type: "cosinesimil"
+  hybrid_text_boost: 1.0
+  hybrid_vector_boost: 1.0
+
+# TREC-COVID
+trec_covid_manticore_fulltext:
+  base: "manticore"
+  type: "fulltext"
+  fulltext_table: "trec_covid_manticore"
+  vector_table: "trec_covid_manticore"
+  fulltext_options: "index_field_lengths='1'"
+  search_options: "ranker=bm25"
+  fulltext_query_mode: "and"
+
+trec_covid_manticore_vector:
+  base: "manticore_vector_1bit"
+  fulltext_table: "trec_covid_manticore"
+  vector_table: "trec_covid_manticore"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_manticore_hybrid:
+  base: "trec_covid_manticore_fulltext"
+  type: "hybrid"
+  fulltext_table: "trec_covid_manticore"
+  vector_table: "trec_covid_manticore"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+trec_covid_qdrant_fulltext:
+  base: "qdrant"
+  type: "fulltext"
+  bm25_collection: "trec_covid_qdrant_fulltext"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_qdrant_vector:
+  base: "qdrant_vector_1bit"
+  dense_collection: "trec_covid_qdrant_vector"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_qdrant_hybrid:
+  base: "qdrant_hybrid_1bit"
+  bm25_collection: "trec_covid_qdrant_fulltext"
+  dense_collection: "trec_covid_qdrant_vector"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_meilisearch_fulltext:
+  base: "meilisearch"
+  type: "fulltext"
+  index_name: "trec_covid_meilisearch"
+
+trec_covid_meilisearch_vector:
+  base: "meilisearch_vector_1bit"
+  index_name: "trec_covid_meilisearch"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_meilisearch_hybrid:
+  base: "meilisearch_hybrid_1bit"
+  index_name: "trec_covid_meilisearch"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_opensearch_fulltext:
+  base: "opensearch"
+  type: "fulltext"
+  index_name: "trec_covid_opensearch"
+
+trec_covid_opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+  index_name: "trec_covid_opensearch"
+
+trec_covid_opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+  index_name: "trec_covid_opensearch"
+
+# TREC-COVID topic 13 diagnostic subset
+trec_covid_topic13_manticore_fulltext:
+  base: "trec_covid_manticore_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_manticore_vector:
+  base: "trec_covid_manticore_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_manticore_hybrid:
+  base: "trec_covid_manticore_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_qdrant_fulltext:
+  base: "trec_covid_qdrant_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_qdrant_vector:
+  base: "trec_covid_qdrant_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_qdrant_hybrid:
+  base: "trec_covid_qdrant_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_meilisearch_fulltext:
+  base: "trec_covid_meilisearch_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_meilisearch_vector:
+  base: "trec_covid_meilisearch_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_meilisearch_hybrid:
+  base: "trec_covid_meilisearch_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_opensearch_fulltext:
+  base: "trec_covid_opensearch_fulltext"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_opensearch_vector:
+  base: "trec_covid_opensearch_vector"
+  source: "beir/trec-covid-topic-13"
+
+trec_covid_topic13_opensearch_hybrid:
+  base: "trec_covid_opensearch_hybrid"
+  source: "beir/trec-covid-topic-13"
+
+# MSMARCO passage
+msmarco_passage_manticore_fulltext:
+  base: "manticore"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  fulltext_table: "msmarco_passage_manticore"
+  vector_table: "msmarco_passage_manticore"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
+  search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
+  fulltext_query_mode: "or"
+
+msmarco_passage_manticore_vector:
+  base: "manticore_vector_1bit"
+  source: "msmarco-passage/dev/small"
+  fulltext_table: "msmarco_passage_manticore"
+  vector_table: "msmarco_passage_manticore"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+
+msmarco_passage_manticore_hybrid:
+  base: "msmarco_passage_manticore_fulltext"
+  source: "msmarco-passage/dev/small"
+  type: "hybrid"
+  fulltext_table: "msmarco_passage_manticore"
+  vector_table: "msmarco_passage_manticore"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+msmarco_passage_qdrant_fulltext:
+  base: "qdrant"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  bm25_collection: "msmarco_passage_qdrant_fulltext"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+
+msmarco_passage_qdrant_vector:
+  base: "qdrant_vector_1bit"
+  source: "msmarco-passage/dev/small"
+  dense_collection: "msmarco_passage_qdrant_vector"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+
+msmarco_passage_qdrant_hybrid:
+  base: "qdrant_hybrid_1bit"
+  source: "msmarco-passage/dev/small"
+  bm25_collection: "msmarco_passage_qdrant_fulltext"
+  dense_collection: "msmarco_passage_qdrant_vector"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+
+msmarco_passage_meilisearch_fulltext:
+  base: "meilisearch"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_meilisearch"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  searchable_attributes: ["abstract", "title"]
+
+msmarco_passage_meilisearch_vector:
+  base: "meilisearch_vector_1bit"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_meilisearch"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  searchable_attributes: ["abstract", "title"]
+
+msmarco_passage_meilisearch_hybrid:
+  base: "meilisearch_hybrid_1bit"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_meilisearch"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  searchable_attributes: ["abstract", "title"]
+
+msmarco_passage_opensearch_fulltext:
+  base: "opensearch"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_opensearch"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_opensearch"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_opensearch"
+  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  text_fields: ["abstract", "title"]
+
+# MSMARCO lite
+msmarco_lite_manticore_fulltext:
+  base: "msmarco_passage_manticore_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore"
+  vector_table: "msmarco_lite_manticore"
+
+msmarco_lite_manticore_vector:
+  base: "msmarco_passage_manticore_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore"
+  vector_table: "msmarco_lite_manticore"
+
+msmarco_lite_manticore_hybrid:
+  base: "msmarco_passage_manticore_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore"
+  vector_table: "msmarco_lite_manticore"
+
+msmarco_lite_qdrant_fulltext:
+  base: "msmarco_passage_qdrant_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  bm25_collection: "msmarco_lite_qdrant_fulltext"
+
+msmarco_lite_qdrant_vector:
+  base: "msmarco_passage_qdrant_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  dense_collection: "msmarco_lite_qdrant_vector"
+
+msmarco_lite_qdrant_hybrid:
+  base: "msmarco_passage_qdrant_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  bm25_collection: "msmarco_lite_qdrant_fulltext"
+  dense_collection: "msmarco_lite_qdrant_vector"
+
+msmarco_lite_meilisearch_fulltext:
+  base: "msmarco_passage_meilisearch_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_meilisearch"
+
+msmarco_lite_meilisearch_vector:
+  base: "msmarco_passage_meilisearch_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_meilisearch"
+
+msmarco_lite_meilisearch_hybrid:
+  base: "msmarco_passage_meilisearch_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_meilisearch"
+
+msmarco_lite_opensearch_fulltext:
+  base: "msmarco_passage_opensearch_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_opensearch"
+
+msmarco_lite_opensearch_vector:
+  base: "msmarco_passage_opensearch_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_opensearch"
+
+msmarco_lite_opensearch_hybrid:
+  base: "msmarco_passage_opensearch_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_opensearch"
+
+# TREC-DL 2019 reuses MSMARCO passage corpora
+msmarco_trecdl_2019_manticore_fulltext:
+  base: "msmarco_passage_manticore_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_manticore_vector:
+  base: "msmarco_passage_manticore_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_manticore_hybrid:
+  base: "msmarco_passage_manticore_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_qdrant_fulltext:
+  base: "msmarco_passage_qdrant_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_qdrant_vector:
+  base: "msmarco_passage_qdrant_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_qdrant_hybrid:
+  base: "msmarco_passage_qdrant_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_meilisearch_fulltext:
+  base: "msmarco_passage_meilisearch_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_meilisearch_vector:
+  base: "msmarco_passage_meilisearch_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_meilisearch_hybrid:
+  base: "msmarco_passage_meilisearch_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_opensearch_fulltext:
+  base: "msmarco_passage_opensearch_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_opensearch_vector:
+  base: "msmarco_passage_opensearch_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_opensearch_hybrid:
+  base: "msmarco_passage_opensearch_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+# TREC-DL 2020 reuses MSMARCO passage corpora
+msmarco_trecdl_2020_manticore_fulltext:
+  base: "msmarco_passage_manticore_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_manticore_vector:
+  base: "msmarco_passage_manticore_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_manticore_hybrid:
+  base: "msmarco_passage_manticore_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_qdrant_fulltext:
+  base: "msmarco_passage_qdrant_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_qdrant_vector:
+  base: "msmarco_passage_qdrant_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_qdrant_hybrid:
+  base: "msmarco_passage_qdrant_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_meilisearch_fulltext:
+  base: "msmarco_passage_meilisearch_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_meilisearch_vector:
+  base: "msmarco_passage_meilisearch_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_meilisearch_hybrid:
+  base: "msmarco_passage_meilisearch_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_opensearch_fulltext:
+  base: "msmarco_passage_opensearch_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_opensearch_vector:
+  base: "msmarco_passage_opensearch_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_opensearch_hybrid:
+  base: "msmarco_passage_opensearch_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+# NFCorpus
+nfcorpus_manticore_fulltext:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  fulltext_table: "nfcorpus_manticore"
+  vector_table: "nfcorpus_manticore"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  fulltext_options: "index_field_lengths='1'"
+  search_options: "ranker=bm25"
+  fulltext_query_mode: "or"
+
+nfcorpus_manticore_vector:
+  base: "manticore_vector_1bit"
+  source: "beir/nfcorpus/test"
+  fulltext_table: "nfcorpus_manticore"
+  vector_table: "nfcorpus_manticore"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_manticore_hybrid:
+  base: "nfcorpus_manticore_fulltext"
+  source: "beir/nfcorpus/test"
+  type: "hybrid"
+  fulltext_table: "nfcorpus_manticore"
+  vector_table: "nfcorpus_manticore"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+nfcorpus_qdrant_fulltext:
+  base: "qdrant"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  bm25_collection: "nfcorpus_qdrant_fulltext"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_qdrant_vector:
+  base: "qdrant_vector_1bit"
+  source: "beir/nfcorpus/test"
+  dense_collection: "nfcorpus_qdrant_vector"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_qdrant_hybrid:
+  base: "qdrant_hybrid_1bit"
+  source: "beir/nfcorpus/test"
+  bm25_collection: "nfcorpus_qdrant_fulltext"
+  dense_collection: "nfcorpus_qdrant_vector"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_meilisearch_fulltext:
+  base: "meilisearch"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_meilisearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_meilisearch_vector:
+  base: "meilisearch_vector_1bit"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_meilisearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_meilisearch_hybrid:
+  base: "meilisearch_hybrid_1bit"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_meilisearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_opensearch_fulltext:
+  base: "opensearch"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_opensearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_opensearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_opensearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+# ACORD
+acord_manticore_fulltext:
+  base: "manticore"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  fulltext_table: "acord_manticore"
+  vector_table: "acord_manticore"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75)')"
+  fulltext_query_mode: "or"
+
+acord_manticore_vector:
+  base: "manticore_vector_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  fulltext_table: "acord_manticore"
+  vector_table: "acord_manticore"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_manticore_hybrid:
+  base: "acord_manticore_fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  type: "hybrid"
+  fulltext_table: "acord_manticore"
+  vector_table: "acord_manticore"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+acord_qdrant_fulltext:
+  base: "qdrant"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  bm25_collection: "acord_qdrant_fulltext"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_qdrant_vector:
+  base: "qdrant_vector_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  dense_collection: "acord_qdrant_vector"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_qdrant_hybrid:
+  base: "qdrant_hybrid_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  bm25_collection: "acord_qdrant_fulltext"
+  dense_collection: "acord_qdrant_vector"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_meilisearch_fulltext:
+  base: "meilisearch"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_meilisearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_meilisearch_vector:
+  base: "meilisearch_vector_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_meilisearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_meilisearch_hybrid:
+  base: "meilisearch_hybrid_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_meilisearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_opensearch_fulltext:
+  base: "opensearch"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_opensearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_opensearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_opensearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+# DBPedia-Entity
+dbpedia_entity_manticore_fulltext:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/dbpedia-entity/test"
+  fulltext_table: "dbpedia_entity_manticore"
+  vector_table: "dbpedia_entity_manticore"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
+  search_options: "ranker=bm25"
+  fulltext_query_mode: "or"
+
+dbpedia_entity_manticore_vector:
+  base: "manticore_vector_1bit"
+  source: "beir/dbpedia-entity/test"
+  fulltext_table: "dbpedia_entity_manticore"
+  vector_table: "dbpedia_entity_manticore"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  batch_size: 100
+  query_timeout_seconds: 300
+
+dbpedia_entity_manticore_hybrid:
+  base: "dbpedia_entity_manticore_fulltext"
+  source: "beir/dbpedia-entity/test"
+  type: "hybrid"
+  fulltext_table: "dbpedia_entity_manticore"
+  vector_table: "dbpedia_entity_manticore"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 100
+  query_timeout_seconds: 300
+
+dbpedia_entity_qdrant_fulltext:
+  base: "qdrant"
+  type: "fulltext"
+  source: "beir/dbpedia-entity/test"
+  bm25_collection: "dbpedia_entity_qdrant_fulltext"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_qdrant_vector:
+  base: "qdrant_vector_1bit"
+  source: "beir/dbpedia-entity/test"
+  dense_collection: "dbpedia_entity_qdrant_vector"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_qdrant_hybrid:
+  base: "qdrant_hybrid_1bit"
+  source: "beir/dbpedia-entity/test"
+  bm25_collection: "dbpedia_entity_qdrant_fulltext"
+  dense_collection: "dbpedia_entity_qdrant_vector"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_meilisearch_fulltext:
+  base: "meilisearch"
+  type: "fulltext"
+  source: "beir/dbpedia-entity/test"
+  index_name: "dbpedia_entity_meilisearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_meilisearch_vector:
+  base: "meilisearch_vector_1bit"
+  source: "beir/dbpedia-entity/test"
+  index_name: "dbpedia_entity_meilisearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_meilisearch_hybrid:
+  base: "meilisearch_hybrid_1bit"
+  source: "beir/dbpedia-entity/test"
+  index_name: "dbpedia_entity_meilisearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_opensearch_fulltext:
+  base: "opensearch"
+  type: "fulltext"
+  source: "beir/dbpedia-entity/test"
+  index_name: "dbpedia_entity_opensearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+  source: "beir/dbpedia-entity/test"
+  index_name: "dbpedia_entity_opensearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+  source: "beir/dbpedia-entity/test"
+  index_name: "dbpedia_entity_opensearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
