@@ -1,0 +1,15 @@
+{
+  "dataset_source": "beir/trec-covid-topic-13",
+  "derived_from": "beir/trec-covid",
+  "topic_subset": [
+    "13"
+  ],
+  "dataset_max_docs": 0,
+  "dataset_keep_qrels_docs": true,
+  "doc_count": 171332,
+  "selected_qrel_docs": 1822,
+  "selected_extra_docs": 169510,
+  "topic_count": 1,
+  "qrels_count": 1822,
+  "notes": "Single-topic diagnostic prepared dataset reusing the full TREC-COVID corpus docs.jsonl via symlink."
+}
