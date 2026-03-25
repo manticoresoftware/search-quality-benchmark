@@ -225,7 +225,11 @@ def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
     if engine == "manticore":
         return cfg.manticore.fulltext_table if mode == "fulltext" else cfg.manticore.vector_table
     if engine == "qdrant":
-        return cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
+        if mode == "fulltext":
+            return cfg.qdrant.bm25_collection
+        if mode == "hybrid":
+            return f"{cfg.qdrant.bm25_collection} + {cfg.qdrant.dense_collection}"
+        return cfg.qdrant.dense_collection
     if engine == "opensearch":
         base = str(cfg.opensearch.index_name or "").strip()
         return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.opensearch.vector_index}"
@@ -300,6 +304,17 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
     if cfg.qdrant.dense_search_quantization_rescore is not None:
         extra.append(f"rs={1 if bool(cfg.qdrant.dense_search_quantization_rescore) else 0}")
     return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
+
+
+def _qdrant_hybrid_label(cfg: AppConfig) -> str:
+    extra = ["fusion=rrf", "sparse=Qdrant/bm25"]
+    if bool(cfg.qdrant.dense_binary_quantization):
+        extra.append("bq")
+        if cfg.qdrant.dense_search_quantization_oversampling is not None:
+            extra.append(f"os={float(cfg.qdrant.dense_search_quantization_oversampling)}")
+        if cfg.qdrant.dense_search_quantization_rescore is not None:
+            extra.append(f"rs={1 if bool(cfg.qdrant.dense_search_quantization_rescore) else 0}")
+    return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
 
 
 def _meilisearch_fulltext_label(cfg: AppConfig) -> str:
@@ -532,6 +547,10 @@ def _run_single_query_qdrant(
         started = perf_counter()
         if mode == "fulltext":
             rows = backend.query_bm25_text(query_text, limit=cfg.benchmark.limit)
+        elif mode == "hybrid":
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Qdrant hybrid search.")
+            rows = backend.query_hybrid(query_text, query_vector, limit=cfg.benchmark.limit)
         else:
             rows = backend.query_dense(query_vector or [], limit=cfg.benchmark.limit)
         latency_ms = (perf_counter() - started) * 1000.0
@@ -738,6 +757,14 @@ def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> li
 
     backend = QdrantBackend(cfg.qdrant)
     for m in modes:
+        if m == "hybrid":
+            for collection in (cfg.qdrant.bm25_collection, cfg.qdrant.dense_collection):
+                try:
+                    cnt = int(backend._count_points(collection))
+                    lines.append(f"rows ({collection}): {cnt:,}")
+                except Exception as exc:
+                    lines.append(f"rows ({collection}): n/a ({exc})")
+            continue
         collection = cfg.qdrant.bm25_collection if m == "fulltext" else cfg.qdrant.dense_collection
         try:
             cnt = int(backend._count_points(collection))
@@ -767,9 +794,9 @@ def run_benchmark(
             raise ValueError("For engine=manticore, mode must be one of: fulltext, vector, both")
         modes = [mode] if mode in ("fulltext", "vector") else ["fulltext", "vector"]
     elif engine == "qdrant":
-        if mode not in ("fulltext", "vector", "both"):
-            raise ValueError("For engine=qdrant, mode must be one of: fulltext, vector, both")
-        modes = [mode] if mode in ("fulltext", "vector") else ["fulltext", "vector"]
+        if mode not in ("fulltext", "vector", "hybrid", "both"):
+            raise ValueError("For engine=qdrant, mode must be one of: fulltext, vector, hybrid, both")
+        modes = [mode] if mode in ("fulltext", "vector", "hybrid") else ["fulltext", "vector"]
     elif engine == "meilisearch":
         if mode not in ("fulltext", "vector", "hybrid"):
             raise ValueError("For engine=meilisearch, mode must be one of: fulltext, vector, hybrid")
@@ -789,6 +816,7 @@ def run_benchmark(
     # warmup, sequential and not recorded
     warmup_topics = topics[: cfg.benchmark.warmup_queries]
     query_vectors: dict[str, list[float]] = {}
+    vector_query_by_topic_id = {str(t["topic_id"]): query_text_for_mode(t, "vector") for t in topics}
     qdrant_backend: QdrantBackend | None = None
     meili_backend: MeilisearchBackend | None = None
     opensearch_backend: OpenSearchBackend | None = None
@@ -844,7 +872,7 @@ def run_benchmark(
                     t["topic_id"],
                     qtext,
                     repeat_idx=-1,
-                    query_vector=query_vectors.get(qtext, []),
+                    query_vector=query_vectors.get(vector_query_by_topic_id.get(str(t["topic_id"]), qtext), []),
                 )
 
     concurrency = concurrency_override or cfg.benchmark.concurrency
@@ -882,7 +910,7 @@ def run_benchmark(
                     tid,
                     q,
                     r,
-                    query_vectors.get(q, []),
+                    query_vectors.get(q, []) if m == "vector" else query_vectors.get(vector_query_by_topic_id.get(str(tid), q), []),
                 )
                 for (m, tid, q, r) in tasks
             ]
@@ -1050,7 +1078,12 @@ def run_benchmark(
         else:
             model_label = _meilisearch_vector_label(cfg)
     elif mode == "hybrid":
-        model_label = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
+        if engine == "qdrant":
+            model_label = _qdrant_hybrid_label(cfg)
+        elif engine == "opensearch":
+            model_label = _opensearch_hybrid_label(cfg)
+        else:
+            model_label = _meilisearch_hybrid_label(cfg)
     elif mode == "fulltext":
         if engine == "manticore":
             model_label = _manticore_fulltext_ranker_label(cfg)

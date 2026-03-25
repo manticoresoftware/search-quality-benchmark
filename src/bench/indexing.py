@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable
 
@@ -22,6 +22,8 @@ class ModeIndexResult:
     docs_per_second: float
     failed_batches: int
     retried_batches: int
+    last_error: str = ""
+    error_reasons: dict[str, int] = field(default_factory=dict)
 
 
 def _run_index_manticore(
@@ -59,10 +61,12 @@ def _run_index_manticore(
                     docs_per_second=(ingest_stats.rows_inserted / elapsed) if elapsed > 0 else 0.0,
                     failed_batches=ingest_stats.failed_batches,
                     retried_batches=ingest_stats.retried_batches,
+                    last_error=ingest_stats.last_error,
+                    error_reasons=dict(ingest_stats.retry_reasons),
                 )
             )
 
-        if mode == "vector":
+        if mode in ("vector", "hybrid"):
             fields = parse_vector_from_fields(cfg.manticore.vector_from)
             cache = VectorCache(cfg.manticore.vector_cache_path)
             docs_cached: list[tuple[dict[str, Any], str]] = []
@@ -93,7 +97,7 @@ def _run_index_manticore(
                         progress_callback(
                             {
                                 "engine": "manticore",
-                                "mode": "vector",
+                                "mode": mode,
                                 "stage": "cache_lookup",
                                 "processed": i,
                                 "total": len(docs),
@@ -108,9 +112,17 @@ def _run_index_manticore(
             if not docs_cached and not docs_for_auto_embed:
                 raise RuntimeError("No vector documents available (all entries are marked null in cache).")
 
-            client.drop_table_if_exists(cfg.manticore.vector_table)
+            target_table = cfg.manticore.vector_table
+            if mode == "hybrid":
+                if cfg.manticore.fulltext_table != cfg.manticore.vector_table:
+                    raise ValueError(
+                        "For engine=manticore hybrid indexing, fulltext_table and vector_table must point to the same combined table"
+                    )
+                target_table = cfg.manticore.fulltext_table
+
+            client.drop_table_if_exists(target_table)
             client.create_vector_table(
-                cfg.manticore.vector_table,
+                target_table,
                 cfg.manticore.vector_field,
                 model_name=cfg.manticore.vector_model,
                 vector_from=cfg.manticore.vector_from,
@@ -121,21 +133,22 @@ def _run_index_manticore(
             )
             started = perf_counter()
             ingest_stats_cached = ModeIndexResult(
-                mode="vector",
+                mode=mode,
                 duration_seconds=0.0,
                 rows_inserted=0,
                 docs_per_second=0.0,
                 failed_batches=0,
                 retried_batches=0,
+                error_reasons={},
             )
             if docs_cached:
                 cache2 = VectorCache(cfg.manticore.vector_cache_path)
                 last_cached_error = ""
                 try:
                     total_cached = len(docs_cached)
-                    # Fast path for cache-hit ingestion: avoid sending large text fields when
-                    # we don't need table-based cache sync from auto-embedded rows.
-                    minimal_vector_insert = len(docs_for_auto_embed) == 0
+                    # Hybrid tables must retain text fields for MATCH() on the same table.
+                    # Plain vector tables can still skip them when all vectors come from cache.
+                    minimal_vector_insert = mode == "vector" and len(docs_for_auto_embed) == 0
                     fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
                     insert_batch_size = max(1, int(cfg.manticore.batch_size))
                     processed_cached = 0
@@ -153,7 +166,7 @@ def _run_index_manticore(
                                 r["vector"] = vec
                                 rows.append(r)
                             s = client.bulk_insert_docs_with_vectors(
-                                cfg.manticore.vector_table,
+                                target_table,
                                 cfg.manticore.vector_field,
                                 rows,
                                 batch_size=max(1, len(rows)),
@@ -162,15 +175,20 @@ def _run_index_manticore(
                             )
                             if s.last_error:
                                 last_cached_error = s.last_error
+                                ingest_stats_cached.last_error = s.last_error
                             ingest_stats_cached.rows_inserted += s.rows_inserted
                             ingest_stats_cached.failed_batches += s.failed_batches
                             ingest_stats_cached.retried_batches += s.retried_batches
+                            for reason, count in s.retry_reasons.items():
+                                ingest_stats_cached.error_reasons[reason] = (
+                                    ingest_stats_cached.error_reasons.get(reason, 0) + int(count)
+                                )
                             processed_cached += len(ins_chunk)
                             if progress_callback is not None:
                                 progress_callback(
                                     {
                                         "engine": "manticore",
-                                        "mode": "vector",
+                                        "mode": mode,
                                         "stage": "ingest_cached",
                                         "processed": min(processed_cached, total_cached),
                                         "total": total_cached,
@@ -178,23 +196,24 @@ def _run_index_manticore(
                                         "failed_batches": ingest_stats_cached.failed_batches,
                                         "retried_batches": ingest_stats_cached.retried_batches,
                                         "last_error": last_cached_error,
+                                        "error_reasons": dict(ingest_stats_cached.error_reasons),
                                     }
                                 )
                 finally:
                     cache2.close()
             ingest_stats_auto = client.bulk_insert_docs(
-                cfg.manticore.vector_table,
+                target_table,
                 docs_for_auto_embed,
                 batch_size=cfg.manticore.batch_size,
                 retries=cfg.manticore.insert_retries,
                 progress_callback=progress_callback,
-                progress_meta={"engine": "manticore", "mode": "vector", "stage": "ingest_auto"},
+                progress_meta={"engine": "manticore", "mode": mode, "stage": "ingest_auto"},
             )
             if ingest_stats_auto.last_error and progress_callback is not None:
                 progress_callback(
                     {
                         "engine": "manticore",
-                        "mode": "vector",
+                        "mode": mode,
                         "stage": "ingest_auto",
                         "processed": len(docs_for_auto_embed),
                         "total": len(docs_for_auto_embed),
@@ -202,29 +221,36 @@ def _run_index_manticore(
                         "failed_batches": ingest_stats_auto.failed_batches,
                         "retried_batches": ingest_stats_auto.retried_batches,
                         "last_error": ingest_stats_auto.last_error,
+                        "error_reasons": dict(ingest_stats_auto.retry_reasons),
                     }
                 )
             ingest_stats = ModeIndexResult(
-                mode="vector",
+                mode=mode,
                 duration_seconds=0.0,
                 rows_inserted=ingest_stats_cached.rows_inserted + ingest_stats_auto.rows_inserted,
                 docs_per_second=0.0,
                 failed_batches=ingest_stats_cached.failed_batches + ingest_stats_auto.failed_batches,
                 retried_batches=ingest_stats_cached.retried_batches + ingest_stats_auto.retried_batches,
+                last_error=ingest_stats_auto.last_error or ingest_stats_cached.last_error,
+                error_reasons={},
             )
+            for reason, count in getattr(ingest_stats_cached, "error_reasons", {}).items():
+                ingest_stats.error_reasons[reason] = ingest_stats.error_reasons.get(reason, 0) + int(count)
+            for reason, count in getattr(ingest_stats_auto, "retry_reasons", {}).items():
+                ingest_stats.error_reasons[reason] = ingest_stats.error_reasons.get(reason, 0) + int(count)
 
             # Sync cache only when this run actually generated missing vectors.
             if docs_for_auto_embed:
                 if progress_callback is not None:
-                    progress_callback({"engine": "manticore", "mode": "vector", "stage": "cache_sync", "processed": 0, "total": 0, "inserted": ingest_stats.rows_inserted, "failed_batches": 0, "retried_batches": 0})
+                    progress_callback({"engine": "manticore", "mode": mode, "stage": "cache_sync", "processed": 0, "total": 0, "inserted": ingest_stats.rows_inserted, "failed_batches": 0, "retried_batches": 0})
                 populate_cache_from_manticore(
                     cfg,
-                    source_table=cfg.manticore.vector_table,
+                    source_table=target_table,
                     model_name=cfg.manticore.vector_model,
                     similarity=cfg.manticore.vector_similarity,
                     vector_from=cfg.manticore.vector_from,
                     progress_callback=(
-                        (lambda u: progress_callback({"engine": "manticore", "mode": "vector", **u}))
+                        (lambda u: progress_callback({"engine": "manticore", "mode": mode, **u}))
                         if progress_callback is not None
                         else None
                     ),
@@ -232,12 +258,14 @@ def _run_index_manticore(
             elapsed = perf_counter() - started
             out.append(
                 ModeIndexResult(
-                    mode="vector",
+                    mode=mode,
                     duration_seconds=elapsed,
                     rows_inserted=ingest_stats.rows_inserted,
                     docs_per_second=(ingest_stats.rows_inserted / elapsed) if elapsed > 0 else 0.0,
                     failed_batches=ingest_stats.failed_batches,
                     retried_batches=ingest_stats.retried_batches,
+                    last_error=ingest_stats.last_error,
+                    error_reasons=dict(ingest_stats.error_reasons),
                 )
             )
     finally:

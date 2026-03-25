@@ -246,3 +246,20 @@ class QdrantBackend:
             payload = getattr(r, "payload", None) or {}
             out.append({"doc_id": str(payload.get("doc_id", "")), "score": float(getattr(r, "score", 0.0))})
         return out
+
+    def query_hybrid(self, query_text: str, vector: list[float], limit: int) -> list[dict[str, Any]]:
+        bm25_rows = self.query_bm25_text(query_text, limit=limit)
+        dense_rows = self.query_dense(vector, limit=limit)
+        # Reciprocal Rank Fusion over separate sparse and dense collections.
+        k = 60.0
+        fused: dict[str, float] = {}
+        for rank, row in enumerate(bm25_rows, start=1):
+            doc_id = str(row.get("doc_id", "") or "")
+            if doc_id:
+                fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (k + rank)
+        for rank, row in enumerate(dense_rows, start=1):
+            doc_id = str(row.get("doc_id", "") or "")
+            if doc_id:
+                fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (k + rank)
+        ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
+        return [{"doc_id": doc_id, "score": float(score)} for doc_id, score in ranked[:limit]]

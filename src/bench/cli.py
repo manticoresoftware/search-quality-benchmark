@@ -9,6 +9,7 @@ import sys
 from time import perf_counter
 
 from .config import AppConfig, load_config, load_engine_targets
+from .configmap import generate_configmap
 from .discovery import discover_config_paths
 from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
@@ -91,6 +92,7 @@ def _select_top_command_interactive() -> str | None:
         ("index", "Index", "Create/recreate benchmark indexes in Manticore/Qdrant"),
         ("run", "Run", "Execute benchmark queries and collect metrics"),
         ("report", "Report", "Pick artifacts and generate combined markdown report"),
+        ("configmap", "Draw configmap", "Generate a Mermaid graph of profile dependencies"),
     ]
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
@@ -105,6 +107,7 @@ def _select_top_command_interactive() -> str | None:
                     curses.init_pair(2, curses.COLOR_GREEN, -1)   # index
                     curses.init_pair(3, curses.COLOR_CYAN, -1)    # run
                     curses.init_pair(4, curses.COLOR_YELLOW, -1)  # report
+                    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # configmap
                 while True:
                     stdscr.erase()  # type: ignore[attr-defined]
                     h, w = stdscr.getmaxyx()  # type: ignore[attr-defined]
@@ -120,6 +123,8 @@ def _select_top_command_interactive() -> str | None:
                                 attrs |= curses.color_pair(3)
                             elif name == "report":
                                 attrs |= curses.color_pair(4)
+                            elif name == "configmap":
+                                attrs |= curses.color_pair(5)
                         line = f"{label:<10} {desc}"
                         stdscr.addstr(2 + i, 2, _fit(line, max(1, w - 3)), attrs)  # type: ignore[attr-defined]
                     stdscr.refresh()  # type: ignore[attr-defined]
@@ -445,6 +450,14 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         last_error = str(update.get("last_error", "") or "").strip().replace("\n", " ")
         if len(last_error) > 140:
             last_error = last_error[:139] + "…"
+        error_reasons_raw = update.get("error_reasons", {}) or {}
+        error_reasons: dict[str, int] = {}
+        if isinstance(error_reasons_raw, dict):
+            for reason, count in error_reasons_raw.items():
+                try:
+                    error_reasons[str(reason)] = int(count)
+                except Exception:
+                    continue
         is_final = total > 0 and processed >= total
         if (now - last) < 0.5 and not is_final:
             return
@@ -460,7 +473,16 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             f"Index progress [{engine}:{mode}{stage_part}] {processed}/{total if total > 0 else '?'} "
             f"({pct:5.1f}%) inserted={inserted} retries={retries} failed={failed} elapsed={elapsed:6.1f}s{eta}"
         )
-        if last_error and (retries > 0 or failed > 0):
+        if error_reasons and (retries > 0 or failed > 0):
+            top = sorted(error_reasons.items(), key=lambda item: (-int(item[1]), str(item[0])))[:2]
+            rendered: list[str] = []
+            for reason, count in top:
+                short = reason.strip().replace("\n", " ")
+                if len(short) > 90:
+                    short = short[:89] + "…"
+                rendered.append(f"{count}x {short}")
+            line += f" errors={'; '.join(rendered)}"
+        elif last_error and (retries > 0 or failed > 0):
             line += f" reason={last_error}"
         if is_tty:
             end = "\n" if is_final else ""
@@ -468,6 +490,23 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         else:
             print(line, flush=True)
         last_by_key[key] = now
+
+    def _print_index_result_details(results: list[object]) -> None:
+        for result in results:
+            retried = int(getattr(result, "retried_batches", 0) or 0)
+            failed = int(getattr(result, "failed_batches", 0) or 0)
+            reasons = dict(getattr(result, "error_reasons", {}) or {})
+            if retried <= 0 and failed <= 0 and not reasons:
+                continue
+            mode = str(getattr(result, "mode", "") or "-")
+            print(f"Index issues [{mode}]: retries={retried} failed={failed}")
+            if reasons:
+                for reason, count in sorted(reasons.items(), key=lambda item: (-int(item[1]), str(item[0])))[:8]:
+                    print(f"  {count:>4}  {reason}")
+            else:
+                last_error = str(getattr(result, "last_error", "") or "").strip()
+                if last_error:
+                    print(f"  last error: {last_error}")
 
     try:
         if args.mode is None and args.engine is None:
@@ -502,9 +541,10 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 started_by_key.clear()
                 last_by_key.clear()
                 run_id = generate_run_id()
-                run_index(v.cfg, engine=v.engine, mode=v.mode, progress_callback=_progress)
+                results = run_index(v.cfg, engine=v.engine, mode=v.mode, progress_callback=_progress)
                 model_note = f" model={v.model}" if v.mode == "vector" else ""
                 print(f"Indexed profile={v.entry} engine={v.engine} mode={v.mode}{model_note} run_id={run_id}")
+                _print_index_result_details(results)
             print(f"Index batch completed: {len(selected)} runs")
             return 0
 
@@ -537,21 +577,22 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             ):
                 print("Index canceled: Manticore vector reindex not confirmed.")
                 return 0
-        elif args.mode == "vector":
+        elif args.mode in ("vector", "hybrid"):
             if not _confirm_vector_cache_coverage(
                 cfg=cfg_for_engine,
                 engine=engine,
                 entry_name=entry_name,
                 auto_yes=bool(args.yes),
             ):
-                print("Index canceled: vector cache coverage not confirmed.")
+                print(f"Index canceled: {args.mode} cache coverage not confirmed.")
                 return 0
         started_by_key.clear()
         last_by_key.clear()
         run_id = generate_run_id()
-        run_index(cfg_for_engine, engine=engine, mode=args.mode, progress_callback=_progress)
-        model_note = f" model={cfg_for_engine.manticore.vector_model}" if args.mode == "vector" else ""
+        results = run_index(cfg_for_engine, engine=engine, mode=args.mode, progress_callback=_progress)
+        model_note = f" model={cfg_for_engine.manticore.vector_model}" if args.mode in ("vector", "hybrid") else ""
         print(f"Indexed profile={entry_name} engine={engine} mode={args.mode}{model_note}")
+        _print_index_result_details(results)
         return 0
     except KeyboardInterrupt:
         if is_tty:
@@ -658,6 +699,16 @@ def cmd_report(_: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_configmap(_: AppConfig, args: argparse.Namespace) -> int:
+    try:
+        out = generate_configmap(config_path=args.config, output_path=args.output)
+    except Exception as exc:
+        print(f"FATAL: {exc}")
+        return 1
+    print(f"Config map generated: {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bench", add_help=False)
     parser.add_argument("--config", default="config.yaml")
@@ -670,7 +721,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_index = sub.add_parser("index", add_help=False)
     p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch"])
-    p_index.add_argument("--mode", default=None, choices=["fulltext", "vector"])
+    p_index.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
         "--yes",
@@ -689,6 +740,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--no-interactive", action="store_true", help="Disable interactive artifact selection")
     p_report.add_argument("--output", default=None, help="Output markdown path")
     p_report.add_argument("--title", default="Benchmark Report")
+
+    p_configmap = sub.add_parser("configmap", add_help=False)
+    p_configmap.add_argument("--output", default=None, help="Output markdown path")
 
     return parser
 
@@ -710,6 +764,8 @@ def main() -> None:
         raise SystemExit(cmd_run(cfg, args))
     if args.command == "report":
         raise SystemExit(cmd_report(cfg, args))
+    if args.command == "configmap":
+        raise SystemExit(cmd_configmap(cfg, args))
     raise SystemExit(2)
 
 

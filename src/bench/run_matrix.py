@@ -107,6 +107,17 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
     return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
 
 
+def _qdrant_hybrid_label(cfg: AppConfig) -> str:
+    extra = ["fusion=rrf", "sparse=Qdrant/bm25"]
+    if bool(cfg.qdrant.dense_binary_quantization):
+        extra.append("bq")
+        if cfg.qdrant.dense_search_quantization_oversampling is not None:
+            extra.append(f"os={float(cfg.qdrant.dense_search_quantization_oversampling)}")
+        if cfg.qdrant.dense_search_quantization_rescore is not None:
+            extra.append(f"rs={1 if bool(cfg.qdrant.dense_search_quantization_rescore) else 0}")
+    return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+
+
 def _meilisearch_vector_label(cfg: AppConfig) -> str:
     extra = [f"embedder:{cfg.meilisearch.embedder_name}"]
     if bool(cfg.meilisearch.binary_quantized):
@@ -158,7 +169,10 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
-                    model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
+                    if engine == "qdrant":
+                        model_or_ranker = _qdrant_hybrid_label(cfg)
+                    else:
+                        model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
                 elif engine == "manticore":
                     extras: list[str] = []
                     search_opts = normalize_search_options(cfg.manticore.search_options)
@@ -326,7 +340,11 @@ def _variant_target_name(v: RunVariant) -> str:
     if v.engine == "manticore":
         return v.cfg.manticore.fulltext_table if v.mode == "fulltext" else v.cfg.manticore.vector_table
     if v.engine == "qdrant":
-        return v.cfg.qdrant.bm25_collection if v.mode == "fulltext" else v.cfg.qdrant.dense_collection
+        if v.mode == "fulltext":
+            return v.cfg.qdrant.bm25_collection
+        if v.mode == "hybrid":
+            return f"{v.cfg.qdrant.bm25_collection} + {v.cfg.qdrant.dense_collection}"
+        return v.cfg.qdrant.dense_collection
     if v.engine == "opensearch":
         base = str(v.cfg.opensearch.index_name or "").strip()
         return f"{base}_lexical" if v.mode == "fulltext" else f"{base}_{v.cfg.opensearch.vector_index}"
@@ -346,6 +364,13 @@ def is_variant_runnable(v: RunVariant) -> bool:
         if v.engine == "qdrant":
             backend = QdrantBackend(v.cfg.qdrant)
             collection_exists = getattr(backend.client, "collection_exists", None)
+            if v.mode == "hybrid":
+                names = [v.cfg.qdrant.bm25_collection, v.cfg.qdrant.dense_collection]
+                if callable(collection_exists):
+                    return all(bool(collection_exists(name)) for name in names)
+                for name in names:
+                    backend._count_points(name)
+                return True
             if callable(collection_exists):
                 return bool(collection_exists(target))
             backend._count_points(target)
@@ -383,6 +408,10 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
                 client.close()
         if v.engine == "qdrant":
             backend = QdrantBackend(v.cfg.qdrant)
+            if v.mode == "hybrid":
+                bm25_cnt = int(backend._count_points(v.cfg.qdrant.bm25_collection))
+                dense_cnt = int(backend._count_points(v.cfg.qdrant.dense_collection))
+                return min(bm25_cnt, dense_cnt), None
             collection = _variant_target_name(v)
             return int(backend._count_points(collection)), None
         if v.engine == "opensearch":

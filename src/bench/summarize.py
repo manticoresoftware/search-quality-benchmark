@@ -68,6 +68,8 @@ def _system_label(engine: str, mode: str) -> str:
         return "Qdrant full-text (qdrant)"
     if engine == "qdrant" and mode == "vector":
         return "Qdrant vector (qdrant)"
+    if engine == "qdrant" and mode == "hybrid":
+        return "Qdrant hybrid (qdrant)"
     if engine == "meilisearch" and mode == "fulltext":
         return "Meilisearch full-text (meilisearch)"
     if engine == "meilisearch" and mode == "vector":
@@ -646,7 +648,7 @@ def _profile_system_model_label(r: ArtifactRow) -> str:
 def _best_metric_bar_rows(rows: list[ArtifactRow], metric: str) -> list[tuple[str, float]]:
     best: dict[tuple[str, str, int | None], dict[str, float]] = {}
     for row in rows:
-        if row.mode not in {"fulltext", "vector"}:
+        if row.mode not in {"fulltext", "vector", "hybrid"}:
             continue
         if metric not in row.relevance:
             continue
@@ -714,6 +716,9 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
             lines.append("")
         show_docs = len({r.doc_count for r in dataset_rows}) > 1
         rel_keys = _collect_relevance_keys(dataset_rows)
+        lines.append("<details>")
+        lines.append("<summary>Full Relevance Table</summary>")
+        lines.append("")
         rel_cols = ["Run ID", "Profile/System/Model"]
         if show_docs:
             rel_cols.append("Docs")
@@ -737,7 +742,12 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
                 "| " + " | ".join(row_vals) + " |"
             )
         lines.append("")
+        lines.append("</details>")
+        lines.append("")
         lines.append(f"## Query Performance for {_dataset_label(dataset)}")
+        lines.append("")
+        lines.append("<details>")
+        lines.append("<summary>Full Query Performance Table</summary>")
         lines.append("")
         perf_cols = ["Run ID", "Profile/System/Model"]
         if show_docs:
@@ -770,6 +780,8 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
             lines.append(
                 "| " + " | ".join(row_vals) + " |"
             )
+        lines.append("")
+        lines.append("</details>")
         lines.append("")
 
     lines.append(metric_definitions_markdown().strip())

@@ -161,7 +161,7 @@ def test_render_combined_report_includes_ndcg_chart_best_per_engine_mode_docs() 
     assert report.index("qdrant / vector / 8841823") < report.index("manticore / full-text / 250000")
     assert "0.4000" in report
     assert "0.5500" in report
-    assert "| meilisearch / hybrid / 250000 |" not in report
+    assert "| meilisearch / hybrid / 250000 |" in report
 
 
 def test_render_combined_report_hides_docs_when_constant_but_keeps_when_mixed() -> None:

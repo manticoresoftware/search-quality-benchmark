@@ -22,10 +22,22 @@ class IngestStats:
     retry_reasons: dict[str, int] = field(default_factory=dict)
 
     def note_error(self, exc: Exception) -> None:
-        msg = str(exc).strip().replace("\n", " ")
-        if not msg:
-            msg = exc.__class__.__name__
-        reason = f"{exc.__class__.__name__}: {msg}"
+        if isinstance(exc, pymysql.err.InterfaceError) and tuple(getattr(exc, "args", ())) == (0, ""):
+            reason = "Manticore SQL connection dropped during batch insert"
+        elif isinstance(exc, pymysql.MySQLError):
+            args = tuple(getattr(exc, "args", ()))
+            if len(args) >= 2 and isinstance(args[0], int):
+                code = int(args[0])
+                msg = str(args[1]).strip().replace("\n", " ")
+                reason = f"Manticore SQL error {code}: {msg}" if msg else f"Manticore SQL error {code}"
+            else:
+                msg = str(exc).strip().replace("\n", " ")
+                reason = f"Manticore SQL error: {msg}" if msg else "Manticore SQL error"
+        else:
+            msg = str(exc).strip().replace("\n", " ")
+            if not msg:
+                msg = exc.__class__.__name__
+            reason = f"{exc.__class__.__name__}: {msg}"
         if len(reason) > 220:
             reason = reason[:219] + "…"
         self.last_error = reason
@@ -194,6 +206,7 @@ class ManticoreClient:
                         "failed_batches": stats.failed_batches,
                         "retried_batches": stats.retried_batches,
                         "last_error": stats.last_error,
+                        "error_reasons": dict(stats.retry_reasons),
                     }
                     if progress_meta:
                         payload.update(progress_meta)
@@ -212,6 +225,7 @@ class ManticoreClient:
                     "failed_batches": stats.failed_batches,
                     "retried_batches": stats.retried_batches,
                     "last_error": stats.last_error,
+                    "error_reasons": dict(stats.retry_reasons),
                 }
                 if progress_meta:
                     payload.update(progress_meta)
@@ -283,6 +297,7 @@ class ManticoreClient:
                         "failed_batches": stats.failed_batches,
                         "retried_batches": stats.retried_batches,
                         "last_error": stats.last_error,
+                        "error_reasons": dict(stats.retry_reasons),
                     }
                     if progress_meta:
                         payload.update(progress_meta)
@@ -303,6 +318,7 @@ class ManticoreClient:
                     "failed_batches": stats.failed_batches,
                     "retried_batches": stats.retried_batches,
                     "last_error": stats.last_error,
+                    "error_reasons": dict(stats.retry_reasons),
                 }
                 if progress_meta:
                     payload.update(progress_meta)

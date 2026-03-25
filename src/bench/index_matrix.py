@@ -69,6 +69,17 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         if engine == "opensearch":
             return f"{cfg.manticore.vector_model} [field:{cfg.opensearch.vector_field}]"
         return cfg.manticore.vector_model
+    if mode == "hybrid":
+        if engine == "manticore":
+            return (cfg.manticore.fulltext_options or "").strip() or "(manticore hybrid)"
+        if engine == "meilisearch":
+            extra = [f"embedder:{cfg.meilisearch.embedder_name}", f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}"]
+            if bool(cfg.meilisearch.binary_quantized):
+                extra.append("q=1bit")
+            return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+        if engine == "opensearch":
+            return f"{cfg.manticore.vector_model} [textBoost:{float(cfg.opensearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.opensearch.hybrid_vector_boost):.2f}]"
+        return f"{cfg.manticore.vector_model} [fusion=rrf]"
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
     if engine == "meilisearch":
@@ -85,6 +96,63 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
     return "Qdrant/bm25"
 
 
+def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
+    if engine == "manticore":
+        return cfg.manticore.fulltext_table if mode in ("fulltext", "hybrid") else cfg.manticore.vector_table
+    if engine == "meilisearch":
+        base = str(cfg.meilisearch.index_name or "").strip()
+        return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.meilisearch.vector_index}"
+    if engine == "opensearch":
+        base = str(cfg.opensearch.index_name or "").strip()
+        return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.opensearch.vector_index}"
+    return cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
+
+
+def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
+    if engine == "manticore":
+        # Native Manticore hybrid indexing only makes sense for explicit profiles that
+        # point both full-text and vector settings at the same combined table.
+        # The plain base Manticore config normally has different full-text/vector tables,
+        # which should not synthesize a fake hybrid row in `bench index`.
+        return False
+    hybrid_target = _index_target_name(cfg, engine, "hybrid")
+    vector_target = _index_target_name(cfg, engine, "vector")
+    return bool(hybrid_target) and hybrid_target != vector_target
+
+
+def _hybrid_target_overrides_base(targets_by_name: dict[str, Any], target_cfg: Any) -> bool:
+    base_name = str(getattr(target_cfg, "base_name", "") or "").strip()
+    if not base_name:
+        return False
+    base_target = targets_by_name.get(base_name)
+    if base_target is None:
+        return False
+    engine = str(target_cfg.type)
+    cfg = target_cfg.cfg
+    base_cfg = base_target.cfg
+    if engine == "manticore":
+        return (
+            str(cfg.manticore.fulltext_table) != str(base_cfg.manticore.fulltext_table)
+            or str(cfg.manticore.vector_table) != str(base_cfg.manticore.vector_table)
+        )
+    if engine == "qdrant":
+        return (
+            str(cfg.qdrant.bm25_collection) != str(base_cfg.qdrant.bm25_collection)
+            or str(cfg.qdrant.dense_collection) != str(base_cfg.qdrant.dense_collection)
+        )
+    if engine == "meilisearch":
+        return (
+            str(cfg.meilisearch.index_name) != str(base_cfg.meilisearch.index_name)
+            or str(cfg.meilisearch.vector_index) != str(base_cfg.meilisearch.vector_index)
+        )
+    if engine == "opensearch":
+        return (
+            str(cfg.opensearch.index_name) != str(base_cfg.opensearch.index_name)
+            or str(cfg.opensearch.vector_index) != str(base_cfg.opensearch.vector_index)
+        )
+    return False
+
+
 def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVariant]:
     out: list[IndexVariant] = []
     for path in paths:
@@ -92,23 +160,23 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             targets = load_engine_targets(path)
         except Exception:
             continue
+        targets_by_name = {t.name: t for t in targets}
         for target_cfg in targets:
             cfg = target_cfg.cfg
             engine = target_cfg.type
+            show_hybrid = _show_hybrid_index_target(cfg, engine)
             if target_cfg.mode_filter == "hybrid":
+                show_hybrid = show_hybrid or _hybrid_target_overrides_base(targets_by_name, target_cfg)
+            if target_cfg.mode_filter == "hybrid" and not show_hybrid:
                 continue
-            modes = [target_cfg.mode_filter] if target_cfg.mode_filter in ("fulltext", "vector") else ["fulltext", "vector"]
+            if target_cfg.mode_filter in ("fulltext", "vector", "hybrid"):
+                modes = [target_cfg.mode_filter]
+            else:
+                modes = ["fulltext", "vector"]
+                if show_hybrid:
+                    modes.append("hybrid")
             for mode in modes:
-                if engine == "manticore":
-                    target = cfg.manticore.fulltext_table if mode == "fulltext" else cfg.manticore.vector_table
-                elif engine == "meilisearch":
-                    base = str(cfg.meilisearch.index_name or "").strip()
-                    target = f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.meilisearch.vector_index}"
-                elif engine == "opensearch":
-                    base = str(cfg.opensearch.index_name or "").strip()
-                    target = f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.opensearch.vector_index}"
-                else:
-                    target = cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
+                target = _index_target_name(cfg, engine, mode)
                 out.append(
                     IndexVariant(
                         config_path=str(path),
@@ -145,7 +213,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             continue
 
     engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3}
-    mode_order = {"fulltext": 0, "vector": 1}
+    mode_order = {"fulltext": 0, "vector": 1, "hybrid": 2}
     return sorted(
         list(dedup.values()),
         key=lambda v: (engine_order.get(v.engine, 99), mode_order.get(v.mode, 99), v.entry, v.model, v.target),
