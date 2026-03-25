@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import sys
+import re
 from typing import Any
 
 from .config import AppConfig, load_engine_targets
@@ -24,6 +25,11 @@ from .table_filters import (
 from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
 
 _fit = fit_text
+_CANONICAL_PROFILE_RE = re.compile(r"^[a-z0-9_]+_(manticore|qdrant|meilisearch|opensearch)_(fulltext|vector|hybrid)$")
+
+
+def _is_canonical_profile_name(name: str) -> bool:
+    return bool(_CANONICAL_PROFILE_RE.match(str(name or "").strip()))
 
 
 @dataclass
@@ -37,6 +43,8 @@ class IndexVariant:
     target: str
     cfg: AppConfig
     base_entry: str = ""
+    target_kind: str = ""
+    used_by: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,16 @@ def _display_mode(mode: str) -> str:
     return mode
 
 
+def _display_target_kind(kind: str) -> str:
+    if kind == "combined":
+        return "combined"
+    if kind == "fulltext":
+        return "full-text"
+    if kind == "vector":
+        return "vector"
+    return kind
+
+
 def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
     if mode == "vector":
         if engine == "meilisearch":
@@ -71,7 +89,7 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         return cfg.manticore.vector_model
     if mode == "hybrid":
         if engine == "manticore":
-            return (cfg.manticore.fulltext_options or "").strip() or "(manticore hybrid)"
+            return (cfg.manticore.fulltext_options or "").strip()
         if engine == "meilisearch":
             extra = [f"embedder:{cfg.meilisearch.embedder_name}", f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}"]
             if bool(cfg.meilisearch.binary_quantized):
@@ -101,10 +119,10 @@ def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
         return cfg.manticore.fulltext_table if mode in ("fulltext", "hybrid") else cfg.manticore.vector_table
     if engine == "meilisearch":
         base = str(cfg.meilisearch.index_name or "").strip()
-        return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.meilisearch.vector_index}"
+        return base
     if engine == "opensearch":
         base = str(cfg.opensearch.index_name or "").strip()
-        return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.opensearch.vector_index}"
+        return base
     return cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
 
 
@@ -120,64 +138,37 @@ def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
     return bool(hybrid_target) and hybrid_target != vector_target
 
 
-def _hybrid_target_overrides_base(targets_by_name: dict[str, Any], target_cfg: Any) -> bool:
-    base_name = str(getattr(target_cfg, "base_name", "") or "").strip()
-    if not base_name:
-        return False
-    base_target = targets_by_name.get(base_name)
-    if base_target is None:
-        return False
-    engine = str(target_cfg.type)
-    cfg = target_cfg.cfg
-    base_cfg = base_target.cfg
-    if engine == "manticore":
-        return (
-            str(cfg.manticore.fulltext_table) != str(base_cfg.manticore.fulltext_table)
-            or str(cfg.manticore.vector_table) != str(base_cfg.manticore.vector_table)
-        )
-    if engine == "qdrant":
-        return (
-            str(cfg.qdrant.bm25_collection) != str(base_cfg.qdrant.bm25_collection)
-            or str(cfg.qdrant.dense_collection) != str(base_cfg.qdrant.dense_collection)
-        )
-    if engine == "meilisearch":
-        return (
-            str(cfg.meilisearch.index_name) != str(base_cfg.meilisearch.index_name)
-            or str(cfg.meilisearch.vector_index) != str(base_cfg.meilisearch.vector_index)
-        )
-    if engine == "opensearch":
-        return (
-            str(cfg.opensearch.index_name) != str(base_cfg.opensearch.index_name)
-            or str(cfg.opensearch.vector_index) != str(base_cfg.opensearch.vector_index)
-        )
-    return False
-
-
 def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVariant]:
-    out: list[IndexVariant] = []
+    raw_rows: list[IndexVariant] = []
     for path in paths:
         try:
             targets = load_engine_targets(path)
         except Exception:
             continue
-        targets_by_name = {t.name: t for t in targets}
         for target_cfg in targets:
+            if not _is_canonical_profile_name(target_cfg.name):
+                continue
             cfg = target_cfg.cfg
             engine = target_cfg.type
             show_hybrid = _show_hybrid_index_target(cfg, engine)
-            if target_cfg.mode_filter == "hybrid":
-                show_hybrid = show_hybrid or _hybrid_target_overrides_base(targets_by_name, target_cfg)
-            if target_cfg.mode_filter == "hybrid" and not show_hybrid:
-                continue
+            if (
+                target_cfg.mode_filter == "hybrid"
+                and engine == "manticore"
+                and str(cfg.manticore.fulltext_table) == str(cfg.manticore.vector_table)
+            ):
+                show_hybrid = True
             if target_cfg.mode_filter in ("fulltext", "vector", "hybrid"):
-                modes = [target_cfg.mode_filter]
+                if target_cfg.mode_filter == "hybrid" and not show_hybrid:
+                    modes = ["vector"]
+                else:
+                    modes = [target_cfg.mode_filter]
             else:
                 modes = ["fulltext", "vector"]
                 if show_hybrid:
                     modes.append("hybrid")
             for mode in modes:
                 target = _index_target_name(cfg, engine, mode)
-                out.append(
+                raw_rows.append(
                     IndexVariant(
                         config_path=str(path),
                         entry=target_cfg.name,
@@ -198,25 +189,61 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                         cfg=cfg,
                     )
                 )
+    grouped: dict[tuple[str, str], list[IndexVariant]] = {}
+    for v in raw_rows:
+        grouped.setdefault((v.engine, v.target), []).append(v)
 
-    dedup: dict[tuple[str, str, str, int, str], IndexVariant] = {}
-    for v in out:
-        key = (v.engine, v.mode, v.model, v.batch_size, v.target)
-        prev = dedup.get(key)
-        if prev is None:
-            dedup[key] = v
-            continue
-        if prev.entry == v.base_entry:
-            dedup[key] = v
-            continue
-        if v.entry == prev.base_entry:
-            continue
+    def _preferred_mode(rows: list[IndexVariant]) -> str:
+        modes = {r.mode for r in rows}
+        if "hybrid" in modes and rows[0].engine == "manticore":
+            return "hybrid"
+        if "vector" in modes:
+            return "vector"
+        return "fulltext"
+
+    def _target_kind(rows: list[IndexVariant]) -> str:
+        modes = {r.mode for r in rows}
+        if rows[0].engine == "manticore" and {"fulltext", "vector", "hybrid"} & modes and len(modes) > 1:
+            return "combined"
+        if "vector" in modes and "fulltext" in modes:
+            return "combined"
+        if "vector" in modes:
+            return "vector"
+        return "fulltext"
+
+    def _pick_repr(rows: list[IndexVariant], preferred_mode: str) -> IndexVariant:
+        exact = [r for r in rows if r.mode == preferred_mode]
+        pool = exact or rows
+        pool.sort(key=lambda r: (r.entry != f"{r.target}_{preferred_mode}", r.entry))
+        return pool[0]
+
+    out: list[IndexVariant] = []
+    for (_, _), rows in grouped.items():
+        preferred_mode = _preferred_mode(rows)
+        kind = _target_kind(rows)
+        rep = _pick_repr(rows, preferred_mode)
+        used_by = tuple(sorted(r.entry for r in rows))
+        out.append(
+            IndexVariant(
+                config_path=rep.config_path,
+                entry=rep.entry,
+                base_entry=rep.base_entry,
+                engine=rep.engine,
+                mode=preferred_mode,
+                model=rep.model,
+                batch_size=rep.batch_size,
+                target=rep.target,
+                cfg=rep.cfg,
+                target_kind=kind,
+                used_by=used_by,
+            )
+        )
 
     engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3}
-    mode_order = {"fulltext": 0, "vector": 1, "hybrid": 2}
+    kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
     return sorted(
-        list(dedup.values()),
-        key=lambda v: (engine_order.get(v.engine, 99), mode_order.get(v.mode, 99), v.entry, v.model, v.target),
+        out,
+        key=lambda v: (engine_order.get(v.engine, 99), kind_order.get(v.target_kind or "", 99), v.target, v.entry),
     )
 
 
@@ -309,10 +336,10 @@ def _draw_row(
 
     columns: list[tuple[str, int, int]] = [
         ("[x]" if selected else "[ ]", 0, widths["sel"]),
-        (v.entry, attrs, widths["entry"]),
         (v.engine, attrs | color_engine, widths["engine"]),
-        (_display_mode(v.mode), attrs | color_mode, widths["mode"]),
         (v.target, attrs | color_target, widths["target"]),
+        (_display_target_kind(v.target_kind or v.mode), attrs | color_mode, widths["kind"]),
+        (", ".join(v.used_by or (v.entry,)), attrs, widths["used_by"]),
         (v.model, attrs, widths["model"]),
         (str(v.batch_size), attrs, widths["batch"]),
     ]
@@ -391,10 +418,12 @@ def _details_lines(
 
     lines: list[str] = [
         "Resolved Config",
-        f"profile: {v.entry}",
+        f"index action entry: {v.entry}",
         f"engine: {v.engine}",
-        f"mode: {_display_mode(v.mode)}",
+        f"index mode: {_display_mode(v.mode)}",
         f"target: {v.target}",
+        f"target kind: {_display_target_kind(v.target_kind or v.mode)}",
+        f"used by: {', '.join(v.used_by or (v.entry,))}",
     ]
     if target_status is not None:
         state_label = {
@@ -485,14 +514,14 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
 
         widths = {
             "sel": 3,
-            "entry": 18,
             "engine": 10,
-            "mode": 9,
             "target": 22,
-            "model": 48,
+            "kind": 10,
+            "used_by": 38,
+            "model": 38,
             "batch": 8,
         }
-        sort_cols = ["entry", "engine", "mode", "target", "model", "batch"]
+        sort_cols = ["engine", "target", "kind", "used_by", "model", "batch"]
         sort_idx = 0
         sort_key = sort_cols[sort_idx]
         sort_desc = False
@@ -512,29 +541,29 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             return 0 if mode == "fulltext" else (1 if mode == "vector" else 99)
 
         def _sort_value(v: IndexVariant, col: str) -> Any:
-            if col == "entry":
-                return v.entry.lower()
             if col == "engine":
                 return v.engine.lower()
-            if col == "mode":
-                return _mode_ord(v.mode)
             if col == "target":
                 return v.target.lower()
+            if col == "kind":
+                return (0 if v.target_kind == "fulltext" else 1 if v.target_kind == "vector" else 2)
+            if col == "used_by":
+                return ",".join(v.used_by).lower()
             if col == "model":
                 return v.model.lower()
             if col == "batch":
                 return int(v.batch_size)
-            return v.entry.lower()
+            return v.target.lower()
 
         def _filter_value(v: IndexVariant, col: str) -> Any:
-            if col == "entry":
-                return v.entry
             if col == "engine":
                 return v.engine
-            if col == "mode":
-                return _display_mode(v.mode)
             if col == "target":
                 return v.target
+            if col == "kind":
+                return _display_target_kind(v.target_kind or v.mode)
+            if col == "used_by":
+                return ", ".join(v.used_by or (v.entry,))
             if col == "model":
                 return v.model
             if col == "batch":
@@ -573,10 +602,10 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                 y=1,
                 cols=[
                     ("SEL", "sel"),
-                    ("PROFILE", "entry"),
                     ("ENGINE", "engine"),
-                    ("MODE", "mode"),
                     ("TARGET", "target"),
+                    ("KIND", "kind"),
+                    ("USED BY", "used_by"),
                     ("MODEL/OPTS", "model"),
                     ("BATCH", "batch"),
                 ],

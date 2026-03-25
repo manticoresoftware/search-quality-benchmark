@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -26,6 +27,11 @@ from .table_filters import (
 from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
 
 _fit = fit_text
+_CANONICAL_PROFILE_RE = re.compile(r"^[a-z0-9_]+_(manticore|qdrant|meilisearch|opensearch)_(fulltext|vector|hybrid)$")
+
+
+def _is_canonical_profile_name(name: str) -> bool:
+    return bool(_CANONICAL_PROFILE_RE.match(str(name or "").strip()))
 
 
 @dataclass
@@ -155,6 +161,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
         except Exception:
             continue
         for target in targets:
+            if not _is_canonical_profile_name(target.name):
+                continue
             cfg = target.cfg
             engine = target.type
             modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch") else ["fulltext", "vector"])
@@ -169,7 +177,9 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
-                    if engine == "qdrant":
+                    if engine == "manticore":
+                        model_or_ranker = _manticore_vector_label(cfg).replace(cfg.manticore.vector_model, f"{cfg.manticore.vector_model} [fusion=rrf]", 1)
+                    elif engine == "qdrant":
                         model_or_ranker = _qdrant_hybrid_label(cfg)
                     else:
                         model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
@@ -212,9 +222,16 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         cfg=cfg,
                     )
                 )
-    dedup: dict[tuple[str, str, str, str], RunVariant] = {}
+    dedup: dict[tuple[str, str, str, str, str, int], RunVariant] = {}
     for v in variants:
-        key = (v.engine, v.mode, v.model, _variant_target_name(v))
+        key = (
+            v.engine,
+            v.mode,
+            v.model,
+            _variant_target_name(v),
+            str(v.cfg.dataset.source or ""),
+            int(v.cfg.dataset.max_docs or 0),
+        )
         prev = dedup.get(key)
         if prev is None:
             dedup[key] = v
@@ -347,9 +364,9 @@ def _variant_target_name(v: RunVariant) -> str:
         return v.cfg.qdrant.dense_collection
     if v.engine == "opensearch":
         base = str(v.cfg.opensearch.index_name or "").strip()
-        return f"{base}_lexical" if v.mode == "fulltext" else f"{base}_{v.cfg.opensearch.vector_index}"
+        return base
     base = str(v.cfg.meilisearch.index_name or "").strip()
-    return f"{base}_lexical" if v.mode == "fulltext" else f"{base}_{v.cfg.meilisearch.vector_index}"
+    return base
 
 
 def is_variant_runnable(v: RunVariant) -> bool:

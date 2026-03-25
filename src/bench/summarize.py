@@ -64,6 +64,8 @@ def _system_label(engine: str, mode: str) -> str:
         return "Manticore full-text (manticore)"
     if engine == "manticore" and mode == "vector":
         return "Manticore vector (manticore)"
+    if engine == "manticore" and mode == "hybrid":
+        return "Manticore hybrid (manticore)"
     if engine == "qdrant" and mode == "fulltext":
         return "Qdrant full-text (qdrant)"
     if engine == "qdrant" and mode == "vector":

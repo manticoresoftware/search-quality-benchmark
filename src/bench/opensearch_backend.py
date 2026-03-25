@@ -57,12 +57,10 @@ class OpenSearchBackend:
             ) from exc
 
     def lexical_index_name(self) -> str:
-        base = str(self.cfg.index_name or "").strip()
-        return f"{base}_lexical"
+        return str(self.cfg.index_name or "").strip()
 
     def vector_index_name(self) -> str:
-        base = str(self.cfg.index_name or "").strip()
-        return f"{base}_{self.cfg.vector_index}"
+        return str(self.cfg.index_name or "").strip()
 
     def index_exists(self, index_name: str) -> bool:
         return bool(self.client.indices.exists(index=index_name))

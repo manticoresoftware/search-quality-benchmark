@@ -88,34 +88,29 @@ def render_configmap_markdown(config_path: str | Path) -> str:
     lines.append(f"- Config: `{Path(config_path)}`")
     lines.append(f"- Profiles: `{len(targets)}`")
     lines.append("")
-    lines.append("```mermaid")
-    lines.append("flowchart TD")
-    for engine in ("manticore", "qdrant", "meilisearch", "opensearch"):
-        lines.append(f"    classDef {engine} fill:{_engine_color(engine)},stroke:#666,color:#111;")
-    lines.append("")
-
     for engine in ("manticore", "qdrant", "meilisearch", "opensearch"):
         entries = groups.get(engine, [])
         if not entries:
             continue
-        lines.append(f'    subgraph sg_{engine}["{engine}"]')
+        lines.append(f"## {engine}")
+        lines.append("")
+        lines.append("```mermaid")
+        lines.append("flowchart TD")
+        lines.append(f"    classDef {engine} fill:{_engine_color(engine)},stroke:#666,color:#111;")
+        lines.append("")
         for target in entries:
             nid = _node_id(target.name)
             label = _node_label(target, entry_defs)
-            lines.append(f'        {nid}["{label}"]')
-        lines.append("    end")
+            lines.append(f'    {nid}["{label}"]')
         lines.append("")
-
-    for target in targets:
-        if target.base_name:
-            lines.append(f"    {_node_id(target.base_name)} --> {_node_id(target.name)}")
-    if any(t.base_name for t in targets):
+        for target in entries:
+            if target.base_name:
+                lines.append(f"    {_node_id(target.base_name)} --> {_node_id(target.name)}")
         lines.append("")
-
-    for target in targets:
-        lines.append(f"    class {_node_id(target.name)} {target.type};")
-    lines.append("```")
-    lines.append("")
+        for target in entries:
+            lines.append(f"    class {_node_id(target.name)} {target.type};")
+        lines.append("```")
+        lines.append("")
     lines.append("Legend:")
     lines.append("- Arrow means `base -> derived profile`.")
     lines.append("- Each node shows the profile name plus the YAML keys explicitly defined on that entry.")

@@ -86,6 +86,22 @@ def _run_single_query_manticore(
                 OPTION {option_clause}
                 """
             )
+        elif mode == "hybrid":
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Manticore hybrid search.")
+            qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, query_text))
+            vector_literal = "(" + ",".join(f"{float(x):.8f}" for x in query_vector) + ")"
+            knn_expr = _manticore_knn_predicate(cfg, vector_literal)
+            option_clause = _manticore_hybrid_option_clause(cfg)
+            rows = client.query(
+                f"""
+                SELECT doc_id, hybrid_score() AS score
+                FROM {cfg.manticore.vector_table}
+                WHERE MATCH({qlit}) AND {knn_expr}
+                LIMIT {cfg.benchmark.limit}
+                OPTION {option_clause}
+                """
+            )
         else:
             if not query_vector:
                 raise RuntimeError("Missing query vector for Manticore vector search.")
@@ -150,6 +166,24 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
                             WHERE MATCH({qlit})
                             LIMIT {cfg.benchmark.limit}
                             OPTION {option_clause}
+                            """
+                        )
+                    elif mode == "hybrid":
+                        qvec = _get_query_vectors_from_cache_or_embed(cfg, [query_text_for_mode(t, "vector")]).get(
+                            query_text_for_mode(t, "vector"), []
+                        )
+                        if not qvec:
+                            raise RuntimeError("Missing query vector for diagnostics.")
+                        qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, qtext))
+                        vector_literal = "(" + ",".join(f"{float(x):.8f}" for x in qvec) + ")"
+                        knn_expr = _manticore_knn_predicate(cfg, vector_literal)
+                        client.query(
+                            f"""
+                            SELECT doc_id
+                            FROM {cfg.manticore.vector_table}
+                            WHERE MATCH({qlit}) AND {knn_expr}
+                            LIMIT {cfg.benchmark.limit}
+                            OPTION {_manticore_hybrid_option_clause(cfg)}
                             """
                         )
                     else:
@@ -221,6 +255,14 @@ def _manticore_vector_option_clause(cfg: AppConfig) -> str:
     return normalize_search_options(cfg.manticore.search_options)
 
 
+def _manticore_hybrid_option_clause(cfg: AppConfig) -> str:
+    parts = [f"max_matches={max(cfg.benchmark.limit * 5, 1000)}", "fusion_method='rrf'"]
+    vector_opts = _manticore_vector_option_clause(cfg)
+    if vector_opts:
+        parts.append(vector_opts)
+    return ", ".join(parts)
+
+
 def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
     if engine == "manticore":
         return cfg.manticore.fulltext_table if mode == "fulltext" else cfg.manticore.vector_table
@@ -232,9 +274,9 @@ def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
         return cfg.qdrant.dense_collection
     if engine == "opensearch":
         base = str(cfg.opensearch.index_name or "").strip()
-        return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.opensearch.vector_index}"
+        return base
     base = str(cfg.meilisearch.index_name or "").strip()
-    return f"{base}_lexical" if mode == "fulltext" else f"{base}_{cfg.meilisearch.vector_index}"
+    return base
 
 
 def _manticore_fulltext_ranker_label(cfg: AppConfig) -> str:
@@ -790,9 +832,9 @@ def run_benchmark(
     run_at_unix = int(time())
 
     if engine == "manticore":
-        if mode not in ("fulltext", "vector", "both"):
-            raise ValueError("For engine=manticore, mode must be one of: fulltext, vector, both")
-        modes = [mode] if mode in ("fulltext", "vector") else ["fulltext", "vector"]
+        if mode not in ("fulltext", "vector", "hybrid", "both"):
+            raise ValueError("For engine=manticore, mode must be one of: fulltext, vector, hybrid, both")
+        modes = [mode] if mode in ("fulltext", "vector", "hybrid") else ["fulltext", "vector"]
     elif engine == "qdrant":
         if mode not in ("fulltext", "vector", "hybrid", "both"):
             raise ValueError("For engine=qdrant, mode must be one of: fulltext, vector, hybrid, both")
@@ -840,7 +882,15 @@ def run_benchmark(
                     t["topic_id"],
                     qtext,
                     repeat_idx=-1,
-                    query_vector=query_vectors.get(qtext, []) if m == "vector" else None,
+                    query_vector=(
+                        query_vectors.get(qtext, [])
+                        if m == "vector"
+                        else (
+                            query_vectors.get(vector_query_by_topic_id.get(str(t["topic_id"]), qtext), [])
+                            if m == "hybrid"
+                            else None
+                        )
+                    ),
                 )
             else:
                 if engine == "meilisearch":
@@ -896,7 +946,15 @@ def run_benchmark(
                     tid,
                     q,
                     r,
-                    query_vectors.get(q, []) if m == "vector" else None,
+                    (
+                        query_vectors.get(q, [])
+                        if m == "vector"
+                        else (
+                            query_vectors.get(vector_query_by_topic_id.get(str(tid), q), [])
+                            if m == "hybrid"
+                            else None
+                        )
+                    ),
                 )
                 for (m, tid, q, r) in tasks
             ]
@@ -1078,7 +1136,9 @@ def run_benchmark(
         else:
             model_label = _meilisearch_vector_label(cfg)
     elif mode == "hybrid":
-        if engine == "qdrant":
+        if engine == "manticore":
+            model_label = _manticore_vector_label(cfg).replace(cfg.manticore.vector_model, f"{cfg.manticore.vector_model} [fusion=rrf]", 1)
+        elif engine == "qdrant":
             model_label = _qdrant_hybrid_label(cfg)
         elif engine == "opensearch":
             model_label = _opensearch_hybrid_label(cfg)
