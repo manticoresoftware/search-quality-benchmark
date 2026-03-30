@@ -277,7 +277,7 @@ manticore_vector_only:
 
 Quick start (Docker):
 ```bash
-docker run -d --name trec-manticore \
+docker run -d --name manticore \
   -p 9306:9306 -p 9308:9308 \
   -v "$(pwd)/data/manticore_storage:/var/lib/manticore" \
   manticoresearch/manticore:latest
