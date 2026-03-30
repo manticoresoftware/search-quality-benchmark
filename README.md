@@ -329,6 +329,9 @@ Note:
 
 Quick start (Docker):
 ```bash
+mkdir -p "$(pwd)/data/opensearch_data"
+chmod -R 777 "$(pwd)/data/opensearch_data"
+
 docker run --rm -d --name opensearch \
   -p 9200:9200 -p 9600:9600 \
   -e discovery.type=single-node \

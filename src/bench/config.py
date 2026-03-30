@@ -271,10 +271,32 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
 
 
 def _raw_config(path: str | Path) -> dict[str, Any]:
-    cfg_path = Path(path)
-    if cfg_path.exists():
-        return yaml.safe_load(cfg_path.read_text()) or {}
-    return {}
+    return _raw_config_with_includes(path)
+
+
+def _raw_config_with_includes(path: str | Path, _seen: set[Path] | None = None) -> dict[str, Any]:
+    cfg_path = Path(path).resolve()
+    if not cfg_path.exists():
+        return {}
+    seen = _seen if _seen is not None else set()
+    if cfg_path in seen:
+        raise ValueError(f"Config include cycle detected at: {cfg_path}")
+    seen.add(cfg_path)
+    raw = yaml.safe_load(cfg_path.read_text()) or {}
+    include_paths = raw.pop("include_configs", None)
+    merged: dict[str, Any] = {}
+    if isinstance(include_paths, list):
+        for item in include_paths:
+            inc = str(item or "").strip()
+            if not inc:
+                continue
+            inc_path = (cfg_path.parent / inc).resolve()
+            merged = _deep_update(merged, _raw_config_with_includes(inc_path, seen))
+    elif include_paths is not None:
+        raise ValueError(f"include_configs must be a list in config: {cfg_path}")
+    merged = _deep_update(merged, raw)
+    seen.remove(cfg_path)
+    return merged
 
 
 def load_engine_targets(path: str | Path) -> list[EngineTarget]:
