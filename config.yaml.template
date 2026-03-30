@@ -12,6 +12,21 @@ dataset:
   max_docs: 0
   keep_qrels_docs: true
 
+embedding:
+  provider: "openai"
+  model: "openai/text-embedding-3-large"
+  api_key: ""
+  api_key_file: ""
+  base_url: ""
+  site_url: ""
+  app_name: "trec-covid-bench"
+  price_per_million_input_tokens: 0.0
+  max_batch_texts: 32
+  concurrency: 4
+  retry_attempts: 5
+  retry_backoff_seconds: 1.0
+  timeout_seconds: 120
+
 benchmark:
   limit: 100
   warmup_queries: 5
@@ -38,7 +53,6 @@ manticore:
   fulltext_table: "trec_covid_manticore"
   vector_table: "trec_covid_manticore"
   vector_field: "embedding"
-  vector_model: "openai/text-embedding-3-large"
   vector_from: "title,abstract"
   vector_similarity: "cosine"
   vector_quantization: ""
@@ -172,6 +186,28 @@ trec_covid_manticore_hybrid:
   batch_size: 250
   query_timeout_seconds: 180
 
+trec_covid_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  fulltext_table: "trec_covid_manticore_qdrantish"
+  vector_table: "trec_covid_manticore_qdrantish"
+  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
+  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
+  fulltext_query_mode: "or"
+  fulltext_query_variant: "long"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_manticore_hybrid_qdrantish:
+  base: "trec_covid_manticore_fulltext_qdrantish"
+  type: "hybrid"
+  fulltext_table: "trec_covid_manticore_qdrantish"
+  vector_table: "trec_covid_manticore_qdrantish"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
 trec_covid_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
@@ -225,7 +261,7 @@ msmarco_passage_manticore_fulltext:
   source: "msmarco-passage/dev/small"
   fulltext_table: "msmarco_passage_manticore"
   vector_table: "msmarco_passage_manticore"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
   search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
   fulltext_query_mode: "or"
@@ -235,7 +271,7 @@ msmarco_passage_manticore_vector:
   source: "msmarco-passage/dev/small"
   fulltext_table: "msmarco_passage_manticore"
   vector_table: "msmarco_passage_manticore"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_manticore_hybrid:
   base: "msmarco_passage_manticore_fulltext"
@@ -243,7 +279,32 @@ msmarco_passage_manticore_hybrid:
   type: "hybrid"
   fulltext_table: "msmarco_passage_manticore"
   vector_table: "msmarco_passage_manticore"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+msmarco_passage_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  fulltext_table: "msmarco_passage_manticore_qdrantish"
+  vector_table: "msmarco_passage_manticore_qdrantish"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
+  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
+  fulltext_query_mode: "or"
+  fulltext_query_variant: "long"
+
+msmarco_passage_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "msmarco-passage/dev/small"
+  type: "hybrid"
+  fulltext_table: "msmarco_passage_manticore_qdrantish"
+  vector_table: "msmarco_passage_manticore_qdrantish"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   vector_quantization: "1bit"
   vector_search_oversampling: 3.0
   vector_search_rescore: 1
@@ -255,41 +316,41 @@ msmarco_passage_qdrant_fulltext:
   type: "fulltext"
   source: "msmarco-passage/dev/small"
   bm25_collection: "msmarco_passage_qdrant_fulltext"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "msmarco-passage/dev/small"
   dense_collection: "msmarco_passage_qdrant_vector"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "msmarco-passage/dev/small"
   bm25_collection: "msmarco_passage_qdrant_fulltext"
   dense_collection: "msmarco_passage_qdrant_vector"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_meilisearch_fulltext:
   base: "meilisearch"
   type: "fulltext"
   source: "msmarco-passage/dev/small"
   index_name: "msmarco_passage_meilisearch"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   searchable_attributes: ["abstract", "title"]
 
 msmarco_passage_meilisearch_vector:
   base: "meilisearch_vector_1bit"
   source: "msmarco-passage/dev/small"
   index_name: "msmarco_passage_meilisearch"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   searchable_attributes: ["abstract", "title"]
 
 msmarco_passage_meilisearch_hybrid:
   base: "meilisearch_hybrid_1bit"
   source: "msmarco-passage/dev/small"
   index_name: "msmarco_passage_meilisearch"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   searchable_attributes: ["abstract", "title"]
 
 msmarco_passage_opensearch_fulltext:
@@ -297,7 +358,7 @@ msmarco_passage_opensearch_fulltext:
   type: "fulltext"
   source: "msmarco-passage/dev/small"
   index_name: "msmarco_passage_opensearch"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
 msmarco_passage_opensearch_vector:
@@ -305,7 +366,7 @@ msmarco_passage_opensearch_vector:
   type: "vector"
   source: "msmarco-passage/dev/small"
   index_name: "msmarco_passage_opensearch"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
 msmarco_passage_opensearch_hybrid:
@@ -313,7 +374,7 @@ msmarco_passage_opensearch_hybrid:
   type: "hybrid"
   source: "msmarco-passage/dev/small"
   index_name: "msmarco_passage_opensearch"
-  vector_cache_path: "vector_cache/msmarco-passage-openai.sqlite"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
 msmarco_lite_manticore_fulltext:
@@ -336,6 +397,20 @@ msmarco_lite_manticore_hybrid:
   keep_qrels_docs: true
   fulltext_table: "msmarco_lite_manticore"
   vector_table: "msmarco_lite_manticore"
+
+msmarco_lite_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore_qdrantish"
+  vector_table: "msmarco_lite_manticore_qdrantish"
+
+msmarco_lite_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore_qdrantish"
+  vector_table: "msmarco_lite_manticore_qdrantish"
 
 msmarco_lite_qdrant_fulltext:
   base: "msmarco_passage_qdrant_fulltext"
@@ -404,6 +479,14 @@ msmarco_trecdl_2019_manticore_hybrid:
   base: "msmarco_passage_manticore_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_qdrant_fulltext:
   base: "msmarco_passage_qdrant_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -450,6 +533,14 @@ msmarco_trecdl_2020_manticore_vector:
 
 msmarco_trecdl_2020_manticore_hybrid:
   base: "msmarco_passage_manticore_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_qdrant_fulltext:
@@ -512,6 +603,31 @@ nfcorpus_manticore_hybrid:
   type: "hybrid"
   fulltext_table: "nfcorpus_manticore"
   vector_table: "nfcorpus_manticore"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+nfcorpus_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  fulltext_table: "nfcorpus_manticore_qdrantish"
+  vector_table: "nfcorpus_manticore_qdrantish"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
+  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
+  fulltext_query_mode: "or"
+  fulltext_query_variant: "long"
+
+nfcorpus_manticore_hybrid_qdrantish:
+  base: "nfcorpus_manticore_fulltext_qdrantish"
+  source: "beir/nfcorpus/test"
+  type: "hybrid"
+  fulltext_table: "nfcorpus_manticore_qdrantish"
+  vector_table: "nfcorpus_manticore_qdrantish"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
   vector_quantization: "1bit"
   vector_search_oversampling: 3.0
@@ -610,6 +726,31 @@ acord_manticore_hybrid:
   batch_size: 250
   query_timeout_seconds: 180
 
+acord_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  fulltext_table: "acord_manticore_qdrantish"
+  vector_table: "acord_manticore_qdrantish"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
+  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
+  fulltext_query_mode: "or"
+  fulltext_query_variant: "long"
+
+acord_manticore_hybrid_qdrantish:
+  base: "acord_manticore_fulltext_qdrantish"
+  source: "hf-beir:theatticusproject/acord:test"
+  type: "hybrid"
+  fulltext_table: "acord_manticore_qdrantish"
+  vector_table: "acord_manticore_qdrantish"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
 acord_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
@@ -696,6 +837,31 @@ dbpedia_entity_manticore_hybrid:
   type: "hybrid"
   fulltext_table: "dbpedia_entity_manticore"
   vector_table: "dbpedia_entity_manticore"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 100
+  query_timeout_seconds: 300
+
+dbpedia_entity_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/dbpedia-entity/test"
+  fulltext_table: "dbpedia_entity_manticore_qdrantish"
+  vector_table: "dbpedia_entity_manticore_qdrantish"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
+  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
+  fulltext_query_mode: "or"
+  fulltext_query_variant: "long"
+
+dbpedia_entity_manticore_hybrid_qdrantish:
+  base: "dbpedia_entity_manticore_fulltext_qdrantish"
+  source: "beir/dbpedia-entity/test"
+  type: "hybrid"
+  fulltext_table: "dbpedia_entity_manticore_qdrantish"
+  vector_table: "dbpedia_entity_manticore_qdrantish"
   vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
   vector_quantization: "1bit"
   vector_search_oversampling: 3.0

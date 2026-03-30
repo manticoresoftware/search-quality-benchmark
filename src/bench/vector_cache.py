@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from array import array
 from dataclasses import dataclass
 from hashlib import md5
-import json
 import sqlite3
 from pathlib import Path
 from time import time
@@ -62,10 +62,14 @@ class VectorCache:
                 text_value TEXT NOT NULL,
                 status TEXT NOT NULL,
                 vector_json TEXT,
+                vector_blob BLOB,
                 updated_at INTEGER NOT NULL
             )
             """
         )
+        cols = {str(row[1]) for row in self.conn.execute("PRAGMA table_info(embeddings_cache)").fetchall()}
+        if "vector_blob" not in cols:
+            self.conn.execute("ALTER TABLE embeddings_cache ADD COLUMN vector_blob BLOB")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_cache_model ON embeddings_cache(model)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_cache_status ON embeddings_cache(status)")
         self.conn.commit()
@@ -73,20 +77,29 @@ class VectorCache:
     def close(self) -> None:
         self.conn.close()
 
+    @staticmethod
+    def pack_vector(vector: list[float]) -> bytes:
+        arr = array("f", (float(x) for x in vector))
+        return arr.tobytes()
+
+    @staticmethod
+    def unpack_vector(blob: bytes | bytearray | memoryview | None) -> list[float]:
+        if blob:
+            arr = array("f")
+            arr.frombytes(bytes(blob))
+            return [float(x) for x in arr]
+        return []
+
     def get(self, cache_key: str) -> CacheEntry:
         row = self.conn.execute(
-            "SELECT status, vector_json FROM embeddings_cache WHERE cache_key=?",
+            "SELECT status, vector_blob FROM embeddings_cache WHERE cache_key=?",
             (cache_key,),
         ).fetchone()
         if not row:
             return CacheEntry(status="missing", vector=None)
         status = str(row[0] or "").strip().lower()
         if status == "ok":
-            vector_json = row[1]
-            try:
-                vec = [float(x) for x in (json.loads(vector_json) if vector_json else [])]
-            except Exception:
-                vec = []
+            vec = self.unpack_vector(row[1])
             return CacheEntry(status="ok", vector=vec)
         return CacheEntry(status="null", vector=None)
 
@@ -101,6 +114,26 @@ class VectorCache:
         ).fetchall()
         return {str(k): str(s or "").strip().lower() for k, s in rows}
 
+    def get_status_many(self, keys: list[str]) -> dict[str, str]:
+        if not keys:
+            return {}
+        out: dict[str, str] = {}
+        chunk_size = 500
+        for i in range(0, len(keys), chunk_size):
+            chunk = keys[i : i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self.conn.execute(
+                f"""
+                SELECT cache_key, status
+                FROM embeddings_cache
+                WHERE cache_key IN ({placeholders})
+                """,
+                tuple(chunk),
+            ).fetchall()
+            for k, s in rows:
+                out[str(k)] = str(s or "").strip().lower()
+        return out
+
     def get_vectors_many(self, keys: list[str]) -> dict[str, list[float]]:
         if not keys:
             return {}
@@ -111,19 +144,16 @@ class VectorCache:
             placeholders = ",".join("?" for _ in chunk)
             rows = self.conn.execute(
                 f"""
-                SELECT cache_key, status, vector_json
+                SELECT cache_key, status, vector_blob
                 FROM embeddings_cache
                 WHERE cache_key IN ({placeholders})
                 """,
                 tuple(chunk),
             ).fetchall()
-            for k, status, vj in rows:
+            for k, status, vb in rows:
                 if str(status or "").strip().lower() != "ok":
                     continue
-                try:
-                    out[str(k)] = [float(x) for x in (json.loads(vj) if vj else [])]
-                except Exception:
-                    out[str(k)] = []
+                out[str(k)] = self.unpack_vector(vb)
         return out
 
     def upsert_ok(self, *, cache_key: str, model: str, similarity: str, text_value: str, vector: list[float]) -> None:
@@ -150,7 +180,8 @@ class VectorCache:
                 str(row["similarity"]),
                 str(row["text_value"]),
                 "ok",
-                json.dumps(row.get("vector", []), ensure_ascii=False),
+                None,
+                sqlite3.Binary(self.pack_vector(row.get("vector", []))),
                 now,
             )
             for row in rows
@@ -161,17 +192,19 @@ class VectorCache:
         try:
             self.conn.executemany(
                 """
-                INSERT INTO embeddings_cache(cache_key, model, similarity, text_value, status, vector_json, updated_at)
-                VALUES(?,?,?,?,?,?,?)
+                INSERT INTO embeddings_cache(cache_key, model, similarity, text_value, status, vector_json, vector_blob, updated_at)
+                VALUES(?,?,?,?,?,?,?,?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     model=excluded.model,
                     similarity=excluded.similarity,
                     text_value=excluded.text_value,
                     status='ok',
                     vector_json=excluded.vector_json,
+                    vector_blob=excluded.vector_blob,
                     updated_at=excluded.updated_at
                 WHERE embeddings_cache.status!='ok'
                    OR embeddings_cache.vector_json IS NOT excluded.vector_json
+                   OR embeddings_cache.vector_blob IS NOT excluded.vector_blob
                    OR embeddings_cache.model IS NOT excluded.model
                    OR embeddings_cache.similarity IS NOT excluded.similarity
                    OR embeddings_cache.text_value IS NOT excluded.text_value
@@ -224,3 +257,19 @@ class VectorCache:
 
     def commit(self) -> None:
         self.conn.commit()
+
+    def delete_many(self, keys: list[str]) -> int:
+        if not keys:
+            return 0
+        deleted = 0
+        chunk_size = 500
+        for i in range(0, len(keys), chunk_size):
+            chunk = keys[i : i + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            cur = self.conn.execute(
+                f"DELETE FROM embeddings_cache WHERE cache_key IN ({placeholders})",
+                tuple(chunk),
+            )
+            deleted += int(cur.rowcount or 0)
+        self.conn.commit()
+        return deleted

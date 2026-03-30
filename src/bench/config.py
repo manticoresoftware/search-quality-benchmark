@@ -17,6 +17,23 @@ class DatasetConfig:
 
 
 @dataclass
+class EmbeddingConfig:
+    provider: str = "openai"
+    model: str = "openai/text-embedding-3-large"
+    api_key: str = ""
+    api_key_file: str = ""
+    base_url: str = ""
+    site_url: str = ""
+    app_name: str = "trec-covid-bench"
+    price_per_million_input_tokens: float = 0.0
+    max_batch_texts: int = 32
+    concurrency: int = 4
+    retry_attempts: int = 5
+    retry_backoff_seconds: float = 1.0
+    timeout_seconds: int = 120
+
+
+@dataclass
 class ManticoreConfig:
     host: str = "127.0.0.1"
     sql_port: int = 9306
@@ -39,6 +56,7 @@ class ManticoreConfig:
     search_options: str = "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
     fulltext_options: str = "morphology='stem_en' index_field_lengths='1'"
     fulltext_query_mode: str = "and"
+    fulltext_query_variant: str = "short"
     fulltext_query_quorum: float = 0.5
     batch_size: int = 500
     insert_retries: int = 3
@@ -145,6 +163,7 @@ class MetricsConfig:
 @dataclass
 class AppConfig:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     manticore: ManticoreConfig = field(default_factory=ManticoreConfig)
     meilisearch: MeilisearchConfig = field(default_factory=MeilisearchConfig)
     opensearch: OpenSearchConfig = field(default_factory=OpenSearchConfig)
@@ -203,13 +222,14 @@ def _apply_dataset_source_prepared_dir(cfg: AppConfig) -> AppConfig:
 
 
 _MANTICORE_FIELDS = set(vars(ManticoreConfig()).keys())
+_EMBEDDING_FIELDS = set(vars(EmbeddingConfig()).keys())
 _MEILISEARCH_FIELDS = set(vars(MeilisearchConfig()).keys())
 _OPENSEARCH_FIELDS = set(vars(OpenSearchConfig()).keys())
 _QDRANT_FIELDS = set(vars(QdrantConfig()).keys())
 _BENCHMARK_FIELDS = set(vars(BenchmarkConfig()).keys())
 _DATASET_FIELDS = set(vars(DatasetConfig()).keys())
 _METRICS_FIELDS = set(vars(MetricsConfig()).keys())
-_SECTION_NAMES = {"manticore", "meilisearch", "opensearch", "qdrant", "benchmark", "dataset", "metrics"}
+_SECTION_NAMES = {"embedding", "manticore", "meilisearch", "opensearch", "qdrant", "benchmark", "dataset", "metrics"}
 
 
 def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -226,6 +246,7 @@ def _defaults_dict() -> dict[str, Any]:
     defaults = AppConfig()
     return {
         "dataset": vars(defaults.dataset),
+        "embedding": vars(defaults.embedding),
         "manticore": vars(defaults.manticore),
         "meilisearch": vars(defaults.meilisearch),
         "opensearch": vars(defaults.opensearch),
@@ -239,6 +260,7 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
     merged = _deep_update(_defaults_dict(), raw)
     return AppConfig(
         dataset=DatasetConfig(**merged["dataset"]),
+        embedding=EmbeddingConfig(**merged["embedding"]),
         manticore=ManticoreConfig(**merged["manticore"]),
         meilisearch=MeilisearchConfig(**merged["meilisearch"]),
         opensearch=OpenSearchConfig(**merged["opensearch"]),
@@ -260,7 +282,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
     raw = _raw_config(cfg_path)
     base_raw = dict(raw)
     global_sections: dict[str, Any] = {}
-    for sec in ("dataset", "benchmark", "metrics"):
+    for sec in ("dataset", "embedding", "benchmark", "metrics"):
         val = base_raw.pop(sec, None)
         if isinstance(val, dict):
             global_sections[sec] = val
@@ -305,6 +327,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 continue
             if k in _MANTICORE_FIELDS:
                 m_hits += 1
+            if k in _EMBEDDING_FIELDS:
+                pass
             if k in _MEILISEARCH_FIELDS:
                 meili_hits += 1
             if k in _OPENSEARCH_FIELDS:
@@ -350,6 +374,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             candidates: list[str] = []
             if k in _MANTICORE_FIELDS:
                 candidates.append("manticore")
+            if k in _EMBEDDING_FIELDS:
+                candidates.append("embedding")
             if k in _MEILISEARCH_FIELDS:
                 candidates.append("meilisearch")
             if k in _OPENSEARCH_FIELDS:

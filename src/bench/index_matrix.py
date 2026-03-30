@@ -6,11 +6,11 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import sys
-import re
 from typing import Any
 
-from .config import AppConfig, load_engine_targets
+from .config import AppConfig, _raw_config, load_engine_targets
 from .discovery import discover_config_paths
+from .embedding_client import resolved_embedding_model
 from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
@@ -25,11 +25,48 @@ from .table_filters import (
 from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
 
 _fit = fit_text
-_CANONICAL_PROFILE_RE = re.compile(r"^[a-z0-9_]+_(manticore|qdrant|meilisearch|opensearch)_(fulltext|vector|hybrid)$")
+_DATASET_KEYS = {"source", "prepared_dir", "max_docs", "keep_qrels_docs"}
+_ENGINE_TARGET_KEYS = {
+    "manticore": {"fulltext_table", "vector_table"},
+    "qdrant": {"bm25_collection", "dense_collection"},
+    "meilisearch": {"index_name"},
+    "opensearch": {"index_name"},
+}
 
 
-def _is_canonical_profile_name(name: str) -> bool:
-    return bool(_CANONICAL_PROFILE_RE.match(str(name or "").strip()))
+def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[str]:
+    raw = _raw_config(path)
+    entry_defs: dict[str, dict[str, Any]] = {k: v for k, v in raw.items() if isinstance(v, dict)}
+    referenced_bases = {
+        str(v.get("base", "")).strip()
+        for v in entry_defs.values()
+        if isinstance(v, dict) and str(v.get("base", "")).strip()
+    }
+    resolved_mode: dict[str, str] = {}
+    for t in targets or []:
+        resolved_mode[str(t.name)] = str(t.mode_filter or "").strip().lower()
+    visible: set[str] = set()
+    for name, ent in entry_defs.items():
+        mode = resolved_mode.get(name) or str(ent.get("type", "")).strip().lower()
+        if mode not in {"fulltext", "vector", "hybrid"}:
+            continue
+        target_keys = _ENGINE_TARGET_KEYS.get(
+            "manticore"
+            if "manticore" in name
+            else "qdrant"
+            if "qdrant" in name
+            else "meilisearch"
+            if "meilisearch" in name
+            else "opensearch"
+            if "opensearch" in name
+            else "",
+            set(),
+        )
+        defines_dataset = any(k in ent for k in _DATASET_KEYS)
+        defines_target = any(k in ent for k in target_keys)
+        if name not in referenced_bases or defines_dataset or defines_target:
+            visible.add(name)
+    return visible
 
 
 @dataclass
@@ -78,15 +115,16 @@ def _display_target_kind(kind: str) -> str:
 
 
 def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
+    model = resolved_embedding_model(cfg)
     if mode == "vector":
         if engine == "meilisearch":
             extra = [f"embedder:{cfg.meilisearch.embedder_name}"]
             if bool(cfg.meilisearch.binary_quantized):
                 extra.append("q=1bit")
-            return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+            return f"{model} [{' '.join(extra)}]"
         if engine == "opensearch":
-            return f"{cfg.manticore.vector_model} [field:{cfg.opensearch.vector_field}]"
-        return cfg.manticore.vector_model
+            return f"{model} [field:{cfg.opensearch.vector_field}]"
+        return model
     if mode == "hybrid":
         if engine == "manticore":
             return (cfg.manticore.fulltext_options or "").strip()
@@ -94,10 +132,10 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             extra = [f"embedder:{cfg.meilisearch.embedder_name}", f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}"]
             if bool(cfg.meilisearch.binary_quantized):
                 extra.append("q=1bit")
-            return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+            return f"{model} [{' '.join(extra)}]"
         if engine == "opensearch":
-            return f"{cfg.manticore.vector_model} [textBoost:{float(cfg.opensearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.opensearch.hybrid_vector_boost):.2f}]"
-        return f"{cfg.manticore.vector_model} [fusion=rrf]"
+            return f"{model} [textBoost:{float(cfg.opensearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.opensearch.hybrid_vector_boost):.2f}]"
+        return f"{model} [fusion=rrf]"
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
     if engine == "meilisearch":
@@ -143,10 +181,11 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
     for path in paths:
         try:
             targets = load_engine_targets(path)
+            visible_names = _visible_profile_names(path, targets)
         except Exception:
             continue
         for target_cfg in targets:
-            if not _is_canonical_profile_name(target_cfg.name):
+            if target_cfg.name not in visible_names:
                 continue
             cfg = target_cfg.cfg
             engine = target_cfg.type
@@ -570,10 +609,10 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                 return v.batch_size
             return ""
 
-        def _apply_sort() -> None:
+        def _apply_sort(*, preserve_current_item: bool = True) -> None:
             nonlocal variants, selected_idx, current, offset
             selected_ids = {_variant_id(variants[i]) for i in selected_idx if 0 <= i < len(variants)}
-            current_id = _variant_id(variants[current]) if 0 <= current < len(variants) else None
+            current_id = _variant_id(variants[current]) if preserve_current_item and 0 <= current < len(variants) else None
             variants = filter_rows(all_variants, filters, _filter_value)
             variants.sort(key=lambda v: _sort_value(v, sort_key), reverse=sort_desc)
             selected_idx = {i for i, v in enumerate(variants) if _variant_id(v) in selected_ids}
@@ -657,11 +696,11 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             elif ch == curses.KEY_LEFT:
                 sort_idx = (sort_idx - 1) % len(sort_cols)
                 sort_key = sort_cols[sort_idx]
-                _apply_sort()
+                _apply_sort(preserve_current_item=False)
             elif ch == curses.KEY_RIGHT:
                 sort_idx = (sort_idx + 1) % len(sort_cols)
                 sort_key = sort_cols[sort_idx]
-                _apply_sort()
+                _apply_sort(preserve_current_item=False)
             elif ch in (ord("f"), ord("F")):
                 val = prompt_filter_value(
                     stdscr,

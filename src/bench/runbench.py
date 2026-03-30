@@ -10,6 +10,7 @@ from time import perf_counter, sleep, time
 from typing import Any, Callable
 
 from .config import AppConfig
+from .embedding_client import EmbeddingClient, resolved_embedding_model, resolved_embedding_similarity
 from .io_utils import ensure_dir, generate_run_id, read_jsonl
 from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
@@ -33,7 +34,12 @@ class QueryResult:
     doc_ids: list[str]
 
 
-def query_text_for_mode(topic: dict[str, str], mode: str) -> str:
+def query_text_for_mode(
+    topic: dict[str, str],
+    mode: str,
+    *,
+    fulltext_query_variant: str = "short",
+) -> str:
     short_q = str(topic.get("query_short") or "").strip()
     long_q = str(topic.get("query_long") or "").strip()
     if not short_q:
@@ -45,9 +51,10 @@ def query_text_for_mode(topic: dict[str, str], mode: str) -> str:
             "Prepared topics are missing query_short/query_long. "
             "Please rerun: bench prepare"
         )
-    # Policy: shorter query for full-text-like modes, longer query for vector modes.
+    # Policy: shorter query for full-text-like modes by default, longer query for
+    # vector modes. Specific profiles may override the full-text variant.
     if mode == "fulltext":
-        return short_q
+        return long_q if str(fulltext_query_variant or "short").strip().lower() == "long" else short_q
     return long_q
 
 
@@ -153,7 +160,7 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
         client = ManticoreClient(cfg.manticore)
         try:
             for t in diagnostics_topics:
-                qtext = query_text_for_mode(t, mode)
+                qtext = query_text_for_mode(t, mode, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
                 entry: dict[str, Any] = {"topic_id": t["topic_id"], "query": qtext}
                 try:
                     if mode == "fulltext":
@@ -169,8 +176,11 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
                             """
                         )
                     elif mode == "hybrid":
-                        qvec = _get_query_vectors_from_cache_or_embed(cfg, [query_text_for_mode(t, "vector")]).get(
-                            query_text_for_mode(t, "vector"), []
+                        qvec = _get_query_vectors_from_cache_or_embed(
+                            cfg,
+                            [query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant)],
+                        ).get(
+                            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
                         )
                         if not qvec:
                             raise RuntimeError("Missing query vector for diagnostics.")
@@ -321,6 +331,7 @@ def _manticore_knn_predicate(cfg: AppConfig, vector_literal: str) -> str:
 
 
 def _manticore_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     quant = (cfg.manticore.vector_quantization or "").strip().lower()
     extra: list[str] = []
     if quant:
@@ -333,22 +344,24 @@ def _manticore_vector_label(cfg: AppConfig) -> str:
     if search_opts:
         extra.append(f"search:{search_opts}")
     if extra:
-        return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
-    return cfg.manticore.vector_model
+        return f"{model} [{','.join(extra)}]"
+    return model
 
 
 def _qdrant_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     if not bool(cfg.qdrant.dense_binary_quantization):
-        return cfg.manticore.vector_model
+        return model
     extra = ["bq"]
     if cfg.qdrant.dense_search_quantization_oversampling is not None:
         extra.append(f"os={float(cfg.qdrant.dense_search_quantization_oversampling)}")
     if cfg.qdrant.dense_search_quantization_rescore is not None:
         extra.append(f"rs={1 if bool(cfg.qdrant.dense_search_quantization_rescore) else 0}")
-    return f"{cfg.manticore.vector_model} [{','.join(extra)}]"
+    return f"{model} [{','.join(extra)}]"
 
 
 def _qdrant_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     extra = ["fusion=rrf", "sparse=Qdrant/bm25"]
     if bool(cfg.qdrant.dense_binary_quantization):
         extra.append("bq")
@@ -356,7 +369,7 @@ def _qdrant_hybrid_label(cfg: AppConfig) -> str:
             extra.append(f"os={float(cfg.qdrant.dense_search_quantization_oversampling)}")
         if cfg.qdrant.dense_search_quantization_rescore is not None:
             extra.append(f"rs={1 if bool(cfg.qdrant.dense_search_quantization_rescore) else 0}")
-    return f"{cfg.manticore.vector_model} [{' '.join(extra)}]"
+    return f"{model} [{' '.join(extra)}]"
 
 
 def _meilisearch_fulltext_label(cfg: AppConfig) -> str:
@@ -373,20 +386,22 @@ def _meilisearch_fulltext_label(cfg: AppConfig) -> str:
 
 
 def _meilisearch_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     extras = [f"embedder:{cfg.meilisearch.embedder_name}"]
     if bool(cfg.meilisearch.binary_quantized):
         extras.append("q=1bit")
-    return f"{cfg.manticore.vector_model} [{' '.join(extras)}]"
+    return f"{model} [{' '.join(extras)}]"
 
 
 def _meilisearch_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     extras = [
         f"embedder:{cfg.meilisearch.embedder_name}",
         f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}",
     ]
     if bool(cfg.meilisearch.binary_quantized):
         extras.append("q=1bit")
-    return f"{cfg.manticore.vector_model} [{' '.join(extras)}]"
+    return f"{model} [{' '.join(extras)}]"
 
 
 def _opensearch_fulltext_label(cfg: AppConfig) -> str:
@@ -395,24 +410,26 @@ def _opensearch_fulltext_label(cfg: AppConfig) -> str:
 
 
 def _opensearch_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     extras = [f"field:{cfg.opensearch.vector_field}"]
-    return f"{cfg.manticore.vector_model} [{' '.join(extras)}]"
+    return f"{model} [{' '.join(extras)}]"
 
 
 def _opensearch_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
     extras = [
         f"textBoost={float(cfg.opensearch.hybrid_text_boost):.2f}",
         f"vectorBoost={float(cfg.opensearch.hybrid_vector_boost):.2f}",
     ]
-    return f"{cfg.manticore.vector_model} [{' '.join(extras)}]"
+    return f"{model} [{' '.join(extras)}]"
 
 
 def _get_query_vectors_from_cache_or_embed(cfg: AppConfig, query_texts: list[str]) -> dict[str, list[float]]:
     unique_queries = [q for q in dict.fromkeys(query_texts) if str(q or "").strip()]
     if not unique_queries:
         return {}
-    model = cfg.manticore.vector_model
-    similarity = cfg.manticore.vector_similarity
+    model = resolved_embedding_model(cfg)
+    similarity = resolved_embedding_similarity(cfg)
     cache = VectorCache(cfg.manticore.vector_cache_path)
     out: dict[str, list[float]] = {}
     missing_queries: list[str] = []
@@ -436,18 +453,7 @@ def _get_query_vectors_from_cache_or_embed(cfg: AppConfig, query_texts: list[str
                     break
                 if delay > 0:
                     sleep(delay)
-                manticore = ManticoreClient(cfg.manticore)
-                try:
-                    embedded = manticore.embed_texts(
-                        unresolved,
-                        vector_field=cfg.manticore.vector_field,
-                        model_name=cfg.manticore.vector_model,
-                        vector_from=cfg.manticore.vector_from,
-                        api_key=cfg.manticore.vector_api_key,
-                        api_key_file=cfg.manticore.vector_api_key_file,
-                    )
-                finally:
-                    manticore.close()
+                embedded = EmbeddingClient(cfg).embed_texts(unresolved).vectors
 
                 next_unresolved: list[str] = []
                 for q, vec in zip(unresolved, embedded):
@@ -486,7 +492,7 @@ def _collect_diagnostics_meilisearch(
     for mode in modes:
         diagnostics[mode] = []
         for t in diagnostics_topics:
-            qtext = query_text_for_mode(t, mode)
+            qtext = query_text_for_mode(t, mode, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
             entry: dict[str, Any] = {"topic_id": t["topic_id"], "query": qtext}
             try:
                 if mode == "fulltext":
@@ -497,7 +503,9 @@ def _collect_diagnostics_meilisearch(
                         "limit": min(cfg.benchmark.limit, 5),
                     }
                 elif mode == "vector":
-                    qvec = query_vectors.get(query_text_for_mode(t, "vector"), [])
+                    qvec = query_vectors.get(
+                        query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                    )
                     if not qvec:
                         raise RuntimeError("Missing query vector for diagnostics.")
                     rows = backend.search_vector(qvec, limit=min(cfg.benchmark.limit, 5))
@@ -507,7 +515,9 @@ def _collect_diagnostics_meilisearch(
                         "limit": min(cfg.benchmark.limit, 5),
                     }
                 else:
-                    qvec = query_vectors.get(query_text_for_mode(t, "vector"), [])
+                    qvec = query_vectors.get(
+                        query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                    )
                     if not qvec:
                         raise RuntimeError("Missing query vector for diagnostics.")
                     rows = backend.search_hybrid(qtext, qvec, limit=min(cfg.benchmark.limit, 5))
@@ -538,7 +548,7 @@ def _collect_diagnostics_opensearch(
     for mode in modes:
         diagnostics[mode] = []
         for t in diagnostics_topics:
-            qtext = query_text_for_mode(t, mode)
+            qtext = query_text_for_mode(t, mode, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
             entry: dict[str, Any] = {"topic_id": t["topic_id"], "query": qtext}
             try:
                 if mode == "fulltext":
@@ -549,7 +559,9 @@ def _collect_diagnostics_opensearch(
                         "fields": list(cfg.opensearch.text_fields or ["title", "abstract"]),
                     }
                 elif mode == "vector":
-                    qvec = query_vectors.get(query_text_for_mode(t, "vector"), [])
+                    qvec = query_vectors.get(
+                        query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                    )
                     if not qvec:
                         raise RuntimeError("Missing query vector for diagnostics.")
                     rows = backend.search_vector(qvec, limit=min(cfg.benchmark.limit, 5))
@@ -558,7 +570,9 @@ def _collect_diagnostics_opensearch(
                         "vector_dim": len(qvec),
                     }
                 else:
-                    qvec = query_vectors.get(query_text_for_mode(t, "vector"), [])
+                    qvec = query_vectors.get(
+                        query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                    )
                     if not qvec:
                         raise RuntimeError("Missing query vector for diagnostics.")
                     rows = backend.search_hybrid(qtext, qvec, limit=min(cfg.benchmark.limit, 5))
@@ -853,17 +867,29 @@ def run_benchmark(
     for m in modes:
         for r in range(cfg.benchmark.repeats):
             for t in topics:
-                tasks.append((m, t["topic_id"], query_text_for_mode(t, m), r))
+                tasks.append(
+                    (
+                        m,
+                        t["topic_id"],
+                        query_text_for_mode(t, m, fulltext_query_variant=cfg.manticore.fulltext_query_variant),
+                        r,
+                    )
+                )
 
     # warmup, sequential and not recorded
     warmup_topics = topics[: cfg.benchmark.warmup_queries]
     query_vectors: dict[str, list[float]] = {}
-    vector_query_by_topic_id = {str(t["topic_id"]): query_text_for_mode(t, "vector") for t in topics}
+    vector_query_by_topic_id = {
+        str(t["topic_id"]): query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant)
+        for t in topics
+    }
     qdrant_backend: QdrantBackend | None = None
     meili_backend: MeilisearchBackend | None = None
     opensearch_backend: OpenSearchBackend | None = None
     if "vector" in modes or "hybrid" in modes:
-        vector_queries = [query_text_for_mode(t, "vector") for t in topics]
+        vector_queries = [
+            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant) for t in topics
+        ]
         query_vectors = _get_query_vectors_from_cache_or_embed(cfg, vector_queries)
     if engine == "qdrant":
         qdrant_backend = QdrantBackend(cfg.qdrant)
@@ -874,7 +900,7 @@ def run_benchmark(
 
     for m in modes:
         for t in warmup_topics:
-            qtext = query_text_for_mode(t, m)
+            qtext = query_text_for_mode(t, m, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
             if engine == "manticore":
                 _run_single_query_manticore(
                     cfg,
@@ -901,7 +927,9 @@ def run_benchmark(
                         t["topic_id"],
                         qtext,
                         repeat_idx=-1,
-                        query_vector=query_vectors.get(query_text_for_mode(t, "vector"), []),
+                        query_vector=query_vectors.get(
+                            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                        ),
                     )
                     continue
                 if engine == "opensearch":
@@ -912,7 +940,9 @@ def run_benchmark(
                         t["topic_id"],
                         qtext,
                         repeat_idx=-1,
-                        query_vector=query_vectors.get(query_text_for_mode(t, "vector"), []),
+                        query_vector=query_vectors.get(
+                            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                        ),
                     )
                     continue
                 _run_single_query_qdrant(
@@ -1137,7 +1167,8 @@ def run_benchmark(
             model_label = _meilisearch_vector_label(cfg)
     elif mode == "hybrid":
         if engine == "manticore":
-            model_label = _manticore_vector_label(cfg).replace(cfg.manticore.vector_model, f"{cfg.manticore.vector_model} [fusion=rrf]", 1)
+            model = resolved_embedding_model(cfg)
+            model_label = _manticore_vector_label(cfg).replace(model, f"{model} [fusion=rrf]", 1)
         elif engine == "qdrant":
             model_label = _qdrant_hybrid_label(cfg)
         elif engine == "opensearch":

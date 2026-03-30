@@ -5,7 +5,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 from .config import AppConfig
-from .cache_populate import populate_cache_from_manticore
+from .embedding_client import resolved_embedding_model
 from .io_utils import read_jsonl
 from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
@@ -70,27 +70,30 @@ def _run_index_manticore(
             fields = parse_vector_from_fields(cfg.manticore.vector_from)
             cache = VectorCache(cfg.manticore.vector_cache_path)
             docs_cached: list[tuple[dict[str, Any], str]] = []
-            docs_for_auto_embed: list[dict[str, Any]] = []
             skipped_null = 0
+            missing_keys: list[str] = []
+            missing_total = 0
             try:
+                model = resolved_embedding_model(cfg)
                 status_map = cache.get_status_map(
-                    model=cfg.manticore.vector_model,
+                    model=model,
                     similarity=cfg.manticore.vector_similarity,
                 )
                 for i, d in enumerate(docs, start=1):
                     key = cache_key_from_doc(
                         d,
                         fields=fields,
-                        model=cfg.manticore.vector_model,
+                        model=model,
                         similarity=cfg.manticore.vector_similarity,
                     )
                     st = status_map.get(key, "missing")
                     if st == "missing":
-                        docs_for_auto_embed.append(d)
+                        missing_total += 1
+                        if len(missing_keys) < 5:
+                            missing_keys.append(key)
                         continue
                     if st == "null":
                         skipped_null += 1
-                        # Known non-embeddable; do not retry.
                         continue
                     docs_cached.append((d, key))
                     if progress_callback is not None and (i == 1 or i % 1000 == 0 or i == len(docs)):
@@ -109,7 +112,14 @@ def _run_index_manticore(
             finally:
                 cache.close()
 
-            if not docs_cached and not docs_for_auto_embed:
+            if missing_keys:
+                raise RuntimeError(
+                    "Vector cache miss during Manticore vector/hybrid indexing. "
+                    f"Missing keys={missing_total} sample={missing_keys}. "
+                    "Run `bench prepare` to build embeddings first."
+                )
+
+            if not docs_cached:
                 raise RuntimeError("No vector documents available (all entries are marked null in cache).")
 
             target_table = cfg.manticore.vector_table
@@ -121,15 +131,22 @@ def _run_index_manticore(
                 target_table = cfg.manticore.fulltext_table
 
             client.drop_table_if_exists(target_table)
+            cache_dim = VectorCache(cfg.manticore.vector_cache_path)
+            try:
+                first_key = docs_cached[0][1]
+                first_vec = cache_dim.get_vectors_many([first_key]).get(first_key) or []
+                dim = len(first_vec)
+            finally:
+                cache_dim.close()
+            if dim <= 0:
+                raise RuntimeError("Cached vectors have invalid dimension.")
             client.create_vector_table(
                 target_table,
                 cfg.manticore.vector_field,
-                model_name=cfg.manticore.vector_model,
-                vector_from=cfg.manticore.vector_from,
+                model_name="",
                 hnsw_similarity=cfg.manticore.vector_similarity,
+                knn_dims=dim,
                 quantization=cfg.manticore.vector_quantization,
-                api_key=cfg.manticore.vector_api_key,
-                api_key_file=cfg.manticore.vector_api_key_file,
             )
             started = perf_counter()
             ingest_stats_cached = ModeIndexResult(
@@ -148,7 +165,7 @@ def _run_index_manticore(
                     total_cached = len(docs_cached)
                     # Hybrid tables must retain text fields for MATCH() on the same table.
                     # Plain vector tables can still skip them when all vectors come from cache.
-                    minimal_vector_insert = mode == "vector" and len(docs_for_auto_embed) == 0
+                    minimal_vector_insert = mode == "vector"
                     fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
                     insert_batch_size = max(1, int(cfg.manticore.batch_size))
                     processed_cached = 0
@@ -201,60 +218,18 @@ def _run_index_manticore(
                                 )
                 finally:
                     cache2.close()
-            ingest_stats_auto = client.bulk_insert_docs(
-                target_table,
-                docs_for_auto_embed,
-                batch_size=cfg.manticore.batch_size,
-                retries=cfg.manticore.insert_retries,
-                progress_callback=progress_callback,
-                progress_meta={"engine": "manticore", "mode": mode, "stage": "ingest_auto"},
-            )
-            if ingest_stats_auto.last_error and progress_callback is not None:
-                progress_callback(
-                    {
-                        "engine": "manticore",
-                        "mode": mode,
-                        "stage": "ingest_auto",
-                        "processed": len(docs_for_auto_embed),
-                        "total": len(docs_for_auto_embed),
-                        "inserted": ingest_stats_auto.rows_inserted,
-                        "failed_batches": ingest_stats_auto.failed_batches,
-                        "retried_batches": ingest_stats_auto.retried_batches,
-                        "last_error": ingest_stats_auto.last_error,
-                        "error_reasons": dict(ingest_stats_auto.retry_reasons),
-                    }
-                )
             ingest_stats = ModeIndexResult(
                 mode=mode,
                 duration_seconds=0.0,
-                rows_inserted=ingest_stats_cached.rows_inserted + ingest_stats_auto.rows_inserted,
+                rows_inserted=ingest_stats_cached.rows_inserted,
                 docs_per_second=0.0,
-                failed_batches=ingest_stats_cached.failed_batches + ingest_stats_auto.failed_batches,
-                retried_batches=ingest_stats_cached.retried_batches + ingest_stats_auto.retried_batches,
-                last_error=ingest_stats_auto.last_error or ingest_stats_cached.last_error,
+                failed_batches=ingest_stats_cached.failed_batches,
+                retried_batches=ingest_stats_cached.retried_batches,
+                last_error=ingest_stats_cached.last_error,
                 error_reasons={},
             )
             for reason, count in getattr(ingest_stats_cached, "error_reasons", {}).items():
                 ingest_stats.error_reasons[reason] = ingest_stats.error_reasons.get(reason, 0) + int(count)
-            for reason, count in getattr(ingest_stats_auto, "retry_reasons", {}).items():
-                ingest_stats.error_reasons[reason] = ingest_stats.error_reasons.get(reason, 0) + int(count)
-
-            # Sync cache only when this run actually generated missing vectors.
-            if docs_for_auto_embed:
-                if progress_callback is not None:
-                    progress_callback({"engine": "manticore", "mode": mode, "stage": "cache_sync", "processed": 0, "total": 0, "inserted": ingest_stats.rows_inserted, "failed_batches": 0, "retried_batches": 0})
-                populate_cache_from_manticore(
-                    cfg,
-                    source_table=target_table,
-                    model_name=cfg.manticore.vector_model,
-                    similarity=cfg.manticore.vector_similarity,
-                    vector_from=cfg.manticore.vector_from,
-                    progress_callback=(
-                        (lambda u: progress_callback({"engine": "manticore", "mode": mode, **u}))
-                        if progress_callback is not None
-                        else None
-                    ),
-                )
             elapsed = perf_counter() - started
             out.append(
                 ModeIndexResult(
@@ -346,15 +321,16 @@ def _run_index_qdrant(
         missing_keys: list[str] = []
         missing_total = 0
         try:
+            model = resolved_embedding_model(cfg)
             status_map = cache.get_status_map(
-                model=cfg.manticore.vector_model,
+                model=model,
                 similarity=cfg.manticore.vector_similarity,
             )
             for i, d in enumerate(docs, start=1):
                 key = cache_key_from_doc(
                     d,
                     fields=fields,
-                    model=cfg.manticore.vector_model,
+                    model=model,
                     similarity=cfg.manticore.vector_similarity,
                 )
                 st = status_map.get(key, "missing")
@@ -540,15 +516,16 @@ def _run_index_meilisearch(
         missing_keys: list[str] = []
         missing_total = 0
         try:
+            model = resolved_embedding_model(cfg)
             status_map = cache.get_status_map(
-                model=cfg.manticore.vector_model,
+                model=model,
                 similarity=cfg.manticore.vector_similarity,
             )
             for i, d in enumerate(docs, start=1):
                 key = cache_key_from_doc(
                     d,
                     fields=fields,
-                    model=cfg.manticore.vector_model,
+                    model=model,
                     similarity=cfg.manticore.vector_similarity,
                 )
                 st = status_map.get(key, "missing")
@@ -729,15 +706,16 @@ def _run_index_opensearch(
         missing_keys: list[str] = []
         missing_total = 0
         try:
+            model = resolved_embedding_model(cfg)
             status_map = cache.get_status_map(
-                model=cfg.manticore.vector_model,
+                model=model,
                 similarity=cfg.manticore.vector_similarity,
             )
             for i, d in enumerate(docs, start=1):
                 key = cache_key_from_doc(
                     d,
                     fields=fields,
-                    model=cfg.manticore.vector_model,
+                    model=model,
                     similarity=cfg.manticore.vector_similarity,
                 )
                 st = status_map.get(key, "missing")

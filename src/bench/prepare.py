@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import csv
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import hashlib
 import heapq
 import json
@@ -11,7 +12,9 @@ from typing import Any
 from zipfile import ZipFile
 
 from .config import AppConfig
-from .io_utils import ensure_dir, write_json, write_jsonl, write_tsv
+from .embedding_client import EmbeddingClient, resolved_embedding_model, resolved_embedding_similarity
+from .io_utils import ensure_dir, read_jsonl, write_json, write_jsonl, write_tsv
+from .vector_cache import VectorCache, cache_key_from_doc, cache_key_from_text, normalize_text, parse_vector_from_fields
 
 
 def _doc_attr(doc: Any, names: list[str], default: str = "") -> str:
@@ -34,6 +37,330 @@ class PrepareResult:
     manifest_path: Path
 
 
+@dataclass
+class EmbeddingBuildStats:
+    doc_total: int
+    doc_ok: int
+    query_total: int
+    query_ok: int
+    input_tokens: int
+    estimated_cost_usd: float
+
+
+@dataclass
+class EmbeddingResetStats:
+    deleted: int
+    doc_total: int
+    query_total: int
+
+
+def _manifest_with_embeddings(
+    base: dict[str, Any],
+    *,
+    cfg: AppConfig,
+    stats: EmbeddingBuildStats,
+) -> dict[str, Any]:
+    payload = dict(base)
+    payload.update(
+        {
+            "embedding_provider": cfg.embedding.provider,
+            "embedding_model": resolved_embedding_model(cfg),
+            "embedding_cache_path": cfg.manticore.vector_cache_path,
+            "doc_embeddings_ok": stats.doc_ok,
+            "doc_embeddings_total": stats.doc_total,
+            "query_embeddings_ok": stats.query_ok,
+            "query_embeddings_total": stats.query_total,
+            "input_tokens": stats.input_tokens,
+            "estimated_cost_usd": round(stats.estimated_cost_usd, 6),
+        }
+    )
+    return payload
+
+
+def _write_embedding_manifest(
+    manifest_path: Path,
+    manifest_payload: dict[str, Any],
+    *,
+    cfg: AppConfig,
+    doc_total: int,
+    doc_ok: int,
+    query_total: int,
+    query_ok: int,
+    input_tokens: int,
+    estimated_cost_usd: float,
+) -> None:
+    write_json(
+        manifest_path,
+        _manifest_with_embeddings(
+            manifest_payload,
+            cfg=cfg,
+            stats=EmbeddingBuildStats(
+                doc_total=doc_total,
+                doc_ok=doc_ok,
+                query_total=query_total,
+                query_ok=query_ok,
+                input_tokens=input_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+            ),
+        ),
+    )
+
+
+def _populate_embeddings(
+    cfg: AppConfig,
+    docs: list[dict[str, Any]],
+    topics: list[dict[str, str]],
+    *,
+    progress_callback: callable | None = None,
+    manifest_path: Path | None = None,
+    manifest_payload: dict[str, Any] | None = None,
+) -> EmbeddingBuildStats:
+    model = resolved_embedding_model(cfg)
+    similarity = resolved_embedding_similarity(cfg)
+    fields = parse_vector_from_fields(cfg.manticore.vector_from)
+    cache = VectorCache(cfg.manticore.vector_cache_path)
+    client = EmbeddingClient(cfg)
+    doc_total = len(docs)
+    query_total = len(topics)
+    doc_ok = 0
+    query_ok = 0
+    input_tokens = 0
+    estimated_cost_usd = 0.0
+    max_batch = max(1, int(cfg.embedding.max_batch_texts or 32))
+    embed_concurrency = max(1, int(cfg.embedding.concurrency or 1))
+
+    def _emit(stage: str, *, processed: int, total: int, embedded_ok: int, query_phase: bool = False) -> None:
+        if manifest_path is not None and manifest_payload is not None:
+            _write_embedding_manifest(
+                manifest_path,
+                manifest_payload,
+                cfg=cfg,
+                doc_total=doc_total,
+                doc_ok=doc_ok,
+                query_total=query_total,
+                query_ok=query_ok,
+                input_tokens=input_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+            )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "stage": stage,
+                    "processed": processed,
+                    "total": total,
+                    "embedded_ok": embedded_ok,
+                    "input_tokens": input_tokens,
+                    "estimated_cost_usd": estimated_cost_usd,
+                }
+            )
+
+    def _embed_missing(
+        missing: list[tuple[str, str]],
+        *,
+        total_items: int,
+        ok_count: int,
+        stage: str,
+    ) -> tuple[int, int, float]:
+        nonlocal doc_ok, query_ok, input_tokens, estimated_cost_usd
+        if not missing:
+            return ok_count, input_tokens, estimated_cost_usd
+
+        batches = [missing[i : i + max_batch] for i in range(0, len(missing), max_batch)]
+
+        def _run_batch(chunk: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], Any]:
+            return chunk, client.embed_texts([text for _, text in chunk])
+
+        with ThreadPoolExecutor(max_workers=embed_concurrency) as executor:
+            pending = {executor.submit(_run_batch, chunk) for chunk in batches[:embed_concurrency]}
+            next_batch = embed_concurrency
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                first_error: Exception | None = None
+                for fut in done:
+                    try:
+                        chunk, result = fut.result()
+                    except Exception as exc:
+                        if first_error is None:
+                            first_error = exc
+                        continue
+                    cache.upsert_ok_many(
+                        [
+                            {
+                                "cache_key": key,
+                                "model": model,
+                                "similarity": similarity,
+                                "text_value": text,
+                                "vector": vec,
+                            }
+                            for (key, text), vec in zip(chunk, result.vectors, strict=True)
+                        ]
+                    )
+                    ok_count += len(chunk)
+                    if stage == "doc_embed":
+                        doc_ok = ok_count
+                    else:
+                        query_ok = ok_count
+                    input_tokens += result.usage.input_tokens
+                    estimated_cost_usd += result.usage.estimated_cost_usd
+                    _emit(
+                        stage=stage,
+                        processed=min(ok_count, total_items),
+                        total=total_items,
+                        embedded_ok=ok_count,
+                    )
+                    if next_batch < len(batches):
+                        pending.add(executor.submit(_run_batch, batches[next_batch]))
+                        next_batch += 1
+                if first_error is not None:
+                    for fut in pending:
+                        fut.cancel()
+                    _emit(
+                        stage=stage,
+                        processed=min(ok_count, total_items),
+                        total=total_items,
+                        embedded_ok=ok_count,
+                    )
+                    raise first_error
+        return ok_count, input_tokens, estimated_cost_usd
+
+    try:
+        doc_missing: list[tuple[str, str]] = []
+        scan_batch = max(500, int(cfg.manticore.vector_cache_fetch_batch_size or 1000))
+        for start in range(0, len(docs), scan_batch):
+            docs_chunk = docs[start : start + scan_batch]
+            keyed_chunk: list[tuple[str, str]] = []
+            for doc in docs_chunk:
+                key = cache_key_from_doc(doc, fields=fields, model=model, similarity=similarity)
+                text_value = " ".join(normalize_text(str(doc.get(f, "") or "")) for f in fields).strip()
+                keyed_chunk.append((key, text_value))
+            status_map = cache.get_status_many([key for key, _ in keyed_chunk])
+            for key, text_value in keyed_chunk:
+                if status_map.get(key) == "ok":
+                    doc_ok += 1
+                else:
+                    doc_missing.append((key, text_value))
+            processed = min(start + len(docs_chunk), len(docs))
+            if processed == len(docs) or processed == len(docs_chunk) or processed % 1000 == 0:
+                _emit(stage="doc_cache_scan", processed=processed, total=len(docs), embedded_ok=doc_ok)
+
+        doc_ok, _, _ = _embed_missing(
+            doc_missing,
+            total_items=len(docs),
+            ok_count=doc_ok,
+            stage="doc_embed",
+        )
+
+        query_missing: list[tuple[str, str]] = []
+        keyed_topics: list[tuple[str, str]] = []
+        for topic in topics:
+            query_text = normalize_text(str(topic.get("query_long") or topic.get("query_short") or ""))
+            keyed_topics.append((cache_key_from_text(query_text, model=model, similarity=similarity), query_text))
+        for start in range(0, len(keyed_topics), scan_batch):
+            topics_chunk = keyed_topics[start : start + scan_batch]
+            status_map = cache.get_status_many([key for key, _ in topics_chunk])
+            for key, query_text in topics_chunk:
+                if status_map.get(key) == "ok":
+                    query_ok += 1
+                else:
+                    query_missing.append((key, query_text))
+            processed = min(start + len(topics_chunk), len(topics))
+            if processed == len(topics) or processed == len(topics_chunk) or processed % 1000 == 0:
+                _emit(stage="query_cache_scan", processed=processed, total=len(topics), embedded_ok=query_ok)
+
+        query_ok, _, _ = _embed_missing(
+            query_missing,
+            total_items=len(topics),
+            ok_count=query_ok,
+            stage="query_embed",
+        )
+        cache.commit()
+        if manifest_path is not None and manifest_payload is not None:
+            _write_embedding_manifest(
+                manifest_path,
+                manifest_payload,
+                cfg=cfg,
+                doc_total=doc_total,
+                doc_ok=doc_ok,
+                query_total=query_total,
+                query_ok=query_ok,
+                input_tokens=input_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+            )
+    finally:
+        cache.close()
+
+    return EmbeddingBuildStats(
+        doc_total=doc_total,
+        doc_ok=doc_ok,
+        query_total=query_total,
+        query_ok=query_ok,
+        input_tokens=input_tokens,
+        estimated_cost_usd=estimated_cost_usd,
+    )
+
+
+def reset_embeddings(cfg: AppConfig) -> EmbeddingResetStats:
+    prepared_dir = Path(cfg.dataset.prepared_dir)
+    docs_path = prepared_dir / "docs.jsonl"
+    topics_path = prepared_dir / "topics.jsonl"
+    manifest_path = prepared_dir / "manifest.json"
+    if not docs_path.exists() or not topics_path.exists():
+        raise RuntimeError(
+            f"Prepared dataset not found for reset: {prepared_dir}. Run `bench prepare` first."
+        )
+
+    docs = read_jsonl(docs_path)
+    topics = read_jsonl(topics_path)
+    model = resolved_embedding_model(cfg)
+    similarity = resolved_embedding_similarity(cfg)
+    fields = parse_vector_from_fields(cfg.manticore.vector_from)
+
+    keys: list[str] = []
+    for doc in docs:
+        keys.append(cache_key_from_doc(doc, fields=fields, model=model, similarity=similarity))
+    for topic in topics:
+        text = normalize_text(str(topic.get("query_long") or topic.get("query_short") or ""))
+        keys.append(cache_key_from_text(text, model=model, similarity=similarity))
+
+    cache = VectorCache(cfg.manticore.vector_cache_path)
+    try:
+        deleted = cache.delete_many(keys)
+    finally:
+        cache.close()
+
+    base_payload: dict[str, Any] = {}
+    if manifest_path.exists():
+        try:
+            base_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            base_payload = {}
+    if not base_payload:
+        base_payload = {
+            "dataset_source": cfg.dataset.source,
+            "dataset_max_docs": int(cfg.dataset.max_docs or 0),
+            "dataset_keep_qrels_docs": bool(cfg.dataset.keep_qrels_docs),
+            "doc_count": len(docs),
+            "topic_count": len(topics),
+        }
+
+    _write_embedding_manifest(
+        manifest_path,
+        base_payload,
+        cfg=cfg,
+        doc_total=len(docs),
+        doc_ok=0,
+        query_total=len(topics),
+        query_ok=0,
+        input_tokens=0,
+        estimated_cost_usd=0.0,
+    )
+    return EmbeddingResetStats(
+        deleted=deleted,
+        doc_total=len(docs),
+        query_total=len(topics),
+    )
+
+
 def _doc_hash_u64(doc_id: str) -> int:
     d = hashlib.sha1(str(doc_id).encode("utf-8")).digest()
     return int.from_bytes(d[:8], "big", signed=False)
@@ -54,7 +381,7 @@ def _docs_iter_or_raise(ds: Any, source: str):
         raise
 
 
-def _prepare_hf_beir_dataset(cfg: AppConfig) -> PrepareResult:
+def _prepare_hf_beir_dataset(cfg: AppConfig, *, progress_callback: callable | None = None) -> PrepareResult:
     from huggingface_hub import hf_hub_download
 
     source = str(cfg.dataset.source)
@@ -156,20 +483,37 @@ def _prepare_hf_beir_dataset(cfg: AppConfig) -> PrepareResult:
     write_jsonl(docs_path, docs)
     write_jsonl(topics_path, topics)
     write_tsv(qrels_path, qrels_rows)
-    write_json(
+    manifest_payload = {
+        "dataset_source": cfg.dataset.source,
+        "dataset_max_docs": 0,
+        "dataset_keep_qrels_docs": True,
+        "doc_count": len(docs),
+        "selected_qrel_docs": len(qrels_doc_ids),
+        "selected_extra_docs": max(len(docs) - len(qrels_doc_ids), 0),
+        "topic_count": len(topics),
+        "qrels_count": len(qrels_rows),
+        "elapsed_seconds": round(perf_counter() - started, 3),
+    }
+    _write_embedding_manifest(
         manifest_path,
-        {
-            "dataset_source": cfg.dataset.source,
-            "dataset_max_docs": 0,
-            "dataset_keep_qrels_docs": True,
-            "doc_count": len(docs),
-            "selected_qrel_docs": len(qrels_doc_ids),
-            "selected_extra_docs": max(len(docs) - len(qrels_doc_ids), 0),
-            "topic_count": len(topics),
-            "qrels_count": len(qrels_rows),
-            "elapsed_seconds": round(perf_counter() - started, 3),
-        },
+        manifest_payload,
+        cfg=cfg,
+        doc_total=len(docs),
+        doc_ok=0,
+        query_total=len(topics),
+        query_ok=0,
+        input_tokens=0,
+        estimated_cost_usd=0.0,
     )
+    stats = _populate_embeddings(
+        cfg,
+        docs,
+        topics,
+        progress_callback=progress_callback,
+        manifest_path=manifest_path,
+        manifest_payload=manifest_payload,
+    )
+    write_json(manifest_path, _manifest_with_embeddings(manifest_payload, cfg=cfg, stats=stats))
 
     return PrepareResult(
         docs_path=docs_path,
@@ -179,9 +523,9 @@ def _prepare_hf_beir_dataset(cfg: AppConfig) -> PrepareResult:
     )
 
 
-def prepare_dataset(cfg: AppConfig) -> PrepareResult:
+def prepare_dataset(cfg: AppConfig, *, progress_callback: callable | None = None) -> PrepareResult:
     if str(cfg.dataset.source).startswith("hf-beir:"):
-        return _prepare_hf_beir_dataset(cfg)
+        return _prepare_hf_beir_dataset(cfg, progress_callback=progress_callback)
 
     import ir_datasets
 
@@ -317,20 +661,37 @@ def prepare_dataset(cfg: AppConfig) -> PrepareResult:
     write_jsonl(docs_path, docs)
     write_jsonl(topics_path, topics)
     write_tsv(qrels_path, qrels_rows)
-    write_json(
+    manifest_payload = {
+        "dataset_source": cfg.dataset.source,
+        "dataset_max_docs": max_docs,
+        "dataset_keep_qrels_docs": keep_qrels_docs,
+        "doc_count": len(docs),
+        "selected_qrel_docs": selected_qrel_docs,
+        "selected_extra_docs": selected_extra_docs,
+        "topic_count": len(topics),
+        "qrels_count": len(qrels_rows),
+        "elapsed_seconds": round(perf_counter() - started, 3),
+    }
+    _write_embedding_manifest(
         manifest_path,
-        {
-            "dataset_source": cfg.dataset.source,
-            "dataset_max_docs": max_docs,
-            "dataset_keep_qrels_docs": keep_qrels_docs,
-            "doc_count": len(docs),
-            "selected_qrel_docs": selected_qrel_docs,
-            "selected_extra_docs": selected_extra_docs,
-            "topic_count": len(topics),
-            "qrels_count": len(qrels_rows),
-            "elapsed_seconds": round(perf_counter() - started, 3),
-        },
+        manifest_payload,
+        cfg=cfg,
+        doc_total=len(docs),
+        doc_ok=0,
+        query_total=len(topics),
+        query_ok=0,
+        input_tokens=0,
+        estimated_cost_usd=0.0,
     )
+    stats = _populate_embeddings(
+        cfg,
+        docs,
+        topics,
+        progress_callback=progress_callback,
+        manifest_path=manifest_path,
+        manifest_payload=manifest_payload,
+    )
+    write_json(manifest_path, _manifest_with_embeddings(manifest_payload, cfg=cfg, stats=stats))
 
     return PrepareResult(
         docs_path=docs_path,

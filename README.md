@@ -375,7 +375,7 @@ Vector cache is stored as SQLite file (configured by `manticore.vector_cache_pat
 
 Recommended defaults in this repo:
 - `vector_cache/trec-covid-openai.sqlite`
-- `vector_cache/msmarco-passage-openai.sqlite`
+- `vector_cache/msmarco-passage-embeddings.sqlite`
 - `vector_cache/msmarco-lite-openai.sqlite`
 
 This directory is important:

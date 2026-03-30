@@ -18,7 +18,7 @@ from .table_filters import (
     fit_text,
     prompt_filter_value,
 )
-from .table_layout import dynamic_row_lines, wrap_cell
+from .table_layout import wrap_text_lines
 
 _fit = fit_text
 
@@ -268,7 +268,7 @@ def _draw_row(
     selected: bool,
     cursor: bool,
     widths: dict[str, int],
-    model_lines_max: int,
+    row_height: int,
 ) -> None:
     prefix = "[x]" if selected else "[ ]"
     attrs = curses.A_REVERSE if cursor else curses.A_NORMAL
@@ -293,10 +293,70 @@ def _draw_row(
     ]
     x = 0
     for text, cell_attrs, width in columns:
-        cell_lines = wrap_cell(text, width, max_lines=model_lines_max)
-        for i in range(model_lines_max):
+        raw_lines = wrap_text_lines(text, width)
+        cell_lines = [ln.ljust(width)[:width] for ln in raw_lines]
+        while len(cell_lines) < row_height:
+            cell_lines.append("".ljust(width))
+        for i in range(row_height):
             stdscr.addstr(y + i, x, cell_lines[i], cell_attrs)
         x += width + 1
+
+
+def _row_height(row: ArtifactRow, widths: dict[str, int]) -> int:
+    values = [
+        "[x]",
+        row.run_id,
+        row.run_at,
+        row.dataset_source or "-",
+        row.engine or "-",
+        _display_mode(row.mode or "-"),
+        f"{int(row.doc_count):,}" if row.doc_count is not None else "-",
+        row.model or "n/a",
+        row.status,
+        f"{row.relevance.get('ndcg@10', 0.0):.4f}",
+        f"{row.relevance.get('mrr@10', 0.0):.4f}",
+        f"{row.relevance.get('map@10', 0.0):.4f}",
+        f"{row.relevance.get('p@20', 0.0):.4f}",
+        f"{row.relevance.get('recall@100', 0.0):.4f}",
+    ]
+    widths_list = [
+        widths["sel"],
+        widths["run_id"],
+        widths["run_at"],
+        widths["dataset"],
+        widths["engine"],
+        widths["mode"],
+        widths["docs"],
+        widths["model"],
+        widths["status"],
+        widths["ndcg"],
+        widths["mrr"],
+        widths["map"],
+        widths["p20"],
+        widths["recall"],
+    ]
+    return max(1, max(len(wrap_text_lines(text, width)) for text, width in zip(values, widths_list, strict=True)))
+
+
+def _ensure_current_visible(current: int, offset: int, rows: list[ArtifactRow], widths: dict[str, int], avail_lines: int) -> int:
+    if not rows:
+        return 0
+    heights = [_row_height(r, widths) for r in rows]
+    # Move offset forward if current is above it.
+    if current < offset:
+        offset = current
+    # Ensure current fits into the window.
+    while True:
+        used = 0
+        visible_end = offset
+        while visible_end < len(rows) and used + heights[visible_end] <= avail_lines:
+            used += heights[visible_end]
+            visible_end += 1
+        if current < visible_end:
+            return offset
+        offset += 1
+        if offset >= len(rows):
+            return max(0, len(rows) - 1)
 
 
 def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
@@ -412,14 +472,14 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                 return f"{row.relevance.get('recall@100', 0.0):.4f}"
             return ""
 
-        def _apply_sort(col: str, desc: bool) -> None:
+        def _apply_sort(col: str, desc: bool, *, preserve_current_item: bool = True) -> None:
             nonlocal rows, selected_idx, current, offset
             if not rows:
                 selected_ids: set[str] = set()
                 current_id = None
             else:
                 selected_ids = {rows[i].run_id for i in selected_idx if 0 <= i < len(rows)}
-                current_id = rows[current].run_id if 0 <= current < len(rows) else None
+                current_id = rows[current].run_id if preserve_current_item and 0 <= current < len(rows) else None
             rows = filter_rows(all_rows, filters, _filter_value)
             rows.sort(key=lambda r: _row_sort_key(r, col), reverse=desc)
             selected_idx = {i for i, r in enumerate(rows) if r.run_id in selected_ids}
@@ -436,7 +496,6 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
-            row_h = dynamic_row_lines(len(rows), h)
             help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  f filter  a select all  d delete  ENTER submit  ESC/q cancel"
             stdscr.addstr(0, 0, fit_text(help1, max(1, w - 1)), curses.A_BOLD)
             filter_lines = filter_block_height(filters, widths)
@@ -469,17 +528,14 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             )
 
             rows_y = 2 + filter_lines
-            visible = max(1, (h - rows_y - 2) // row_h)
-            if current < offset:
-                offset = current
-            if current >= offset + visible:
-                offset = current - visible + 1
-
-            for i in range(visible):
-                ridx = offset + i
-                if ridx >= len(rows):
+            avail_lines = max(1, h - rows_y - 2)
+            offset = _ensure_current_visible(current, offset, rows, widths, avail_lines)
+            y = rows_y
+            ridx = offset
+            while ridx < len(rows) and y < h - 2:
+                row_h = _row_height(rows[ridx], widths)
+                if y + row_h > h - 1:
                     break
-                y = rows_y + i * row_h
                 _draw_row(
                     stdscr=stdscr,
                     y=y,
@@ -488,8 +544,10 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                     selected=(ridx in selected_idx),
                     cursor=(ridx == current),
                     widths=widths,
-                    model_lines_max=row_h,
+                    row_height=row_h,
                 )
+                y += row_h
+                ridx += 1
 
             sort_hint = f"{sort_by}{' desc' if sort_desc else ' asc'}"
             summary = f"Selected: {len(selected_idx)} / {len(rows)}  |  Sort: {sort_hint}"
@@ -505,12 +563,12 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                 sort_idx = (sort_idx - 1) % len(sort_cols)
                 sort_by = sort_cols[sort_idx]
                 sort_desc = _default_sort_desc(sort_by)
-                _apply_sort(sort_by, sort_desc)
+                _apply_sort(sort_by, sort_desc, preserve_current_item=False)
             elif ch == curses.KEY_RIGHT:
                 sort_idx = (sort_idx + 1) % len(sort_cols)
                 sort_by = sort_cols[sort_idx]
                 sort_desc = _default_sort_desc(sort_by)
-                _apply_sort(sort_by, sort_desc)
+                _apply_sort(sort_by, sort_desc, preserve_current_item=False)
             elif ch == ord(" "):
                 if current in selected_idx:
                     selected_idx.remove(current)

@@ -11,13 +11,15 @@ from time import perf_counter
 from .config import AppConfig, load_config, load_engine_targets
 from .configmap import generate_configmap
 from .discovery import discover_config_paths
+from .embedding_client import resolved_embedding_model
 from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
 from .io_utils import read_jsonl
 from .manticore import ManticoreClient
 from .io_utils import generate_run_id
-from .prepare import prepare_dataset
+from .prepare import prepare_dataset, reset_embeddings
 from .prepare_matrix import (
+    PrepareSelection,
     PrepareVariant,
     build_prepare_variants_from_config_paths,
     select_prepare_variants_interactive,
@@ -88,7 +90,7 @@ def _select_simple_option_interactive(title: str, options: list[tuple[str, str]]
 
 def _select_top_command_interactive() -> str | None:
     options: list[tuple[str, str, str]] = [
-        ("prepare", "Prepare", "Download and prepare dataset files"),
+        ("prepare", "Prepare", "Download dataset files and build embeddings"),
         ("index", "Index", "Create/recreate benchmark indexes in Manticore/Qdrant"),
         ("run", "Run", "Execute benchmark queries and collect metrics"),
         ("report", "Report", "Pick artifacts and generate combined markdown report"),
@@ -177,7 +179,7 @@ def _confirm_manticore_vector_reindex_if_needed(
         "\nManticore vector benchmark table already exists:\n"
         f"- vector: {cfg.manticore.vector_table}\n\n"
         "Indexing in vector mode will drop and recreate this table.\n"
-        "Cached vectors are reused; cache misses are auto-embedded by Manticore and then cached.\n"
+        "Cached vectors are reused; cache misses now fail and must be built during `bench prepare`.\n"
         "Type 'yes' to continue: "
     )
     if not sys.stdin.isatty():
@@ -226,7 +228,7 @@ def _confirm_manticore_vector_reindex_for_configs(
         "\nManticore vector benchmark table(s) already exist:\n"
         f"{tables_text}\n\n"
         "Indexing in vector mode will drop and recreate these table(s).\n"
-        "Cached vectors are reused; cache misses are auto-embedded by Manticore and then cached.\n"
+        "Cached vectors are reused; cache misses now fail and must be built during `bench prepare`.\n"
         "Type 'yes' to continue: "
     )
     answer = input(message).strip().lower()
@@ -267,7 +269,7 @@ def _check_vector_cache_sample(cfg: AppConfig) -> CacheSampleCheck | None:
     cache = VectorCache(cfg.manticore.vector_cache_path)
     try:
         status_map = cache.get_status_map(
-            model=cfg.manticore.vector_model,
+            model=resolved_embedding_model(cfg),
             similarity=cfg.manticore.vector_similarity,
         )
     finally:
@@ -280,7 +282,7 @@ def _check_vector_cache_sample(cfg: AppConfig) -> CacheSampleCheck | None:
         key = cache_key_from_doc(
             doc,
             fields=fields,
-            model=cfg.manticore.vector_model,
+            model=resolved_embedding_model(cfg),
             similarity=cfg.manticore.vector_similarity,
         )
         status = status_map.get(key, "missing")
@@ -328,7 +330,7 @@ def _confirm_vector_cache_coverage(
     elif engine == "opensearch":
         engine_note = "OpenSearch vector indexing is likely to fail if cache misses remain."
     else:
-        engine_note = "Manticore vector indexing will auto-embed cache misses and may call the remote embedding model."
+        engine_note = "Manticore vector indexing will fail if cache misses remain. Build embeddings during `bench prepare` first."
     sample_text = ", ".join(check.missing_keys) if check.missing_keys else "-"
     prompt = (
         f"\nVector cache preflight for entry '{entry_name}':\n"
@@ -347,6 +349,7 @@ def _confirm_vector_cache_coverage(
 def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
     try:
         selected: list[PrepareVariant] = []
+        action = "reset" if bool(getattr(args, "reset_embeddings", False)) else "prepare"
         raw_sources: list[str] = []
         for value in list(getattr(args, "source", []) or []):
             raw_sources.extend([x.strip() for x in str(value).split(",") if x.strip()])
@@ -373,7 +376,9 @@ def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
                     "Check `--source` / `--entry` values against config entries."
                 )
         elif sys.stdin.isatty() and sys.stdout.isatty():
-            selected = select_prepare_variants_interactive(variants)
+            selection = select_prepare_variants_interactive(variants)
+            selected = selection.variants
+            action = selection.action
             if not selected:
                 print("Prepare canceled: no sources selected.")
                 return 0
@@ -388,18 +393,85 @@ def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
                 )
             ]
 
+        if action == "cancel":
+            print("Prepare canceled.")
+            return 0
+
+        if action == "reset":
+            if not sys.stdin.isatty():
+                raise RuntimeError(
+                    "Refusing to reset embeddings without confirmation in non-interactive mode. "
+                    "Re-run interactively."
+                )
+            print("About to reset embeddings for:")
+            for v in selected:
+                print(f"- source={v.source} output={v.cfg.dataset.prepared_dir}")
+            answer = input("Type 'yes' to continue: ").strip().lower()
+            if answer != "yes":
+                print("Reset canceled.")
+                return 0
+
         replay: list[str] = []
         for v in selected:
-            replay.append(f"bench --config {args.config} prepare --source {v.source}")
+            cmd = f"bench --config {args.config} prepare --source {v.source}"
+            if action == "reset":
+                cmd += " --reset-embeddings"
+            replay.append(cmd)
         print("Replay commands:")
         for cmd in replay:
             print(cmd)
 
         for v in selected:
-            print(f"Preparing: source={v.source} output={v.cfg.dataset.prepared_dir}")
-            result = prepare_dataset(v.cfg)
-            print(f"Prepared dataset written to {result.docs_path.parent}")
+            if action == "reset":
+                print(f"Resetting embeddings: source={v.source} output={v.cfg.dataset.prepared_dir}")
+                stats = reset_embeddings(v.cfg)
+                print(
+                    f"Reset embeddings completed: deleted={stats.deleted} "
+                    f"docs={stats.doc_total} queries={stats.query_total} output={v.cfg.dataset.prepared_dir}"
+                )
+            else:
+                print(f"Preparing: source={v.source} output={v.cfg.dataset.prepared_dir}")
+                started = perf_counter()
+                is_tty = sys.stdout.isatty()
+                def _progress(update: dict[str, object]) -> None:
+                    stage = str(update.get("stage", ""))
+                    processed = int(update.get("processed", 0))
+                    total = int(update.get("total", 0) or 0)
+                    embedded_ok = int(update.get("embedded_ok", 0) or 0)
+                    cost = float(update.get("estimated_cost_usd", 0.0) or 0.0)
+                    tokens = int(update.get("input_tokens", 0) or 0)
+                    pct = (100.0 * processed / total) if total > 0 else 0.0
+                    elapsed = perf_counter() - started
+                    line = (
+                        f"Prepare progress [{stage}] {processed}/{total} ({pct:5.1f}%) "
+                        f"embeddings_ok={embedded_ok} tokens={tokens} cost=${cost:.4f} elapsed={elapsed:6.1f}s"
+                    )
+                    if is_tty:
+                        end = "\n" if total > 0 and processed >= total and stage in ("query_embed", "query_cache_scan") else ""
+                        print(f"\r{line}", end=end, flush=True)
+                    else:
+                        print(line, flush=True)
+                try:
+                    result = prepare_dataset(v.cfg, progress_callback=_progress)
+                except KeyboardInterrupt:
+                    if is_tty:
+                        print()
+                    print(
+                        f"Prepare interrupted: source={v.source} output={v.cfg.dataset.prepared_dir} "
+                        "(partial cache and manifest state preserved)"
+                    )
+                    return 130
+                except Exception:
+                    if is_tty:
+                        print()
+                    raise
+                if is_tty:
+                    print()
+                print(f"Prepared dataset written to {result.docs_path.parent}")
         return 0
+    except KeyboardInterrupt:
+        print("Prepare interrupted.")
+        return 130
     except Exception as exc:
         print(f"FATAL: {exc}")
         return 1
@@ -590,7 +662,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         last_by_key.clear()
         run_id = generate_run_id()
         results = run_index(cfg_for_engine, engine=engine, mode=args.mode, progress_callback=_progress)
-        model_note = f" model={cfg_for_engine.manticore.vector_model}" if args.mode in ("vector", "hybrid") else ""
+        model_note = f" model={resolved_embedding_model(cfg_for_engine)}" if args.mode in ("vector", "hybrid") else ""
         print(f"Indexed profile={entry_name} engine={engine} mode={args.mode}{model_note}")
         _print_index_result_details(results)
         return 0
@@ -718,6 +790,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare = sub.add_parser("prepare", add_help=False)
     p_prepare.add_argument("--source", action="append", default=None, help="Dataset source(s) to prepare")
     p_prepare.add_argument("--entry", action="append", default=None, help="Entry name(s) to prepare source from")
+    p_prepare.add_argument("--reset-embeddings", action="store_true", help="Clear current-model embeddings for the selected prepared dataset(s)")
 
     p_index = sub.add_parser("index", add_help=False)
     p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch"])

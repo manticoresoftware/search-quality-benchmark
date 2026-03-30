@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .config import AppConfig
+from .embedding_client import resolved_embedding_model
 from .io_utils import read_jsonl
 from .manticore import ManticoreClient
 from .vector_cache import VectorCache, cache_key_from_doc, normalized_vector_text, parse_vector_from_fields
@@ -28,7 +29,7 @@ def populate_cache_from_manticore(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> CachePopulateResult:
     table = source_table or cfg.manticore.vector_table
-    model = (model_name or cfg.manticore.vector_model).strip()
+    model = (model_name or resolved_embedding_model(cfg)).strip()
     sim = (similarity or cfg.manticore.vector_similarity).strip().lower()
     fields = parse_vector_from_fields(vector_from or cfg.manticore.vector_from)
     docs = read_jsonl(f"{cfg.dataset.prepared_dir}/docs.jsonl")
