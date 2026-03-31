@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 from time import time
@@ -84,6 +85,18 @@ class ManticoreClient:
                 cur.execute(sql, params)
             rows = list(cur.fetchall())
         return rows
+
+    def search_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        base_url = f"http://{self.cfg.host}:{self.cfg.http_port}/search"
+        resp = requests.post(base_url, json=payload, timeout=max(self.cfg.query_timeout_seconds, 30))
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            body = (resp.text or "").strip()
+            if body:
+                raise requests.HTTPError(f"{exc} body={body}") from exc
+            raise
+        return resp.json()
 
     def show_profile(self) -> list[dict[str, Any]]:
         return self.query("SHOW PROFILE")
@@ -239,24 +252,12 @@ class ManticoreClient:
         retries: int,
         stats: IngestStats,
     ) -> int:
-        values = [
-            (
-                d["id"],
-                d["doc_id"],
-                d.get("title", ""),
-                d.get("abstract", ""),
-                d.get("doi", ""),
-                d.get("date", ""),
-            )
-            for d in batch
-        ]
         attempt = 0
         while True:
             try:
-                with self.conn.cursor() as cur:
-                    cur.executemany(sql, values)
-                stats.rows_inserted += len(values)
-                return len(values)
+                inserted = self.bulk_insert_docs_http(sql.split()[2], batch)
+                stats.rows_inserted += inserted
+                return inserted
             except Exception as exc:
                 stats.note_error(exc)
                 attempt += 1
@@ -337,48 +338,36 @@ class ManticoreClient:
         attempt = 0
         while True:
             try:
-                values_sql: list[str] = []
+                rows: list[dict[str, Any]] = []
                 for d in batch:
                     vec = [float(x) for x in (d.get("vector") or [])]
                     if not vec:
                         continue
-                    vec_lit = "(" + ",".join(f"{x:.8f}" for x in vec) + ")"
                     if minimal_fields:
-                        values_sql.append(
-                            "("
-                            f"{int(d['id'])},"
-                            f"{self.conn.escape(str(d.get('doc_id', '')))},"
-                            f"{vec_lit}"
-                            ")"
+                        rows.append(
+                            {
+                                "id": int(d["id"]),
+                                "doc_id": str(d.get("doc_id", "")),
+                                vector_field: vec,
+                            }
                         )
                     else:
-                        values_sql.append(
-                            "("
-                            f"{int(d['id'])},"
-                            f"{self.conn.escape(str(d.get('doc_id', '')))},"
-                            f"{self.conn.escape(str(d.get('title', '') or ''))},"
-                            f"{self.conn.escape(str(d.get('abstract', '') or ''))},"
-                            f"{self.conn.escape(str(d.get('doi', '') or ''))},"
-                            f"{self.conn.escape(str(d.get('date', '') or ''))},"
-                            f"{vec_lit}"
-                            ")"
+                        rows.append(
+                            {
+                                "id": int(d["id"]),
+                                "doc_id": str(d.get("doc_id", "")),
+                                "title": str(d.get("title", "") or ""),
+                                "abstract": str(d.get("abstract", "") or ""),
+                                "doi": str(d.get("doi", "") or ""),
+                                "date": str(d.get("date", "") or ""),
+                                vector_field: vec,
+                            }
                         )
-                if not values_sql:
+                if not rows:
                     return 0
-                if minimal_fields:
-                    sql = (
-                        f"INSERT INTO {table_name} (id, doc_id, {vector_field}) VALUES "
-                        + ", ".join(values_sql)
-                    )
-                else:
-                    sql = (
-                        f"INSERT INTO {table_name} (id, doc_id, title, abstract, doi, date, {vector_field}) VALUES "
-                        + ", ".join(values_sql)
-                    )
-                with self.conn.cursor() as cur:
-                    cur.execute(sql)
-                stats.rows_inserted += len(values_sql)
-                return len(values_sql)
+                inserted = self.bulk_insert_docs_http(table_name, rows)
+                stats.rows_inserted += inserted
+                return inserted
             except Exception as exc:
                 stats.note_error(exc)
                 attempt += 1
@@ -386,6 +375,49 @@ class ManticoreClient:
                     stats.failed_batches += 1
                     return 0
                 stats.retried_batches += 1
+
+    def bulk_insert_docs_http(self, table_name: str, docs: list[dict[str, Any]]) -> int:
+        if not docs:
+            return 0
+        lines = []
+        for d in docs:
+            doc = {k: v for k, v in d.items() if k != "id"}
+            lines.append(json.dumps({"insert": {"table": table_name, "id": int(d["id"]), "doc": doc}}, ensure_ascii=True))
+        body = "\n".join(lines) + "\n"
+        url = f"http://{self.cfg.host}:{self.cfg.http_port}/bulk"
+        resp = requests.post(
+            url,
+            data=body.encode("utf-8"),
+            headers={"Content-Type": "application/x-ndjson"},
+            timeout=max(self.cfg.query_timeout_seconds, 30),
+        )
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            body_text = (resp.text or "").strip()
+            if body_text:
+                raise requests.HTTPError(f"{exc} body={body_text}") from exc
+            raise
+        payload = resp.json()
+        if payload.get("errors"):
+            raise RuntimeError(f"Manticore bulk insert errors: {json.dumps(payload)[:2000]}")
+        inserted = 0
+        for item in payload.get("items", []):
+            data = item.get("insert") or item.get("create") or item.get("bulk") or {}
+            try:
+                inserted += int(data.get("created", 0) or 0)
+            except Exception:
+                pass
+            try:
+                inserted += int(data.get("updated", 0) or 0)
+            except Exception:
+                pass
+            if inserted:
+                continue
+            result = str(data.get("result", "")).strip().lower()
+            if result in {"created", "updated"}:
+                inserted += 1
+        return inserted
 
     @staticmethod
     def parse_float_vector(value: Any) -> list[float]:

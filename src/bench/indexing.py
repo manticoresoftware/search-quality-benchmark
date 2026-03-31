@@ -26,12 +26,86 @@ class ModeIndexResult:
     error_reasons: dict[str, int] = field(default_factory=dict)
 
 
+def _collect_cached_docs(
+    *,
+    docs: list[dict[str, Any]],
+    cfg: AppConfig,
+    engine: str,
+    mode: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[tuple[dict[str, Any], str]], int, list[str]]:
+    fields = parse_vector_from_fields(cfg.manticore.vector_from)
+    cache = VectorCache(cfg.manticore.vector_cache_path)
+    docs_cached: list[tuple[dict[str, Any], str]] = []
+    missing_keys: list[str] = []
+    missing_total = 0
+    try:
+        model = resolved_embedding_model(cfg)
+        chunk_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
+        total = len(docs)
+        for start in range(0, total, chunk_size):
+            chunk_docs = docs[start : start + chunk_size]
+            keyed = [
+                (
+                    d,
+                    cache_key_from_doc(
+                        d,
+                        fields=fields,
+                        model=model,
+                        similarity=cfg.manticore.vector_similarity,
+                    ),
+                )
+                for d in chunk_docs
+            ]
+            status_map = cache.get_status_many([k for _, k in keyed])
+            for d, key in keyed:
+                st = status_map.get(key, "missing")
+                if st == "missing":
+                    missing_total += 1
+                    if len(missing_keys) < 5:
+                        missing_keys.append(key)
+                    continue
+                if st == "null":
+                    continue
+                docs_cached.append((d, key))
+            processed = min(start + len(chunk_docs), total)
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "engine": engine,
+                        "mode": mode,
+                        "stage": "cache_lookup",
+                        "processed": processed,
+                        "total": total,
+                        "inserted": len(docs_cached),
+                        "failed_batches": 0,
+                        "retried_batches": 0,
+                    }
+                )
+    finally:
+        cache.close()
+    return docs_cached, missing_total, missing_keys
+
+
 def _run_index_manticore(
     cfg: AppConfig,
     mode: str,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "engine": "manticore",
+                "mode": mode,
+                "stage": "load_docs",
+                "processed": 0,
+                "total": 0,
+                "inserted": 0,
+                "failed_batches": 0,
+                "retried_batches": 0,
+            }
+        )
     docs = read_jsonl(docs_path)
 
     client = ManticoreClient(cfg.manticore)
@@ -67,50 +141,13 @@ def _run_index_manticore(
             )
 
         if mode in ("vector", "hybrid"):
-            fields = parse_vector_from_fields(cfg.manticore.vector_from)
-            cache = VectorCache(cfg.manticore.vector_cache_path)
-            docs_cached: list[tuple[dict[str, Any], str]] = []
-            skipped_null = 0
-            missing_keys: list[str] = []
-            missing_total = 0
-            try:
-                model = resolved_embedding_model(cfg)
-                status_map = cache.get_status_map(
-                    model=model,
-                    similarity=cfg.manticore.vector_similarity,
-                )
-                for i, d in enumerate(docs, start=1):
-                    key = cache_key_from_doc(
-                        d,
-                        fields=fields,
-                        model=model,
-                        similarity=cfg.manticore.vector_similarity,
-                    )
-                    st = status_map.get(key, "missing")
-                    if st == "missing":
-                        missing_total += 1
-                        if len(missing_keys) < 5:
-                            missing_keys.append(key)
-                        continue
-                    if st == "null":
-                        skipped_null += 1
-                        continue
-                    docs_cached.append((d, key))
-                    if progress_callback is not None and (i == 1 or i % 1000 == 0 or i == len(docs)):
-                        progress_callback(
-                            {
-                                "engine": "manticore",
-                                "mode": mode,
-                                "stage": "cache_lookup",
-                                "processed": i,
-                                "total": len(docs),
-                                "inserted": len(docs_cached),
-                                "failed_batches": 0,
-                                "retried_batches": 0,
-                            }
-                        )
-            finally:
-                cache.close()
+            docs_cached, missing_total, missing_keys = _collect_cached_docs(
+                docs=docs,
+                cfg=cfg,
+                engine="manticore",
+                mode=mode,
+                progress_callback=progress_callback,
+            )
 
             if missing_keys:
                 raise RuntimeError(
@@ -254,6 +291,19 @@ def _run_index_qdrant(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "engine": "qdrant",
+                "mode": mode,
+                "stage": "load_docs",
+                "processed": 0,
+                "total": 0,
+                "inserted": 0,
+                "failed_batches": 0,
+                "retried_batches": 0,
+            }
+        )
     docs = read_jsonl(docs_path)
     qdrant = QdrantBackend(cfg.qdrant)
     qdrant.ensure_accessible()
@@ -315,48 +365,13 @@ def _run_index_qdrant(
         )
 
     if mode == "vector":
-        fields = parse_vector_from_fields(cfg.manticore.vector_from)
-        cache = VectorCache(cfg.manticore.vector_cache_path)
-        docs_cached: list[tuple[dict[str, Any], str]] = []
-        missing_keys: list[str] = []
-        missing_total = 0
-        try:
-            model = resolved_embedding_model(cfg)
-            status_map = cache.get_status_map(
-                model=model,
-                similarity=cfg.manticore.vector_similarity,
-            )
-            for i, d in enumerate(docs, start=1):
-                key = cache_key_from_doc(
-                    d,
-                    fields=fields,
-                    model=model,
-                    similarity=cfg.manticore.vector_similarity,
-                )
-                st = status_map.get(key, "missing")
-                if st == "missing":
-                    missing_total += 1
-                    if len(missing_keys) < 5:
-                        missing_keys.append(key)
-                    continue
-                if st == "null":
-                    continue
-                docs_cached.append((d, key))
-                if progress_callback is not None and (i == 1 or i % 1000 == 0 or i == len(docs)):
-                    progress_callback(
-                        {
-                            "engine": "qdrant",
-                            "mode": "vector",
-                            "stage": "cache_lookup",
-                            "processed": i,
-                            "total": len(docs),
-                            "inserted": len(docs_cached),
-                            "failed_batches": 0,
-                            "retried_batches": 0,
-                        }
-                    )
-        finally:
-            cache.close()
+        docs_cached, missing_total, missing_keys = _collect_cached_docs(
+            docs=docs,
+            cfg=cfg,
+            engine="qdrant",
+            mode="vector",
+            progress_callback=progress_callback,
+        )
         if missing_keys:
             raise RuntimeError(
                 "Vector cache miss during Qdrant vector indexing. "
@@ -452,6 +467,19 @@ def _run_index_meilisearch(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "engine": "meilisearch",
+                "mode": mode,
+                "stage": "load_docs",
+                "processed": 0,
+                "total": 0,
+                "inserted": 0,
+                "failed_batches": 0,
+                "retried_batches": 0,
+            }
+        )
     docs = read_jsonl(docs_path)
     backend = MeilisearchBackend(cfg.meilisearch)
     backend.ensure_accessible()
@@ -510,48 +538,13 @@ def _run_index_meilisearch(
         )
 
     if mode == "vector":
-        fields = parse_vector_from_fields(cfg.manticore.vector_from)
-        cache = VectorCache(cfg.manticore.vector_cache_path)
-        docs_cached: list[tuple[dict[str, Any], str]] = []
-        missing_keys: list[str] = []
-        missing_total = 0
-        try:
-            model = resolved_embedding_model(cfg)
-            status_map = cache.get_status_map(
-                model=model,
-                similarity=cfg.manticore.vector_similarity,
-            )
-            for i, d in enumerate(docs, start=1):
-                key = cache_key_from_doc(
-                    d,
-                    fields=fields,
-                    model=model,
-                    similarity=cfg.manticore.vector_similarity,
-                )
-                st = status_map.get(key, "missing")
-                if st == "missing":
-                    missing_total += 1
-                    if len(missing_keys) < 5:
-                        missing_keys.append(key)
-                    continue
-                if st == "null":
-                    continue
-                docs_cached.append((d, key))
-                if progress_callback is not None and (i == 1 or i % 1000 == 0 or i == len(docs)):
-                    progress_callback(
-                        {
-                            "engine": "meilisearch",
-                            "mode": "vector",
-                            "stage": "cache_lookup",
-                            "processed": i,
-                            "total": len(docs),
-                            "inserted": len(docs_cached),
-                            "failed_batches": 0,
-                            "retried_batches": 0,
-                        }
-                    )
-        finally:
-            cache.close()
+        docs_cached, missing_total, missing_keys = _collect_cached_docs(
+            docs=docs,
+            cfg=cfg,
+            engine="meilisearch",
+            mode="vector",
+            progress_callback=progress_callback,
+        )
         if missing_keys:
             raise RuntimeError(
                 "Vector cache miss during Meilisearch vector indexing. "
@@ -645,6 +638,19 @@ def _run_index_opensearch(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "engine": "opensearch",
+                "mode": mode,
+                "stage": "load_docs",
+                "processed": 0,
+                "total": 0,
+                "inserted": 0,
+                "failed_batches": 0,
+                "retried_batches": 0,
+            }
+        )
     docs = read_jsonl(docs_path)
     backend = OpenSearchBackend(cfg.opensearch)
     backend.ensure_accessible()
@@ -700,48 +706,13 @@ def _run_index_opensearch(
         )
 
     if mode == "vector":
-        fields = parse_vector_from_fields(cfg.manticore.vector_from)
-        cache = VectorCache(cfg.manticore.vector_cache_path)
-        docs_cached: list[tuple[dict[str, Any], str]] = []
-        missing_keys: list[str] = []
-        missing_total = 0
-        try:
-            model = resolved_embedding_model(cfg)
-            status_map = cache.get_status_map(
-                model=model,
-                similarity=cfg.manticore.vector_similarity,
-            )
-            for i, d in enumerate(docs, start=1):
-                key = cache_key_from_doc(
-                    d,
-                    fields=fields,
-                    model=model,
-                    similarity=cfg.manticore.vector_similarity,
-                )
-                st = status_map.get(key, "missing")
-                if st == "missing":
-                    missing_total += 1
-                    if len(missing_keys) < 5:
-                        missing_keys.append(key)
-                    continue
-                if st == "null":
-                    continue
-                docs_cached.append((d, key))
-                if progress_callback is not None and (i == 1 or i % 1000 == 0 or i == len(docs)):
-                    progress_callback(
-                        {
-                            "engine": "opensearch",
-                            "mode": "vector",
-                            "stage": "cache_lookup",
-                            "processed": i,
-                            "total": len(docs),
-                            "inserted": len(docs_cached),
-                            "failed_batches": 0,
-                            "retried_batches": 0,
-                        }
-                    )
-        finally:
-            cache.close()
+        docs_cached, missing_total, missing_keys = _collect_cached_docs(
+            docs=docs,
+            cfg=cfg,
+            engine="opensearch",
+            mode="vector",
+            progress_callback=progress_callback,
+        )
         if missing_keys:
             raise RuntimeError(
                 "Vector cache miss during OpenSearch vector indexing. "

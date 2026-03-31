@@ -81,50 +81,11 @@ def _run_single_query_manticore(
     client = ManticoreClient(cfg.manticore)
     try:
         started = perf_counter()
-        if mode == "fulltext":
-            option_clause = _manticore_fulltext_option_clause(cfg)
-            qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, query_text))
-            rows = client.query(
-                f"""
-                SELECT doc_id, WEIGHT() AS score
-                FROM {cfg.manticore.fulltext_table}
-                WHERE MATCH({qlit})
-                LIMIT {cfg.benchmark.limit}
-                OPTION {option_clause}
-                """
-            )
-        elif mode == "hybrid":
-            if not query_vector:
-                raise RuntimeError("Missing query vector for Manticore hybrid search.")
-            qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, query_text))
-            vector_literal = "(" + ",".join(f"{float(x):.8f}" for x in query_vector) + ")"
-            knn_expr = _manticore_knn_predicate(cfg, vector_literal)
-            option_clause = _manticore_hybrid_option_clause(cfg)
-            rows = client.query(
-                f"""
-                SELECT doc_id, hybrid_score() AS score
-                FROM {cfg.manticore.vector_table}
-                WHERE MATCH({qlit}) AND {knn_expr}
-                LIMIT {cfg.benchmark.limit}
-                OPTION {option_clause}
-                """
-            )
-        else:
-            if not query_vector:
-                raise RuntimeError("Missing query vector for Manticore vector search.")
-            vector_literal = "(" + ",".join(f"{float(x):.8f}" for x in query_vector) + ")"
-            knn_expr = _manticore_knn_predicate(cfg, vector_literal)
-            rows = client.query(
-                f"""
-                SELECT doc_id, knn_dist() AS distance
-                FROM {cfg.manticore.vector_table}
-                WHERE {knn_expr}
-                LIMIT {cfg.benchmark.limit}
-                {"OPTION " + _manticore_vector_option_clause(cfg) if _manticore_vector_option_clause(cfg) else ""}
-                """
-            )
+        payload = _manticore_search_request(cfg, mode, query_text, query_vector)
+        response = client.search_json(payload)
         latency_ms = (perf_counter() - started) * 1000.0
-        doc_ids = [str(r["doc_id"]) for r in rows if r.get("doc_id")]
+        hits = response.get("hits", {}).get("hits", [])
+        doc_ids = [str((h.get("_source") or {}).get("doc_id", "")) for h in hits if (h.get("_source") or {}).get("doc_id")]
         return QueryResult(
             mode=mode,
             topic_id=topic_id,
@@ -163,56 +124,21 @@ def _collect_diagnostics_manticore(cfg: AppConfig, modes: list[str], topics: lis
                 qtext = query_text_for_mode(t, mode, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
                 entry: dict[str, Any] = {"topic_id": t["topic_id"], "query": qtext}
                 try:
-                    if mode == "fulltext":
-                        option_clause = _manticore_fulltext_option_clause(cfg)
-                        qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, qtext))
-                        client.query(
-                            f"""
-                            SELECT doc_id
-                            FROM {cfg.manticore.fulltext_table}
-                            WHERE MATCH({qlit})
-                            LIMIT {cfg.benchmark.limit}
-                            OPTION {option_clause}
-                            """
-                        )
-                    elif mode == "hybrid":
+                    qvec: list[float] | None = None
+                    if mode == "hybrid":
                         qvec = _get_query_vectors_from_cache_or_embed(
                             cfg,
                             [query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant)],
                         ).get(
                             query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
                         )
-                        if not qvec:
-                            raise RuntimeError("Missing query vector for diagnostics.")
-                        qlit = client.conn.escape(_manticore_fulltext_match_query(cfg, qtext))
-                        vector_literal = "(" + ",".join(f"{float(x):.8f}" for x in qvec) + ")"
-                        knn_expr = _manticore_knn_predicate(cfg, vector_literal)
-                        client.query(
-                            f"""
-                            SELECT doc_id
-                            FROM {cfg.manticore.vector_table}
-                            WHERE MATCH({qlit}) AND {knn_expr}
-                            LIMIT {cfg.benchmark.limit}
-                            OPTION {_manticore_hybrid_option_clause(cfg)}
-                            """
-                        )
-                    else:
+                    elif mode == "vector":
                         qvec = _get_query_vectors_from_cache_or_embed(cfg, [qtext]).get(qtext, [])
-                        if not qvec:
-                            raise RuntimeError("Missing query vector for diagnostics.")
-                        vector_literal = "(" + ",".join(f"{float(x):.8f}" for x in qvec) + ")"
-                        knn_expr = _manticore_knn_predicate(cfg, vector_literal)
-                        client.query(
-                            f"""
-                            SELECT doc_id
-                            FROM {cfg.manticore.vector_table}
-                            WHERE {knn_expr}
-                            LIMIT {cfg.benchmark.limit}
-                            {"OPTION " + _manticore_vector_option_clause(cfg) if _manticore_vector_option_clause(cfg) else ""}
-                            """
-                        )
-                    entry["query_profile"] = client.show_profile()
-                    entry["plan"] = client.show_plan()
+                    if mode in ("vector", "hybrid") and not qvec:
+                        raise RuntimeError("Missing query vector for diagnostics.")
+                    payload = _manticore_search_request(cfg, mode, qtext, qvec)
+                    entry["request"] = payload
+                    entry["response"] = client.search_json(payload)
                 except Exception as exc:
                     entry["error"] = str(exc)
                 diagnostics[mode].append(entry)
@@ -233,18 +159,89 @@ def _sanitize_manticore_fulltext_query(query_text: str) -> str:
     return q or str(query_text or "").strip()
 
 
-def _manticore_fulltext_match_query(cfg: AppConfig, query_text: str) -> str:
-    sanitized = _sanitize_manticore_fulltext_query(query_text)
-    terms = re.findall(r"[^\W_]+", sanitized, flags=re.UNICODE)
-    if not terms:
-        return sanitized
+def _split_manticore_option_list(raw: str) -> list[str]:
+    s = normalize_search_options(raw)
+    if not s:
+        return []
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch in ")]}":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            part = "".join(buf).strip()
+            if part:
+                parts.append(part)
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _parse_manticore_json_options(raw: str) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for part in _split_manticore_option_list(raw):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        k = key.strip()
+        v = value.strip()
+        if not k:
+            continue
+        if (v.startswith("'") and v.endswith("'")) or (v.startswith('"') and v.endswith('"')):
+            out[k] = v[1:-1]
+            continue
+        low = v.lower()
+        if low in ("true", "false"):
+            out[k] = low == "true"
+            continue
+        try:
+            out[k] = int(v)
+            continue
+        except Exception:
+            pass
+        try:
+            out[k] = float(v)
+            continue
+        except Exception:
+            pass
+        out[k] = v
+    return out
+
+
+def _manticore_match_query_json(cfg: AppConfig, query_text: str) -> dict[str, Any]:
+    raw = str(query_text or "").strip()
     mode = str(cfg.manticore.fulltext_query_mode or "and").strip().lower()
-    if mode == "or":
-        return " | ".join(terms)
     if mode == "quorum":
+        sanitized = _sanitize_manticore_fulltext_query(raw)
+        terms = re.findall(r"[^\W_]+", sanitized, flags=re.UNICODE)
+        if not terms:
+            return {"query_string": raw}
         quorum = float(cfg.manticore.fulltext_query_quorum or 0.5)
-        return f"\"{' '.join(terms)}\"/{quorum}"
-    return " ".join(terms)
+        return {"query_string": f"\"{' '.join(terms)}\"/{quorum}"}
+    if mode == "and":
+        return {"match": {"*": {"query": raw, "operator": "and"}}}
+    return {"match": {"*": raw}}
 
 
 def _manticore_fulltext_option_clause(cfg: AppConfig) -> str:
@@ -271,6 +268,49 @@ def _manticore_hybrid_option_clause(cfg: AppConfig) -> str:
     if vector_opts:
         parts.append(vector_opts)
     return ", ".join(parts)
+
+
+def _manticore_knn_json(cfg: AppConfig, query_vector: list[float]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "field": cfg.manticore.vector_field,
+        "query": [float(x) for x in query_vector],
+    }
+    oversampling = cfg.manticore.vector_search_oversampling
+    if oversampling is not None and float(oversampling) > 0:
+        payload["oversampling"] = float(oversampling)
+    rescore = cfg.manticore.vector_search_rescore
+    if rescore is not None:
+        payload["rescore"] = bool(int(rescore) > 0)
+    return payload
+
+
+def _manticore_search_request(
+    cfg: AppConfig,
+    mode: str,
+    query_text: str,
+    query_vector: list[float] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "_source": ["doc_id"],
+        "limit": cfg.benchmark.limit,
+    }
+    if mode == "fulltext":
+        payload["table"] = cfg.manticore.fulltext_table
+        payload["query"] = _manticore_match_query_json(cfg, query_text)
+        payload["options"] = _parse_manticore_json_options(_manticore_fulltext_option_clause(cfg))
+        return payload
+    if not query_vector:
+        raise RuntimeError("Missing query vector for Manticore vector/hybrid search.")
+    payload["table"] = cfg.manticore.vector_table
+    payload["knn"] = _manticore_knn_json(cfg, query_vector)
+    if mode == "hybrid":
+        payload["query"] = _manticore_match_query_json(cfg, query_text)
+        payload["options"] = _parse_manticore_json_options(_manticore_hybrid_option_clause(cfg))
+    else:
+        vector_opts = _parse_manticore_json_options(_manticore_vector_option_clause(cfg))
+        if vector_opts:
+            payload["options"] = vector_opts
+    return payload
 
 
 def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:

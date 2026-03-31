@@ -4,6 +4,7 @@ import argparse
 import curses
 from dataclasses import dataclass
 from hashlib import md5
+import json
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -14,7 +15,6 @@ from .discovery import discover_config_paths
 from .embedding_client import resolved_embedding_model
 from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
-from .io_utils import read_jsonl
 from .manticore import ManticoreClient
 from .io_utils import generate_run_id
 from .prepare import prepare_dataset, reset_embeddings
@@ -259,18 +259,69 @@ def _sample_docs_for_cache_check(docs: list[dict[str, object]], *, ratio: int = 
     return out
 
 
+def _sample_docs_file_for_cache_check(
+    docs_path: Path,
+    *,
+    ratio: int = 100,
+    cap: int = 2000,
+) -> list[dict[str, object]]:
+    sampled: list[dict[str, object]] = []
+    total = 0
+    with docs_path.open("r", encoding="utf-8") as f:
+        for i, raw_line in enumerate(f):
+            line = raw_line.strip()
+            if not line:
+                continue
+            total += 1
+            try:
+                doc = json.loads(line)
+            except Exception:
+                continue
+            raw = str(doc.get("doc_id") or doc.get("id") or i)
+            bucket = int(md5(raw.encode("utf-8")).hexdigest()[:8], 16) % ratio
+            if bucket != 0:
+                continue
+            sampled.append(doc)
+            if len(sampled) >= cap:
+                break
+    if sampled:
+        return sampled
+
+    fallback: list[dict[str, object]] = []
+    fallback_cap = min(max(1, total // ratio if total > 0 else 1), cap)
+    with docs_path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                doc = json.loads(line)
+            except Exception:
+                continue
+            fallback.append(doc)
+            if len(fallback) >= fallback_cap:
+                break
+    return fallback
+
+
 def _check_vector_cache_sample(cfg: AppConfig) -> CacheSampleCheck | None:
     docs_path = Path(cfg.dataset.prepared_dir) / "docs.jsonl"
     if not docs_path.exists():
         return None
-    docs = read_jsonl(docs_path)
-    sampled = _sample_docs_for_cache_check(docs)
+    sampled = _sample_docs_file_for_cache_check(docs_path)
     fields = parse_vector_from_fields(cfg.manticore.vector_from)
     cache = VectorCache(cfg.manticore.vector_cache_path)
     try:
-        status_map = cache.get_status_map(
-            model=resolved_embedding_model(cfg),
-            similarity=cfg.manticore.vector_similarity,
+        status_map = cache.get_status_many(
+            [
+                cache_key_from_doc(
+                    doc,
+                    fields=fields,
+                    model=resolved_embedding_model(cfg),
+                    similarity=cfg.manticore.vector_similarity,
+                )
+                for doc in sampled
+            ]
         )
     finally:
         cache.close()
