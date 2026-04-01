@@ -621,8 +621,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
                 current = min(current, len(rows) - 1)
                 if current < offset:
                     offset = current
-                if current >= offset + visible:
-                    offset = max(0, current - visible + 1)
+                offset = _ensure_current_visible(current, offset, rows, widths, avail_lines)
             elif ch in (10, 13, curses.KEY_ENTER):
                 return sorted(selected_idx)
             elif ch == 27 or ch in (ord("q"),):
