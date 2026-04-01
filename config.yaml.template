@@ -60,8 +60,6 @@ manticore:
   vector_search_rescore:
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
   vector_cache_fetch_batch_size: 1000
-  vector_api_key: ""
-  vector_api_key_file: "/Users/sn/openai_key_sergey_for_tests"
   fulltext_options: "morphology='stem_en' index_field_lengths='1'"
   search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
   fulltext_query_mode: "and"

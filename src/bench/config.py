@@ -51,8 +51,6 @@ class ManticoreConfig:
     vector_search_rescore: int | None = None
     vector_cache_path: str = "vector_cache/trec-covid-openai.sqlite"
     vector_cache_fetch_batch_size: int = 1000
-    vector_api_key: str = ""
-    vector_api_key_file: str = ""
     search_options: str = "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
     fulltext_options: str = "morphology='stem_en' index_field_lengths='1'"
     fulltext_query_mode: str = "and"

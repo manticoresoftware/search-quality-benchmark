@@ -42,17 +42,6 @@ def resolved_embedding_api_key(cfg: AppConfig) -> str:
         return ""
     p = Path(key_file)
     if not p.exists():
-        key_file = ""
-    else:
-        return p.read_text(encoding="utf-8").strip()
-    legacy_key = str(cfg.manticore.vector_api_key or "").strip()
-    if legacy_key:
-        return legacy_key
-    legacy_key_file = str(cfg.manticore.vector_api_key_file or "").strip()
-    if not legacy_key_file:
-        return ""
-    p = Path(legacy_key_file)
-    if not p.exists():
         return ""
     return p.read_text(encoding="utf-8").strip()
 
