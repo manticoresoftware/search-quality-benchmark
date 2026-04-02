@@ -59,6 +59,13 @@ def _dataset_label(dataset: str) -> str:
     return f"`{dataset}`"
 
 
+def _dataset_group_label(dataset: str, doc_count: int | None) -> str:
+    base = _dataset_label(dataset)
+    if doc_count is None:
+        return f"{base} (`docs: unknown`)"
+    return f"{base} (`docs: {int(doc_count):,}`)"
+
+
 def _system_label(engine: str, mode: str) -> str:
     if engine == "manticore" and mode == "fulltext":
         return "Manticore full-text (manticore)"
@@ -757,13 +764,15 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines.append("")
     lines.append(f"Generated at: `{datetime.now().isoformat(timespec='seconds')}`")
     lines.append("")
-    by_dataset: dict[str, list[ArtifactRow]] = {}
+    by_dataset: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in rows:
-        by_dataset.setdefault(row.dataset_source or "-", []).append(row)
+        key = (row.dataset_source or "-", row.doc_count)
+        by_dataset.setdefault(key, []).append(row)
 
-    for dataset in sorted(by_dataset.keys()):
-        dataset_rows = by_dataset[dataset]
-        lines.append(f"## Relevance for {_dataset_label(dataset)}")
+    for dataset, doc_count in sorted(by_dataset.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0)):
+        dataset_rows = by_dataset[(dataset, doc_count)]
+        section_label = _dataset_group_label(dataset, doc_count)
+        lines.append(f"## Relevance for {section_label}")
         lines.append("")
         ndcg_table_lines = _metric_table_lines(dataset_rows, "ndcg@10")
         lines.extend(ndcg_table_lines)
@@ -803,7 +812,7 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
         lines.append("")
         lines.append("</details>")
         lines.append("")
-        lines.append(f"## Query Performance for {_dataset_label(dataset)}")
+        lines.append(f"## Query Performance for {section_label}")
         lines.append("")
         lines.append("<details>")
         lines.append("<summary>Full Query Performance Table</summary>")
