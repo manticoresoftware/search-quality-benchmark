@@ -51,6 +51,7 @@ class ManticoreConfig:
     vector_search_rescore: int | None = None
     vector_cache_path: str = "vector_cache/trec-covid-openai.sqlite"
     vector_cache_fetch_batch_size: int = 1000
+    index_layout: str = "combined"
     search_options: str = "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
     fulltext_options: str = "morphology='stem_en' index_field_lengths='1'"
     fulltext_query_mode: str = "and"
@@ -68,6 +69,7 @@ class MeilisearchConfig:
     api_key: str = ""
     api_key_file: str = ""
     index_name: str = "trec_covid"
+    index_layout: str = "combined"
     timeout_sec: int = 30
     batch_size: int = 500
     searchable_attributes: list[str] = field(default_factory=lambda: ["title", "abstract"])
@@ -94,6 +96,7 @@ class OpenSearchConfig:
     timeout_sec: int = 30
     batch_size: int = 500
     index_name: str = "trec_covid"
+    index_layout: str = "combined"
     text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
     vector_index: str = "vector"
     vector_field: str = "embedding"

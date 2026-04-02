@@ -63,6 +63,7 @@ manticore:
   vector_search_rescore:
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
   vector_cache_fetch_batch_size: 1000
+  index_layout: "combined"
   fulltext_options: "morphology='stem_en' index_field_lengths='1'"
   search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
   fulltext_query_mode: "and"
@@ -121,6 +122,7 @@ meilisearch:
   api_key: ""
   api_key_file: ""
   index_name: "trec_covid_meilisearch"
+  index_layout: "combined"
   timeout_sec: 30
   batch_size: 1000
   searchable_attributes: ["title", "abstract"]
@@ -154,6 +156,7 @@ opensearch:
   timeout_sec: 30
   batch_size: 500
   index_name: "trec_covid_opensearch"
+  index_layout: "combined"
   text_fields: ["title", "abstract"]
   vector_index: "vector"
   vector_field: "embedding"

@@ -149,6 +149,16 @@ def _run_index_manticore(
                 progress_callback=progress_callback,
             )
 
+            if (
+                mode == "vector"
+                and str(cfg.manticore.index_layout or "").strip().lower() == "combined"
+                and cfg.manticore.fulltext_table == cfg.manticore.vector_table
+            ):
+                raise ValueError(
+                    "Refusing Manticore vector-only indexing when fulltext_table and vector_table share the same table. "
+                    "Use mode=hybrid so the combined table keeps lexical fields."
+                )
+
             if missing_keys:
                 raise RuntimeError(
                     "Vector cache miss during Manticore vector/hybrid indexing. "
@@ -488,6 +498,16 @@ def _run_index_meilisearch(
     if mode not in ("fulltext", "vector"):
         raise ValueError("For engine=meilisearch, mode must be one of: fulltext, vector")
 
+    if (
+        mode == "fulltext"
+        and str(cfg.meilisearch.index_layout or "").strip().lower() == "combined"
+        and backend.lexical_index_name() == backend.vector_index_name()
+    ):
+        raise ValueError(
+            "Refusing Meilisearch fulltext-only indexing on a combined index target. "
+            "Use mode=vector so the shared index keeps vectors and lexical fields."
+        )
+
     if mode == "fulltext":
         backend.recreate_lexical_index()
         started = perf_counter()
@@ -658,6 +678,16 @@ def _run_index_opensearch(
 
     if mode not in ("fulltext", "vector"):
         raise ValueError("For engine=opensearch, mode must be one of: fulltext, vector")
+
+    if (
+        mode == "fulltext"
+        and str(cfg.opensearch.index_layout or "").strip().lower() == "combined"
+        and backend.lexical_index_name() == backend.vector_index_name()
+    ):
+        raise ValueError(
+            "Refusing OpenSearch fulltext-only indexing on a combined index target. "
+            "Use mode=vector so the shared index keeps vectors and lexical fields."
+        )
 
     if mode == "fulltext":
         backend.recreate_lexical_index()

@@ -176,6 +176,16 @@ def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
     return bool(hybrid_target) and hybrid_target != vector_target
 
 
+def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
+    if engine == "manticore" and str(cfg.manticore.index_layout or "").strip().lower() == "combined":
+        return "hybrid"
+    if engine == "meilisearch" and str(cfg.meilisearch.index_layout or "").strip().lower() == "combined":
+        return "vector"
+    if engine == "opensearch" and str(cfg.opensearch.index_layout or "").strip().lower() == "combined":
+        return "vector"
+    return None
+
+
 def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVariant]:
     raw_rows: list[IndexVariant] = []
     for path in paths:
@@ -233,6 +243,9 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
         grouped.setdefault((v.engine, v.target), []).append(v)
 
     def _preferred_mode(rows: list[IndexVariant]) -> str:
+        layout_mode = _preferred_layout_mode(rows[0].cfg, rows[0].engine)
+        if layout_mode is not None:
+            return layout_mode
         modes = {r.mode for r in rows}
         if "hybrid" in modes and rows[0].engine == "manticore":
             return "hybrid"
