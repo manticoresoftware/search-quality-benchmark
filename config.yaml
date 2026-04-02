@@ -69,6 +69,7 @@ manticore:
   fulltext_query_mode: "and"
   fulltext_query_quorum: 0.5
   batch_size: 2000
+  index_concurrency: 8
   insert_retries: 3
   connect_timeout_seconds: 10
   query_timeout_seconds: 60
@@ -92,6 +93,7 @@ qdrant:
   https: false
   timeout_seconds: 60
   batch_size: 2000
+  index_concurrency: 8
   dense_collection: "trec_covid_qdrant_vector"
   bm25_collection: "trec_covid_qdrant_fulltext"
   dense_vector_name: "dense"
@@ -125,6 +127,7 @@ meilisearch:
   index_layout: "combined"
   timeout_sec: 30
   batch_size: 1000
+  index_concurrency: 8
   searchable_attributes: ["title", "abstract"]
   ranking_rules: ["words", "typo", "proximity", "attribute", "sort", "exactness"]
   stop_words: []
@@ -155,6 +158,7 @@ opensearch:
   verify_certs: false
   timeout_sec: 30
   batch_size: 500
+  index_concurrency: 8
   index_name: "trec_covid_opensearch"
   index_layout: "combined"
   text_fields: ["title", "abstract"]

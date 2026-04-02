@@ -58,6 +58,7 @@ class ManticoreConfig:
     fulltext_query_variant: str = "short"
     fulltext_query_quorum: float = 0.5
     batch_size: int = 500
+    index_concurrency: int = 1
     insert_retries: int = 3
     connect_timeout_seconds: int = 10
     query_timeout_seconds: int = 60
@@ -72,6 +73,7 @@ class MeilisearchConfig:
     index_layout: str = "combined"
     timeout_sec: int = 30
     batch_size: int = 500
+    index_concurrency: int = 1
     searchable_attributes: list[str] = field(default_factory=lambda: ["title", "abstract"])
     ranking_rules: list[str] = field(
         default_factory=lambda: ["words", "typo", "proximity", "attribute", "sort", "exactness"]
@@ -95,6 +97,7 @@ class OpenSearchConfig:
     verify_certs: bool = False
     timeout_sec: int = 30
     batch_size: int = 500
+    index_concurrency: int = 1
     index_name: str = "trec_covid"
     index_layout: str = "combined"
     text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
@@ -124,6 +127,7 @@ class QdrantConfig:
     https: bool = False
     timeout_seconds: int = 60
     batch_size: int = 2000
+    index_concurrency: int = 1
     dense_collection: str = "trec_covid_qdrant_dense"
     bm25_collection: str = "trec_covid_qdrant_bm25"
     dense_vector_name: str = "dense"

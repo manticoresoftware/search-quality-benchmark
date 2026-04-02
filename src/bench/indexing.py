@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable
@@ -24,6 +25,44 @@ class ModeIndexResult:
     retried_batches: int
     last_error: str = ""
     error_reasons: dict[str, int] = field(default_factory=dict)
+
+
+def _iter_batches(items: list[Any], batch_size: int) -> list[list[Any]]:
+    return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+
+
+def _run_parallel_batches(
+    batches: list[list[Any]],
+    max_workers: int,
+    worker: Callable[[list[Any]], Any],
+    on_result: Callable[[list[Any], Any], None],
+) -> None:
+    if not batches:
+        return
+    workers = max(1, int(max_workers))
+    if workers <= 1:
+        for batch in batches:
+            on_result(batch, worker(batch))
+        return
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending: dict[Future[Any], list[Any]] = {}
+        batch_iter = iter(batches)
+        for _ in range(workers):
+            try:
+                batch = next(batch_iter)
+            except StopIteration:
+                break
+            pending[executor.submit(worker, batch)] = batch
+        while pending:
+            done, _ = wait(list(pending.keys()), return_when=FIRST_COMPLETED)
+            for fut in done:
+                batch = pending.pop(fut)
+                on_result(batch, fut.result())
+                try:
+                    next_batch = next(batch_iter)
+                except StopIteration:
+                    continue
+                pending[executor.submit(worker, next_batch)] = next_batch
 
 
 def _collect_cached_docs(
@@ -118,13 +157,60 @@ def _run_index_manticore(
                 fulltext_options=cfg.manticore.fulltext_options,
             )
             started = perf_counter()
-            ingest_stats = client.bulk_insert_docs(
-                cfg.manticore.fulltext_table,
-                docs,
-                batch_size=cfg.manticore.batch_size,
-                retries=cfg.manticore.insert_retries,
-                progress_callback=progress_callback,
-                progress_meta={"engine": "manticore", "mode": "fulltext", "stage": "ingest"},
+            ingest_stats = ModeIndexResult(
+                mode="fulltext",
+                duration_seconds=0.0,
+                rows_inserted=0,
+                docs_per_second=0.0,
+                failed_batches=0,
+                retried_batches=0,
+                error_reasons={},
+            )
+            processed = 0
+
+            def _worker(batch: list[Any]) -> Any:
+                local = ManticoreClient(cfg.manticore)
+                try:
+                    return local.bulk_insert_docs(
+                        cfg.manticore.fulltext_table,
+                        batch,
+                        batch_size=max(1, len(batch)),
+                        retries=cfg.manticore.insert_retries,
+                    )
+                finally:
+                    local.close()
+
+            def _on_result(batch: list[Any], s: Any) -> None:
+                nonlocal processed
+                ingest_stats.rows_inserted += s.rows_inserted
+                ingest_stats.failed_batches += s.failed_batches
+                ingest_stats.retried_batches += s.retried_batches
+                if s.last_error:
+                    ingest_stats.last_error = s.last_error
+                for reason, count in s.retry_reasons.items():
+                    ingest_stats.error_reasons[reason] = ingest_stats.error_reasons.get(reason, 0) + int(count)
+                processed += len(batch)
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "manticore",
+                            "mode": "fulltext",
+                            "stage": "ingest",
+                            "processed": processed,
+                            "total": len(docs),
+                            "inserted": ingest_stats.rows_inserted,
+                            "failed_batches": ingest_stats.failed_batches,
+                            "retried_batches": ingest_stats.retried_batches,
+                            "last_error": ingest_stats.last_error,
+                            "error_reasons": dict(ingest_stats.error_reasons),
+                        }
+                    )
+
+            _run_parallel_batches(
+                _iter_batches(docs, max(1, int(cfg.manticore.batch_size))),
+                max_workers=max(1, int(cfg.manticore.index_concurrency)),
+                worker=_worker,
+                on_result=_on_result,
             )
             elapsed = perf_counter() - started
             out.append(
@@ -136,7 +222,7 @@ def _run_index_manticore(
                     failed_batches=ingest_stats.failed_batches,
                     retried_batches=ingest_stats.retried_batches,
                     last_error=ingest_stats.last_error,
-                    error_reasons=dict(ingest_stats.retry_reasons),
+                    error_reasons=dict(ingest_stats.error_reasons),
                 )
             )
 
@@ -220,6 +306,7 @@ def _run_index_manticore(
                     for fetch_start in range(0, total_cached, fetch_batch_size):
                         fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                         vecs = cache2.get_vectors_many([k for _, k in fetch_chunk])
+                        prepared_batches: list[list[Any]] = []
                         for ins_start in range(0, len(fetch_chunk), insert_batch_size):
                             ins_chunk = fetch_chunk[ins_start : ins_start + insert_batch_size]
                             rows: list[dict[str, Any]] = []
@@ -230,14 +317,24 @@ def _run_index_manticore(
                                 r = dict(doc)
                                 r["vector"] = vec
                                 rows.append(r)
-                            s = client.bulk_insert_docs_with_vectors(
-                                target_table,
-                                cfg.manticore.vector_field,
-                                rows,
-                                batch_size=max(1, len(rows)),
-                                retries=cfg.manticore.insert_retries,
-                                minimal_fields=minimal_vector_insert,
-                            )
+                            prepared_batches.append([rows, len(ins_chunk)])
+
+                        def _worker(item: list[Any]) -> Any:
+                            local = ManticoreClient(cfg.manticore)
+                            try:
+                                return local.bulk_insert_docs_with_vectors(
+                                    target_table,
+                                    cfg.manticore.vector_field,
+                                    item[0],
+                                    batch_size=max(1, len(item[0])),
+                                    retries=cfg.manticore.insert_retries,
+                                    minimal_fields=minimal_vector_insert,
+                                )
+                            finally:
+                                local.close()
+
+                        def _on_result(item: list[Any], s: Any) -> None:
+                            nonlocal processed_cached, last_cached_error
                             if s.last_error:
                                 last_cached_error = s.last_error
                                 ingest_stats_cached.last_error = s.last_error
@@ -248,7 +345,7 @@ def _run_index_manticore(
                                 ingest_stats_cached.error_reasons[reason] = (
                                     ingest_stats_cached.error_reasons.get(reason, 0) + int(count)
                                 )
-                            processed_cached += len(ins_chunk)
+                            processed_cached += int(item[1])
                             if progress_callback is not None:
                                 progress_callback(
                                     {
@@ -264,6 +361,13 @@ def _run_index_manticore(
                                         "error_reasons": dict(ingest_stats_cached.error_reasons),
                                     }
                                 )
+
+                        _run_parallel_batches(
+                            prepared_batches,
+                            max_workers=max(1, int(cfg.manticore.index_concurrency)),
+                            worker=_worker,
+                            on_result=_on_result,
+                        )
                 finally:
                     cache2.close()
             ingest_stats = ModeIndexResult(
@@ -328,9 +432,12 @@ def _run_index_qdrant(
         started = perf_counter()
         inserted = 0
         processed = 0
-        for i in range(0, len(docs), cfg.qdrant.batch_size):
-            batch = docs[i : i + cfg.qdrant.batch_size]
-            inserted += qdrant.upsert_bm25_text_batch(batch)
+        def _worker(batch: list[Any]) -> int:
+            return qdrant.upsert_bm25_text_batch(batch)
+
+        def _on_result(batch: list[Any], count: int) -> None:
+            nonlocal inserted, processed
+            inserted += count
             processed += len(batch)
             if progress_callback is not None:
                 progress_callback(
@@ -345,6 +452,13 @@ def _run_index_qdrant(
                         "retried_batches": 0,
                     }
                 )
+
+        _run_parallel_batches(
+            _iter_batches(docs, max(1, int(cfg.qdrant.batch_size))),
+            max_workers=max(1, int(cfg.qdrant.index_concurrency)),
+            worker=_worker,
+            on_result=_on_result,
+        )
         visible = qdrant.wait_for_points_count(
             qdrant.cfg.bm25_collection,
             expected_count=inserted,
@@ -412,6 +526,7 @@ def _run_index_qdrant(
             for fetch_start in range(0, total_cached, fetch_batch_size):
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
+                prepared_batches: list[list[Any]] = []
                 for ins_start in range(0, len(fetch_chunk), insert_batch_size):
                     chunk = fetch_chunk[ins_start : ins_start + insert_batch_size]
                     batch: list[dict[str, Any]] = []
@@ -422,8 +537,15 @@ def _run_index_qdrant(
                         row = dict(doc)
                         row["vector"] = vec
                         batch.append(row)
-                    inserted += qdrant.upsert_dense_batch(batch, wait=False)
-                    processed += len(chunk)
+                    prepared_batches.append([batch, len(chunk)])
+
+                def _worker(item: list[Any]) -> int:
+                    return qdrant.upsert_dense_batch(item[0], wait=False)
+
+                def _on_result(item: list[Any], count: int) -> None:
+                    nonlocal inserted, processed
+                    inserted += count
+                    processed += int(item[1])
                     if progress_callback is not None:
                         progress_callback(
                             {
@@ -437,6 +559,13 @@ def _run_index_qdrant(
                                 "retried_batches": 0,
                             }
                         )
+
+                _run_parallel_batches(
+                    prepared_batches,
+                    max_workers=max(1, int(cfg.qdrant.index_concurrency)),
+                    worker=_worker,
+                    on_result=_on_result,
+                )
         finally:
             cache3.close()
         visible = qdrant.wait_for_points_count(
@@ -505,9 +634,9 @@ def _run_index_meilisearch(
         inserted = 0
         processed = 0
         index_name = backend.lexical_index_name()
-        last_task_uid: int | None = None
-        for i in range(0, len(docs), cfg.meilisearch.batch_size):
-            batch = [
+        task_uids: list[int] = []
+        batches = [
+            [
                 {
                     "id": int(row["id"]),
                     "doc_id": row["doc_id"],
@@ -518,7 +647,16 @@ def _run_index_meilisearch(
                 }
                 for row in docs[i : i + cfg.meilisearch.batch_size]
             ]
-            last_task_uid = backend.enqueue_documents(index_name, batch)
+            for i in range(0, len(docs), cfg.meilisearch.batch_size)
+        ]
+
+        def _worker(batch: list[Any]) -> int | None:
+            return backend.enqueue_documents(index_name, batch)
+
+        def _on_result(batch: list[Any], task_uid: int | None) -> None:
+            nonlocal inserted, processed
+            if task_uid is not None:
+                task_uids.append(int(task_uid))
             inserted += len(batch)
             processed += len(batch)
             if progress_callback is not None:
@@ -534,8 +672,16 @@ def _run_index_meilisearch(
                         "retried_batches": 0,
                     }
                 )
-        if last_task_uid is not None:
-            backend.wait_for_task(last_task_uid, timeout_ms=max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000))
+
+        _run_parallel_batches(
+            batches,
+            max_workers=max(1, int(cfg.meilisearch.index_concurrency)),
+            worker=_worker,
+            on_result=_on_result,
+        )
+        timeout_ms = max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000)
+        for task_uid in sorted(set(task_uids)):
+            backend.wait_for_task(task_uid, timeout_ms=timeout_ms)
         elapsed = perf_counter() - started
         out.append(
             ModeIndexResult(
@@ -579,7 +725,7 @@ def _run_index_meilisearch(
         inserted = 0
         processed = 0
         index_name = backend.vector_index_name()
-        last_task_uid: int | None = None
+        task_uids: list[int] = []
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
             total_cached = len(docs_cached)
@@ -588,6 +734,7 @@ def _run_index_meilisearch(
             for fetch_start in range(0, total_cached, fetch_batch_size):
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
+                prepared_batches: list[list[Any]] = []
                 for ins_start in range(0, len(fetch_chunk), insert_batch_size):
                     chunk = fetch_chunk[ins_start : ins_start + insert_batch_size]
                     batch: list[dict[str, Any]] = []
@@ -608,9 +755,17 @@ def _run_index_meilisearch(
                                 },
                             }
                         )
-                    last_task_uid = backend.enqueue_documents(index_name, batch)
-                    inserted += len(batch)
-                    processed += len(chunk)
+                    prepared_batches.append([batch, len(chunk)])
+
+                def _worker(item: list[Any]) -> int | None:
+                    return backend.enqueue_documents(index_name, item[0])
+
+                def _on_result(item: list[Any], task_uid: int | None) -> None:
+                    nonlocal inserted, processed
+                    if task_uid is not None:
+                        task_uids.append(int(task_uid))
+                    inserted += len(item[0])
+                    processed += int(item[1])
                     if progress_callback is not None:
                         progress_callback(
                             {
@@ -624,10 +779,18 @@ def _run_index_meilisearch(
                                 "retried_batches": 0,
                             }
                         )
+
+                _run_parallel_batches(
+                    prepared_batches,
+                    max_workers=max(1, int(cfg.meilisearch.index_concurrency)),
+                    worker=_worker,
+                            on_result=_on_result,
+                )
         finally:
             cache3.close()
-        if last_task_uid is not None:
-            backend.wait_for_task(last_task_uid, timeout_ms=max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000))
+        timeout_ms = max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000)
+        for task_uid in sorted(set(task_uids)):
+            backend.wait_for_task(task_uid, timeout_ms=timeout_ms)
         elapsed = perf_counter() - started
         out.append(
             ModeIndexResult(
@@ -676,8 +839,8 @@ def _run_index_opensearch(
         inserted = 0
         processed = 0
         index_name = backend.lexical_index_name()
-        for i in range(0, len(docs), cfg.opensearch.batch_size):
-            batch = [
+        batches = [
+            [
                 {
                     "id": int(row["id"]),
                     "doc_id": row["doc_id"],
@@ -688,7 +851,15 @@ def _run_index_opensearch(
                 }
                 for row in docs[i : i + cfg.opensearch.batch_size]
             ]
-            inserted += backend.bulk_index(index_name, batch)
+            for i in range(0, len(docs), cfg.opensearch.batch_size)
+        ]
+
+        def _worker(batch: list[Any]) -> int:
+            return backend.bulk_index(index_name, batch)
+
+        def _on_result(batch: list[Any], count: int) -> None:
+            nonlocal inserted, processed
+            inserted += count
             processed += len(batch)
             if progress_callback is not None:
                 progress_callback(
@@ -703,6 +874,13 @@ def _run_index_opensearch(
                         "retried_batches": 0,
                     }
                 )
+
+        _run_parallel_batches(
+            batches,
+            max_workers=max(1, int(cfg.opensearch.index_concurrency)),
+            worker=_worker,
+            on_result=_on_result,
+        )
         backend.refresh(index_name)
         elapsed = perf_counter() - started
         out.append(
@@ -754,6 +932,7 @@ def _run_index_opensearch(
             for fetch_start in range(0, total_cached, fetch_batch_size):
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
+                prepared_batches: list[list[Any]] = []
                 for ins_start in range(0, len(fetch_chunk), insert_batch_size):
                     chunk = fetch_chunk[ins_start : ins_start + insert_batch_size]
                     batch: list[dict[str, Any]] = []
@@ -772,8 +951,15 @@ def _run_index_opensearch(
                                 cfg.opensearch.vector_field: [float(x) for x in vec],
                             }
                         )
-                    inserted += backend.bulk_index(index_name, batch)
-                    processed += len(chunk)
+                    prepared_batches.append([batch, len(chunk)])
+
+                def _worker(item: list[Any]) -> int:
+                    return backend.bulk_index(index_name, item[0])
+
+                def _on_result(item: list[Any], count: int) -> None:
+                    nonlocal inserted, processed
+                    inserted += count
+                    processed += int(item[1])
                     if progress_callback is not None:
                         progress_callback(
                             {
@@ -787,6 +973,13 @@ def _run_index_opensearch(
                                 "retried_batches": 0,
                             }
                         )
+
+                _run_parallel_batches(
+                    prepared_batches,
+                    max_workers=max(1, int(cfg.opensearch.index_concurrency)),
+                    worker=_worker,
+                    on_result=_on_result,
+                )
         finally:
             cache3.close()
         backend.refresh(index_name)
