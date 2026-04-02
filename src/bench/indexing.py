@@ -302,9 +302,12 @@ def _run_index_manticore(
                     minimal_vector_insert = mode == "vector"
                     fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
                     insert_batch_size = max(1, int(cfg.manticore.batch_size))
+                    prepare_seconds = 0.0
+                    send_seconds = 0.0
                     prepared_cached = 0
                     processed_cached = 0
                     for fetch_start in range(0, total_cached, fetch_batch_size):
+                        prep_started = perf_counter()
                         fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                         vecs = cache2.get_vectors_many([k for _, k in fetch_chunk])
                         prepared_batches: list[list[Any]] = []
@@ -319,6 +322,7 @@ def _run_index_manticore(
                                 r["vector"] = vec
                                 rows.append(r)
                             prepared_batches.append([rows, len(ins_chunk)])
+                        prepare_seconds += perf_counter() - prep_started
                         prepared_cached += len(fetch_chunk)
                         if progress_callback is not None:
                             progress_callback(
@@ -333,6 +337,8 @@ def _run_index_manticore(
                                     "retried_batches": ingest_stats_cached.retried_batches,
                                     "last_error": last_cached_error,
                                     "error_reasons": dict(ingest_stats_cached.error_reasons),
+                                    "prepare_seconds": prepare_seconds,
+                                    "send_seconds": send_seconds,
                                 }
                             )
 
@@ -379,12 +385,14 @@ def _run_index_manticore(
                                     }
                                 )
 
+                        send_started = perf_counter()
                         _run_parallel_batches(
                             prepared_batches,
                             max_workers=max(1, int(cfg.manticore.index_concurrency)),
                             worker=_worker,
                             on_result=_on_result,
                         )
+                        send_seconds += perf_counter() - send_started
                 finally:
                     cache2.close()
             ingest_stats = ModeIndexResult(

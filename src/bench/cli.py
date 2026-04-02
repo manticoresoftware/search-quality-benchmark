@@ -570,6 +570,10 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         inserted = int(update.get("inserted", 0))
         retries = int(update.get("retried_batches", 0))
         failed = int(update.get("failed_batches", 0))
+        prepare_seconds_obj = update.get("prepare_seconds")
+        send_seconds_obj = update.get("send_seconds")
+        prepare_seconds = float(prepare_seconds_obj) if prepare_seconds_obj is not None else None
+        send_seconds = float(send_seconds_obj) if send_seconds_obj is not None else None
         last_error = str(update.get("last_error", "") or "").strip().replace("\n", " ")
         if len(last_error) > 140:
             last_error = last_error[:139] + "…"
@@ -596,6 +600,13 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             f"Index progress [{engine}:{mode}{stage_part}] {processed}/{total if total > 0 else '?'} "
             f"({pct:5.1f}%) inserted={inserted} retries={retries} failed={failed} elapsed={elapsed:6.1f}s{eta}"
         )
+        if prepare_seconds is not None or send_seconds is not None:
+            parts: list[str] = []
+            if prepare_seconds is not None:
+                parts.append(f"prepare={prepare_seconds:6.1f}s")
+            if send_seconds is not None:
+                parts.append(f"send={send_seconds:6.1f}s")
+            line += " " + " ".join(parts)
         if error_reasons and (retries > 0 or failed > 0):
             top = sorted(error_reasons.items(), key=lambda item: (-int(item[1]), str(item[0])))[:2]
             rendered: list[str] = []
