@@ -141,6 +141,7 @@ class ManticoreClient:
         knn_dims: int = 0,
         hnsw_similarity: str = "cosine",
         quantization: str = "",
+        fulltext_options: str = "",
         api_key: str = "",
         api_key_file: str = "",
     ) -> None:
@@ -154,6 +155,8 @@ class ManticoreClient:
         safe_api_key = resolved_api_key.replace("'", "''")
         api_key_clause = f"\n                    API_KEY='{safe_api_key}'" if safe_api_key else ""
         quantization_clause = f"\n                    quantization='{safe_quantization}'" if safe_quantization else ""
+        opts = (fulltext_options or "").strip()
+        options_clause = f" {opts}" if opts else ""
         if safe_model:
             vector_opts = (
                 f"KNN_TYPE='hnsw'\n"
@@ -183,7 +186,7 @@ class ManticoreClient:
                 date STRING,
                 {vector_field} FLOAT_VECTOR
                     {vector_opts}
-            )
+            ){options_clause}
             """
         )
 

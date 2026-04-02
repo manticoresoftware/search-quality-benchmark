@@ -194,6 +194,7 @@ def _run_index_manticore(
                 hnsw_similarity=cfg.manticore.vector_similarity,
                 knn_dims=dim,
                 quantization=cfg.manticore.vector_quantization,
+                fulltext_options=cfg.manticore.fulltext_options if mode == "hybrid" else "",
             )
             started = perf_counter()
             ingest_stats_cached = ModeIndexResult(
@@ -498,16 +499,6 @@ def _run_index_meilisearch(
     if mode not in ("fulltext", "vector"):
         raise ValueError("For engine=meilisearch, mode must be one of: fulltext, vector")
 
-    if (
-        mode == "fulltext"
-        and str(cfg.meilisearch.index_layout or "").strip().lower() == "combined"
-        and backend.lexical_index_name() == backend.vector_index_name()
-    ):
-        raise ValueError(
-            "Refusing Meilisearch fulltext-only indexing on a combined index target. "
-            "Use mode=vector so the shared index keeps vectors and lexical fields."
-        )
-
     if mode == "fulltext":
         backend.recreate_lexical_index()
         started = perf_counter()
@@ -678,16 +669,6 @@ def _run_index_opensearch(
 
     if mode not in ("fulltext", "vector"):
         raise ValueError("For engine=opensearch, mode must be one of: fulltext, vector")
-
-    if (
-        mode == "fulltext"
-        and str(cfg.opensearch.index_layout or "").strip().lower() == "combined"
-        and backend.lexical_index_name() == backend.vector_index_name()
-    ):
-        raise ValueError(
-            "Refusing OpenSearch fulltext-only indexing on a combined index target. "
-            "Use mode=vector so the shared index keeps vectors and lexical fields."
-        )
 
     if mode == "fulltext":
         backend.recreate_lexical_index()
