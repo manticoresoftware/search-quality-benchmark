@@ -302,6 +302,7 @@ def _run_index_manticore(
                     minimal_vector_insert = mode == "vector"
                     fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
                     insert_batch_size = max(1, int(cfg.manticore.batch_size))
+                    prepared_cached = 0
                     processed_cached = 0
                     for fetch_start in range(0, total_cached, fetch_batch_size):
                         fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
@@ -318,6 +319,22 @@ def _run_index_manticore(
                                 r["vector"] = vec
                                 rows.append(r)
                             prepared_batches.append([rows, len(ins_chunk)])
+                        prepared_cached += len(fetch_chunk)
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "engine": "manticore",
+                                    "mode": mode,
+                                    "stage": "prepare_cached",
+                                    "processed": min(prepared_cached, total_cached),
+                                    "total": total_cached,
+                                    "inserted": ingest_stats_cached.rows_inserted,
+                                    "failed_batches": ingest_stats_cached.failed_batches,
+                                    "retried_batches": ingest_stats_cached.retried_batches,
+                                    "last_error": last_cached_error,
+                                    "error_reasons": dict(ingest_stats_cached.error_reasons),
+                                }
+                            )
 
                         def _worker(item: list[Any]) -> Any:
                             local = ManticoreClient(cfg.manticore)
@@ -351,7 +368,7 @@ def _run_index_manticore(
                                     {
                                         "engine": "manticore",
                                         "mode": mode,
-                                        "stage": "ingest_cached",
+                                        "stage": "send_cached",
                                         "processed": min(processed_cached, total_cached),
                                         "total": total_cached,
                                         "inserted": ingest_stats_cached.rows_inserted,
