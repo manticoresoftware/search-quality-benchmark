@@ -14,6 +14,7 @@ from time import monotonic
 from typing import Any
 
 from .config import AppConfig
+from .elasticsearch_backend import ElasticsearchBackend
 from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
@@ -67,6 +68,7 @@ _SERVICES: list[tuple[str, str]] = [
     ("qdrant", "Qdrant"),
     ("meilisearch", "Meilisearch"),
     ("opensearch", "OpenSearch"),
+    ("elasticsearch", "Elasticsearch"),
     ("typesense", "Typesense"),
 ]
 
@@ -124,13 +126,14 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
         "qdrant": project_root / "data" / "qdrant_storage",
         "meilisearch": project_root / "data" / "meilisearch_data",
         "opensearch": project_root / "data" / "opensearch_data",
+        "elasticsearch": project_root / "data" / "elasticsearch_data",
         "typesense": project_root / "data" / "typesense_data",
     }
     target = mapping.get(service)
     if target is None:
         return
     target.mkdir(parents=True, exist_ok=True)
-    if service == "opensearch":
+    if service in {"opensearch", "elasticsearch"}:
         target.chmod(0o777)
 
 
@@ -140,6 +143,7 @@ def _engine_data_dir(project_root: Path, service: str) -> Path | None:
         "qdrant": project_root / "data" / "qdrant_storage",
         "meilisearch": project_root / "data" / "meilisearch_data",
         "opensearch": project_root / "data" / "opensearch_data",
+        "elasticsearch": project_root / "data" / "elasticsearch_data",
         "typesense": project_root / "data" / "typesense_data",
     }
     return mapping.get(service)
@@ -351,6 +355,9 @@ def _engine_ready(cfg: AppConfig, service: str) -> tuple[bool, str]:
             return True, ""
         if service == "opensearch":
             OpenSearchBackend(cfg.opensearch).ensure_accessible()
+            return True, ""
+        if service == "elasticsearch":
+            ElasticsearchBackend(cfg.elasticsearch).ensure_accessible()
             return True, ""
         if service == "typesense":
             TypesenseBackend(cfg.typesense).ensure_accessible()

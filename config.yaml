@@ -166,6 +166,25 @@ opensearch:
   hybrid_text_boost: 1.0
   hybrid_vector_boost: 1.0
 
+elasticsearch:
+  type: "elasticsearch"
+  url: "http://127.0.0.1:9201"
+  username: ""
+  password: ""
+  api_key: ""
+  api_key_file: ""
+  verify_certs: false
+  timeout_sec: 30
+  batch_size: 500
+  index_concurrency: 8
+  index_name: "trec_covid_elasticsearch"
+  index_layout: "combined"
+  text_fields: ["title", "abstract"]
+  vector_field: "embedding"
+  similarity: "cosine"
+  hybrid_text_boost: 1.0
+  hybrid_vector_boost: 1.0
+
 typesense:
   type: "typesense"
   url: "http://127.0.0.1:8108"
@@ -250,6 +269,21 @@ trec_covid_opensearch_hybrid:
   base: "opensearch"
   type: "hybrid"
   index_name: "trec_covid_opensearch"
+
+trec_covid_elasticsearch_fulltext:
+  base: "elasticsearch"
+  type: "fulltext"
+  index_name: "trec_covid_elasticsearch"
+
+trec_covid_elasticsearch_vector:
+  base: "elasticsearch"
+  type: "vector"
+  index_name: "trec_covid_elasticsearch"
+
+trec_covid_elasticsearch_hybrid:
+  base: "elasticsearch"
+  type: "hybrid"
+  index_name: "trec_covid_elasticsearch"
 
 trec_covid_typesense_fulltext:
   base: "typesense"
@@ -362,6 +396,30 @@ msmarco_passage_opensearch_hybrid:
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_elasticsearch_fulltext:
+  base: "elasticsearch"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_elasticsearch"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_elasticsearch_vector:
+  base: "elasticsearch"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_elasticsearch"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_elasticsearch_hybrid:
+  base: "elasticsearch"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  index_name: "msmarco_passage_elasticsearch"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
 msmarco_passage_typesense_fulltext:
   base: "typesense"
   type: "fulltext"
@@ -461,6 +519,24 @@ msmarco_lite_opensearch_hybrid:
   keep_qrels_docs: true
   index_name: "msmarco_lite_opensearch"
 
+msmarco_lite_elasticsearch_fulltext:
+  base: "msmarco_passage_elasticsearch_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_elasticsearch"
+
+msmarco_lite_elasticsearch_vector:
+  base: "msmarco_passage_elasticsearch_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_elasticsearch"
+
+msmarco_lite_elasticsearch_hybrid:
+  base: "msmarco_passage_elasticsearch_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  index_name: "msmarco_lite_elasticsearch"
+
 msmarco_lite_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
   max_docs: 250000
@@ -527,6 +603,18 @@ msmarco_trecdl_2019_opensearch_hybrid:
   base: "msmarco_passage_opensearch_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_elasticsearch_fulltext:
+  base: "msmarco_passage_elasticsearch_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_elasticsearch_vector:
+  base: "msmarco_passage_elasticsearch_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_elasticsearch_hybrid:
+  base: "msmarco_passage_elasticsearch_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -585,6 +673,18 @@ msmarco_trecdl_2020_opensearch_vector:
 
 msmarco_trecdl_2020_opensearch_hybrid:
   base: "msmarco_passage_opensearch_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_elasticsearch_fulltext:
+  base: "msmarco_passage_elasticsearch_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_elasticsearch_vector:
+  base: "msmarco_passage_elasticsearch_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_elasticsearch_hybrid:
+  base: "msmarco_passage_elasticsearch_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_typesense_fulltext:
@@ -685,6 +785,27 @@ nfcorpus_opensearch_hybrid:
   type: "hybrid"
   source: "beir/nfcorpus/test"
   index_name: "nfcorpus_opensearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_elasticsearch_fulltext:
+  base: "elasticsearch"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_elasticsearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_elasticsearch_vector:
+  base: "elasticsearch"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_elasticsearch"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_elasticsearch_hybrid:
+  base: "elasticsearch"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  index_name: "nfcorpus_elasticsearch"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_typesense_fulltext:
@@ -794,6 +915,27 @@ acord_opensearch_hybrid:
   type: "hybrid"
   source: "hf-beir:theatticusproject/acord:test"
   index_name: "acord_opensearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_elasticsearch_fulltext:
+  base: "elasticsearch"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_elasticsearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_elasticsearch_vector:
+  base: "elasticsearch"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_elasticsearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_elasticsearch_hybrid:
+  base: "elasticsearch"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  index_name: "acord_elasticsearch"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_typesense_fulltext:

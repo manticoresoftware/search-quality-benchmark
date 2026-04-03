@@ -1,4 +1,4 @@
-# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Typesense)
+# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text
@@ -12,6 +12,9 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - OpenSearch lexical search
 - OpenSearch vector search (user-provided vectors from the shared cache)
 - OpenSearch hybrid search (query text + cached query vector)
+- Elasticsearch lexical search
+- Elasticsearch vector search (user-provided vectors from the shared cache)
+- Elasticsearch hybrid search (query text + cached query vector)
 - Typesense lexical search
 - Typesense vector search (user-provided vectors from the shared cache)
 - Typesense hybrid search (query text + cached query vector)
@@ -29,8 +32,8 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
   - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`) use the shorter query variant.
-    - vector/hybrid modes (`manticore vector`, `qdrant vector`, `meilisearch vector`, `meilisearch hybrid`, `opensearch vector`, `opensearch hybrid`) use the longer query variant.
+    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`) use the shorter query variant.
+    - vector/hybrid modes (`manticore vector`, `qdrant vector`, `meilisearch vector`, `meilisearch hybrid`, `opensearch vector`, `opensearch hybrid`, `elasticsearch vector`, `elasticsearch hybrid`) use the longer query variant.
   - Prepared topic fields are explicit: `query_short` and `query_long`.
   - Example topics from TREC-COVID:
     - Topic `1`
@@ -179,12 +182,12 @@ embedding:
   - default: `morphology='stem_en' index_field_lengths='1'`
   - example: `index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'`
 - `manticore.search_options`: raw Manticore search options list (including ranker settings).
-  - default: `ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')`
+  - default: `ranker=expr('1000*bm25a(1.2,0.75)')`
   - examples: `ranker=bm25`, `ranker=proximity_bm25`, `ranker=bm25, fuzzy=1`
   - applies to both full-text and vector query paths
 - `manticore.fulltext_query_mode`: how full-text query terms are combined before sending them to `MATCH()`.
-  - `and` (default): implicit Manticore `AND`
-  - `or`: joins terms with `|`
+  - `and`: explicit term conjunction
+  - `or` (default): natural disjunction / broader recall
   - `quorum`: uses Manticore quorum syntax like `"term1 term2 term3"/0.5`
 - `manticore.fulltext_query_quorum`: quorum threshold used when `fulltext_query_mode: "quorum"` (default: `0.5`)
 - full-text queries also set: `idf='plain,tfidf_unnormalized'`
@@ -215,6 +218,28 @@ embedding:
 - `meilisearch.vector_index`: suffix for the vector index name
 - `meilisearch.hybrid_semantic_ratio`: hybrid search blend between lexical and semantic search
 - `meilisearch.binary_quantized`: enable Meilisearch 1-bit vector storage for the configured embedder
+
+### OpenSearch Config
+- `opensearch.url`: server URL (default: `http://127.0.0.1:9200`)
+- `opensearch.username` / `opensearch.password`: optional basic auth
+- `opensearch.api_key` / `opensearch.api_key_file`: optional API key
+- `opensearch.index_name`: combined index name used for full-text, vector, and hybrid search
+- `opensearch.text_fields`: text fields used by lexical and hybrid search
+- `opensearch.vector_field`: vector field name used for kNN search
+- `opensearch.space_type`: OpenSearch kNN similarity (`cosinesimil`, etc.)
+- `opensearch.hybrid_text_boost`: lexical clause boost in hybrid search
+- `opensearch.hybrid_vector_boost`: vector clause boost in hybrid search
+
+### Elasticsearch Config
+- `elasticsearch.url`: server URL (default: `http://127.0.0.1:9201`)
+- `elasticsearch.username` / `elasticsearch.password`: optional basic auth
+- `elasticsearch.api_key` / `elasticsearch.api_key_file`: optional API key
+- `elasticsearch.index_name`: combined index name used for full-text, vector, and hybrid search
+- `elasticsearch.text_fields`: text fields used by lexical and hybrid search
+- `elasticsearch.vector_field`: vector field name used for kNN search
+- `elasticsearch.similarity`: `dense_vector` similarity (`cosine`, etc.)
+- `elasticsearch.hybrid_text_boost`: lexical clause boost in hybrid search
+- `elasticsearch.hybrid_vector_boost`: vector clause boost in hybrid search
 
 ### Typesense Config
 - `typesense.url`: server URL (default: `http://127.0.0.1:8108`)
@@ -288,6 +313,10 @@ manticore_vector_only:
   - combined index name: `opensearch.index_name`
   - lexical, vector, and hybrid all use the same physical index
   - vector and hybrid use a `knn_vector` field and load document vectors from the local SQLite vector cache
+- Elasticsearch indexes:
+  - combined index name: `elasticsearch.index_name`
+  - lexical, vector, and hybrid all use the same physical index
+  - vector and hybrid use a `dense_vector` field and load document vectors from the local SQLite vector cache
 - Typesense collections:
   - combined collection name: `typesense.collection_name`
   - lexical, vector, and hybrid all use the same physical collection
@@ -324,6 +353,7 @@ The services currently managed there are:
 - `qdrant`
 - `meilisearch`
 - `opensearch`
+- `elasticsearch`
 - `typesense`
 
 Notes:
@@ -334,6 +364,12 @@ Notes:
   chmod -R 777 data/opensearch_data
   ```
   OpenSearch itself runs as a non-root user, so the bind-mounted host directory must already be writable.
+- Before starting Elasticsearch for the first time, prepare the host data directory:
+  ```bash
+  mkdir -p data/elasticsearch_data
+  chmod -R 777 data/elasticsearch_data
+  ```
+  The bundled service maps Elasticsearch to `http://127.0.0.1:9201`.
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
 - Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25, so treat it as a separate retrieval model in reports.
 

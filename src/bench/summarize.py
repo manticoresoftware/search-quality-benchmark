@@ -3,11 +3,14 @@ from __future__ import annotations
 import curses
 from dataclasses import dataclass
 from datetime import datetime
+import json
+import math
 from pathlib import Path
 import re
 import shutil
 import sys
 from typing import Any
+from urllib.parse import quote
 
 from .io_utils import read_json
 from .reporting import metric_definitions_markdown
@@ -91,6 +94,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "OpenSearch vector (opensearch)"
     if engine == "opensearch" and mode == "hybrid":
         return "OpenSearch hybrid (opensearch)"
+    if engine == "elasticsearch" and mode == "fulltext":
+        return "Elasticsearch full-text (elasticsearch)"
+    if engine == "elasticsearch" and mode == "vector":
+        return "Elasticsearch vector (elasticsearch)"
+    if engine == "elasticsearch" and mode == "hybrid":
+        return "Elasticsearch hybrid (elasticsearch)"
     if engine == "typesense" and mode == "fulltext":
         return "Typesense full-text (typesense)"
     if engine == "typesense" and mode == "vector":
@@ -259,6 +268,8 @@ def _color_pair_for_engine(engine: str) -> int:
         return 5
     if e == "opensearch":
         return 9
+    if e == "elasticsearch":
+        return 12
     return 0
 
 
@@ -400,6 +411,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             curses.init_pair(5, curses.COLOR_CYAN, -1)      # meilisearch
             curses.init_pair(6, curses.COLOR_MAGENTA, -1)   # hybrid
             curses.init_pair(9, curses.COLOR_MAGENTA, -1)   # opensearch
+            curses.init_pair(12, curses.COLOR_BLUE, -1)     # elasticsearch
 
         widths = {
             "sel": 3,
@@ -758,9 +770,1813 @@ def _metric_table_lines(rows: list[ArtifactRow], metric: str) -> list[str]:
     lines.append(f"| Category | {metric.upper()} |")
     lines.append("|---|---:|")
     for label, val in pairs:
-        blocks = max(1, int(round(val * width))) if val > 0 else 0
-        bar = "█" * blocks if blocks > 0 else "·"
-        lines.append(f"| {label} | `{bar} {val:.4f}` |")
+        lines.append(f"| {label} | `{_bar_metric_text(val, width)}` |")
+    return lines
+
+
+def _canonical_metric_table_lines(rows: list[ArtifactRow]) -> list[str]:
+    if not rows:
+        return []
+    dataset = str(rows[0].dataset_source or "")
+    metric = _canonical_metric_for_dataset(dataset)
+    pairs = _best_metric_bar_rows(rows, metric)
+    if not pairs:
+        return []
+    width = 24
+    lines = [f"Best canonical metric (`{metric.upper()}`):", ""]
+    lines.append(f"| Category | {metric.upper()} |")
+    lines.append("|---|---:|")
+    for label, val in pairs:
+        lines.append(f"| {label} | `{_bar_metric_text(val, width)}` |")
+    return lines
+
+
+def _bar_metric_text(val: float, width: int = 24) -> str:
+    blocks = max(1, int(round(val * width))) if val > 0 else 0
+    bar = "█" * blocks if blocks > 0 else "·"
+    return f"{bar} {val:.4f}"
+
+
+def _row_relevance_composite(row: ArtifactRow) -> float:
+    ndcg10 = float(row.relevance.get("ndcg@10", 0.0))
+    mrr10 = float(row.relevance.get("mrr@10", 0.0))
+    map10 = float(row.relevance.get("map@10", 0.0))
+    has_map10 = "map@10" in row.relevance
+    if has_map10:
+        return 0.6 * ndcg10 + 0.3 * mrr10 + 0.1 * map10
+    return 0.7 * ndcg10 + 0.3 * mrr10
+
+
+def _canonical_metric_for_dataset(dataset_source: str) -> str:
+    ds = str(dataset_source or "").strip().lower()
+    if ds.startswith("msmarco-passage/"):
+        return "mrr@10"
+    if ds.startswith("beir/"):
+        return "ndcg@10"
+    if ds.startswith("hf-beir:"):
+        return "ndcg@10"
+    return "ndcg@10"
+
+
+def _row_canonical_metric_value(row: ArtifactRow) -> float:
+    metric = _canonical_metric_for_dataset(row.dataset_source)
+    return float(row.relevance.get(metric, 0.0))
+
+
+def _eligible_for_global_relevance(row: ArtifactRow) -> bool:
+    if row.status != "ok":
+        return False
+    if float(row.performance.get("error_rate", 0.0) or 0.0) > 0.0:
+        return False
+    return bool(row.engine and row.mode)
+
+
+def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
+    eligible = [row for row in rows if _eligible_for_global_relevance(row)]
+    if not eligible:
+        return []
+
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
+    for row in eligible:
+        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+
+    per_variant_scores: dict[tuple[str, str], list[float]] = {}
+    per_variant_ndcg: dict[tuple[str, str], list[float]] = {}
+    per_variant_mrr: dict[tuple[str, str], list[float]] = {}
+
+    for _, group_rows in grouped.items():
+        best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
+        for row in group_rows:
+            key = (row.engine, row.mode)
+            prev = best_by_variant.get(key)
+            if prev is None or _relevance_sort_key(row) < _relevance_sort_key(prev):
+                best_by_variant[key] = row
+        if not best_by_variant:
+            continue
+        scored_rows = [(variant, row, _row_relevance_composite(row)) for variant, row in best_by_variant.items()]
+        values = [score for _, _, score in scored_rows]
+        lo = min(values)
+        hi = max(values)
+        for variant, row, score in scored_rows:
+            if hi > lo:
+                norm = (score - lo) / (hi - lo)
+            else:
+                norm = 1.0
+            per_variant_scores.setdefault(variant, []).append(norm)
+            per_variant_ndcg.setdefault(variant, []).append(float(row.relevance.get("ndcg@10", 0.0)))
+            per_variant_mrr.setdefault(variant, []).append(float(row.relevance.get("mrr@10", 0.0)))
+
+    if not per_variant_scores:
+        return []
+
+    total_groups = len(grouped)
+    leaderboard: list[tuple[str, str, float, int, float, float]] = []
+    for (engine, mode), scores in per_variant_scores.items():
+        groups_played = len(scores)
+        coverage = groups_played / total_groups if total_groups > 0 else 0.0
+        avg_score = sum(scores) / groups_played if groups_played else 0.0
+        avg_ndcg = sum(per_variant_ndcg.get((engine, mode), [])) / max(1, len(per_variant_ndcg.get((engine, mode), [])))
+        avg_mrr = sum(per_variant_mrr.get((engine, mode), [])) / max(1, len(per_variant_mrr.get((engine, mode), [])))
+        final_score = avg_score * coverage
+        leaderboard.append((engine, mode, final_score, groups_played, avg_ndcg, avg_mrr))
+
+    leaderboard.sort(key=lambda item: (-item[2], -item[4], -item[5], item[0].lower(), item[1].lower()))
+
+    lines = ["## Global Relevance Leaderboard", ""]
+    lines.append(
+        "Scoring: for each dataset/doc-count group, take the best run per engine, "
+        "compute a relevance composite (`NDCG@10`, `MRR@10`, optional `MAP@10`), "
+        "normalize it within the group, then average globally. Coverage across groups is included in the final score."
+    )
+    lines.append("")
+    lines.append("| Rank | Engine | Mode | Groups | Coverage | Avg NDCG@10 | Avg MRR@10 | Score |")
+    lines.append("|---:|---|---|---:|---:|---:|---:|---:|")
+    for idx, (engine, mode, score, groups_played, avg_ndcg, avg_mrr) in enumerate(leaderboard, start=1):
+        coverage = groups_played / total_groups if total_groups > 0 else 0.0
+        lines.append(
+            f"| {idx} | {engine} | {_display_mode(mode)} | {groups_played}/{total_groups} | {coverage:.0%} | "
+            f"{avg_ndcg:.4f} | {avg_mrr:.4f} | {score:.4f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
+    eligible = [row for row in rows if _eligible_for_global_relevance(row)]
+    if not eligible:
+        return []
+
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
+    for row in eligible:
+        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+
+    per_engine_scores: dict[str, list[float]] = {}
+    per_engine_ndcg: dict[str, list[float]] = {}
+    per_engine_mrr: dict[str, list[float]] = {}
+    per_engine_qps: dict[str, list[float]] = {}
+    per_engine_best_modes: dict[str, dict[str, int]] = {}
+
+    for _, group_rows in grouped.items():
+        best_by_engine: dict[str, ArtifactRow] = {}
+        for row in group_rows:
+            prev = best_by_engine.get(row.engine)
+            if prev is None:
+                best_by_engine[row.engine] = row
+                continue
+            prev_eff = _row_relevance_composite(prev) * math.log1p(float(prev.performance.get("qps", 0.0)))
+            cur_eff = _row_relevance_composite(row) * math.log1p(float(row.performance.get("qps", 0.0)))
+            if cur_eff > prev_eff or (cur_eff == prev_eff and _relevance_sort_key(row) < _relevance_sort_key(prev)):
+                best_by_engine[row.engine] = row
+        if not best_by_engine:
+            continue
+        scored_rows = []
+        for engine, row in best_by_engine.items():
+            rel = _row_relevance_composite(row)
+            qps = float(row.performance.get("qps", 0.0))
+            eff = rel * math.log1p(qps)
+            scored_rows.append((engine, row, eff))
+        values = [score for _, _, score in scored_rows]
+        lo = min(values)
+        hi = max(values)
+        for engine, row, score in scored_rows:
+            if hi > lo:
+                norm = (score - lo) / (hi - lo)
+            else:
+                norm = 1.0
+            per_engine_scores.setdefault(engine, []).append(norm)
+            per_engine_ndcg.setdefault(engine, []).append(float(row.relevance.get("ndcg@10", 0.0)))
+            per_engine_mrr.setdefault(engine, []).append(float(row.relevance.get("mrr@10", 0.0)))
+            per_engine_qps.setdefault(engine, []).append(float(row.performance.get("qps", 0.0)))
+            mode_counts = per_engine_best_modes.setdefault(engine, {})
+            mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
+
+    if not per_engine_scores:
+        return []
+
+    total_groups = len(grouped)
+    leaderboard: list[tuple[str, float, int, float, float, float, str]] = []
+    for engine, scores in per_engine_scores.items():
+        groups_played = len(scores)
+        coverage = groups_played / total_groups if total_groups > 0 else 0.0
+        avg_score = sum(scores) / groups_played if groups_played else 0.0
+        avg_ndcg = sum(per_engine_ndcg.get(engine, [])) / max(1, len(per_engine_ndcg.get(engine, [])))
+        avg_mrr = sum(per_engine_mrr.get(engine, [])) / max(1, len(per_engine_mrr.get(engine, [])))
+        avg_qps = sum(per_engine_qps.get(engine, [])) / max(1, len(per_engine_qps.get(engine, [])))
+        mode_counts = per_engine_best_modes.get(engine, {})
+        best_mode = "-"
+        if mode_counts:
+            best_mode = sorted(mode_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        final_score = avg_score * coverage
+        leaderboard.append((engine, final_score, groups_played, avg_ndcg, avg_mrr, avg_qps, best_mode))
+
+    leaderboard.sort(key=lambda item: (-item[1], -item[5], -item[3], -item[4], item[0].lower()))
+
+    lines = ["## Global Efficiency Leaderboard", ""]
+    lines.append(
+        "Scoring: for each dataset/doc-count group, take the best run per engine by "
+        "`relevance * log(1 + qps)`, normalize it within the group, then average globally. "
+        "Coverage across groups is included in the final score."
+    )
+    lines.append("")
+    lines.append("| Rank | Engine | Best mode | Groups | Coverage | Avg NDCG@10 | Avg MRR@10 | Avg QPS | Score |")
+    lines.append("|---:|---|---|---:|---:|---:|---:|---:|---:|")
+    for idx, (engine, score, groups_played, avg_ndcg, avg_mrr, avg_qps, best_mode) in enumerate(leaderboard, start=1):
+        coverage = groups_played / total_groups if total_groups > 0 else 0.0
+        lines.append(
+            f"| {idx} | {engine} | {_display_mode(best_mode)} | {groups_played}/{total_groups} | {coverage:.0%} | "
+            f"{avg_ndcg:.4f} | {avg_mrr:.4f} | {avg_qps:.2f} | {score:.4f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _row_map10_value(row: ArtifactRow) -> float:
+    return float(row.relevance.get("map@10", 0.0))
+
+
+def _global_variant_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
+    eligible = [row for row in rows if _eligible_for_global_relevance(row)]
+    if not eligible:
+        return []
+
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
+    for row in eligible:
+        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+    total_groups = len(grouped)
+    if total_groups <= 0:
+        return []
+
+    common_notes = (
+        "For every variant: runs are first split by `(dataset_source, doc_count)`. "
+        "Inside each group, keep the best run per engine according to the variant score. "
+        "Then average the raw per-group scores globally across full-coverage entries. "
+        "Runs with `status != ok` or `error_rate > 0` are excluded."
+    )
+
+    variants: list[tuple[str, str, Any, Any, bool]] = [
+        (
+            "Canonical metric",
+            "Per-group raw score formula: `score = canonical_metric(dataset_source)`, where "
+            "`canonical_metric = MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*` and `hf-beir:*`. "
+            "This follows the common practice of using the dataset family's primary metric instead of a universal weighted composite. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (
+                _row_canonical_metric_value(row),
+                float(row.relevance.get("ndcg@10", 0.0)),
+                float(row.relevance.get("mrr@10", 0.0)),
+            ),
+            True,
+        ),
+        (
+            "NDCG-first",
+            "Per-group engine score tuple: `(NDCG@10, MRR@10, MAP@10)`. "
+            "Ranking is lexicographic on that tuple, so the primary objective is maximizing `NDCG@10`, "
+            "with `MRR@10` and `MAP@10` only used as tie-breakers. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("mrr@10", 0.0)), float(row.relevance.get("map@10", 0.0))),
+            False,
+        ),
+        (
+            "MRR-first",
+            "Per-group engine score tuple: `(MRR@10, NDCG@10, MAP@10)`. "
+            "Ranking is lexicographic on that tuple, so the primary objective is maximizing `MRR@10`, "
+            "with `NDCG@10` and `MAP@10` only used as tie-breakers. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (float(row.relevance.get("mrr@10", 0.0)), float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("map@10", 0.0))),
+            False,
+        ),
+        (
+            "NDCG only",
+            "Per-group raw score formula: `score = NDCG@10`. "
+            "Tie-break display columns still show average `MRR@10` and `QPS`, but they do not affect ranking. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("mrr@10", 0.0)), float(row.relevance.get("map@10", 0.0))),
+            False,
+        ),
+        (
+            "MRR only",
+            "Per-group raw score formula: `score = MRR@10`. "
+            "Tie-break display columns still show average `NDCG@10` and `QPS`, but they do not affect ranking. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (float(row.relevance.get("mrr@10", 0.0)), float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("map@10", 0.0))),
+            False,
+        ),
+        (
+            "Balanced Relevance",
+            "Per-group raw score formula: "
+            "`score = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10`. "
+            "If `MAP@10` is missing, fallback formula is `score = 0.7*NDCG@10 + 0.3*MRR@10`. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (_row_relevance_composite(row), float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("mrr@10", 0.0))),
+            False,
+        ),
+        (
+            "Efficiency logQPS",
+            "Per-group raw score formula: "
+            "`relevance = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing), then "
+            "`score = relevance * log(1 + QPS)`. "
+            "This rewards throughput sublinearly so QPS helps but does not dominate too aggressively. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (
+                _row_relevance_composite(row) * math.log1p(float(row.performance.get("qps", 0.0))),
+                float(row.relevance.get("ndcg@10", 0.0)),
+                float(row.relevance.get("mrr@10", 0.0)),
+            ),
+            False,
+        ),
+        (
+            "Efficiency sqrtQPS",
+            "Per-group raw score formula: "
+            "`relevance = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing), then "
+            "`score = relevance * sqrt(max(QPS, 0))`. "
+            "This rewards throughput more aggressively than `log(1 + QPS)`. "
+            + common_notes,
+            lambda row: True,
+            lambda row: (
+                _row_relevance_composite(row) * math.sqrt(max(0.0, float(row.performance.get("qps", 0.0)))),
+                float(row.relevance.get("ndcg@10", 0.0)),
+                float(row.relevance.get("mrr@10", 0.0)),
+            ),
+            False,
+        ),
+        (
+            "Full-text only",
+            "Filter: keep only `mode = fulltext`. "
+            "Per-group raw score formula: "
+            "`score = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing). "
+            + common_notes,
+            lambda row: row.mode == "fulltext",
+            lambda row: (_row_relevance_composite(row), float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("mrr@10", 0.0))),
+            False,
+        ),
+        (
+            "Vector only",
+            "Filter: keep only `mode = vector`. "
+            "Per-group raw score formula: "
+            "`score = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing). "
+            + common_notes,
+            lambda row: row.mode == "vector",
+            lambda row: (_row_relevance_composite(row), float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("mrr@10", 0.0))),
+            False,
+        ),
+        (
+            "Hybrid only",
+            "Filter: keep only `mode = hybrid`. "
+            "Per-group raw score formula: "
+            "`score = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing). "
+            + common_notes,
+            lambda row: row.mode == "hybrid",
+            lambda row: (_row_relevance_composite(row), float(row.relevance.get("ndcg@10", 0.0)), float(row.relevance.get("mrr@10", 0.0))),
+            False,
+        ),
+        (
+            "Full-text efficiency",
+            "Filter: keep only `mode = fulltext`. "
+            "Per-group raw score formula: "
+            "`relevance = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing), then "
+            "`score = relevance * log(1 + QPS)`. "
+            + common_notes,
+            lambda row: row.mode == "fulltext",
+            lambda row: (
+                _row_relevance_composite(row) * math.log1p(float(row.performance.get("qps", 0.0))),
+                float(row.relevance.get("ndcg@10", 0.0)),
+                float(row.relevance.get("mrr@10", 0.0)),
+            ),
+            False,
+        ),
+        (
+            "Vector efficiency",
+            "Filter: keep only `mode = vector`. "
+            "Per-group raw score formula: "
+            "`relevance = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing), then "
+            "`score = relevance * log(1 + QPS)`. "
+            + common_notes,
+            lambda row: row.mode == "vector",
+            lambda row: (
+                _row_relevance_composite(row) * math.log1p(float(row.performance.get("qps", 0.0))),
+                float(row.relevance.get("ndcg@10", 0.0)),
+                float(row.relevance.get("mrr@10", 0.0)),
+            ),
+            False,
+        ),
+        (
+            "Hybrid efficiency",
+            "Filter: keep only `mode = hybrid`. "
+            "Per-group raw score formula: "
+            "`relevance = 0.6*NDCG@10 + 0.3*MRR@10 + 0.1*MAP@10` "
+            "(or `0.7*NDCG@10 + 0.3*MRR@10` when `MAP@10` is missing), then "
+            "`score = relevance * log(1 + QPS)`. "
+            + common_notes,
+            lambda row: row.mode == "hybrid",
+            lambda row: (
+                _row_relevance_composite(row) * math.log1p(float(row.performance.get("qps", 0.0))),
+                float(row.relevance.get("ndcg@10", 0.0)),
+                float(row.relevance.get("mrr@10", 0.0)),
+            ),
+            False,
+        ),
+    ]
+
+    lines: list[str] = []
+
+    for variant_name, description, include_fn, score_fn, canonical_only in variants:
+        if variant_name != "Canonical metric":
+            continue
+        per_variant_scores: dict[tuple[str, str], list[float]] = {}
+        per_variant_ndcg: dict[tuple[str, str], list[float]] = {}
+        per_variant_mrr: dict[tuple[str, str], list[float]] = {}
+        for _, group_rows in grouped.items():
+            best_by_variant: dict[tuple[str, str], tuple[ArtifactRow, tuple[float, float, float]]] = {}
+            filtered_rows = [row for row in group_rows if include_fn(row)]
+            for row in filtered_rows:
+                score_tuple = score_fn(row)
+                key = (row.engine, row.mode)
+                prev = best_by_variant.get(key)
+                if prev is None or score_tuple > prev[1]:
+                    best_by_variant[key] = (row, score_tuple)
+            if not best_by_variant:
+                continue
+            for variant, (row, score_tuple) in best_by_variant.items():
+                raw_score = float(score_tuple[0])
+                per_variant_scores.setdefault(variant, []).append(raw_score)
+                per_variant_ndcg.setdefault(variant, []).append(float(row.relevance.get("ndcg@10", 0.0)))
+                per_variant_mrr.setdefault(variant, []).append(float(row.relevance.get("mrr@10", 0.0)))
+
+        leaderboard: list[tuple[str, str, float, int, float, float]] = []
+        excluded_variants: list[tuple[str, str, int]] = []
+        for (engine, mode), scores in per_variant_scores.items():
+            groups_played = len(scores)
+            if groups_played < total_groups:
+                excluded_variants.append((engine, mode, groups_played))
+                continue
+            avg_score = sum(scores) / groups_played if groups_played else 0.0
+            avg_ndcg = sum(per_variant_ndcg.get((engine, mode), [])) / max(1, len(per_variant_ndcg.get((engine, mode), [])))
+            avg_mrr = sum(per_variant_mrr.get((engine, mode), [])) / max(1, len(per_variant_mrr.get((engine, mode), [])))
+            leaderboard.append((engine, mode, avg_score, groups_played, avg_ndcg, avg_mrr))
+
+        leaderboard.sort(key=lambda item: (-item[2], -item[4], -item[5], item[0].lower(), item[1].lower()))
+        lines.append("## Engine + Mode Leaderboard")
+        lines.append("")
+        lines.append(
+            "This leaderboard uses the canonical metric for each dataset family. "
+            "The per-group raw score is `MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*` and `hf-beir:*`. "
+            "For each `(dataset_source, doc_count)` group, the table keeps one best run per engine+mode and averages those raw canonical scores globally. "
+            "Only full-coverage entries are included, so engines or modes missing any group are omitted from this table. "
+            "Runs with `status != ok` or `error_rate > 0` are excluded."
+        )
+        lines.append("")
+        lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
+        lines.append("")
+        if not leaderboard:
+            lines.append("_No eligible runs for this variant._")
+            lines.append("")
+            continue
+        if canonical_only:
+            lines.append("| Rank | Engine | Mode | Score ↓ |")
+            lines.append("|---:|---|---|---:|")
+            for idx, (engine, mode, score, groups_played, avg_ndcg, avg_mrr) in enumerate(leaderboard, start=1):
+                lines.append(
+                    f"| {idx} | {engine} | {_display_mode(mode)} | `{_bar_metric_text(score)}` |"
+                )
+            lines.append("")
+            if excluded_variants:
+                excluded_variants.sort(key=lambda item: (item[0].lower(), item[1].lower()))
+                excluded_text = ", ".join(
+                    f"`{engine} / {_display_mode(mode)}` ({groups_played}/{total_groups})"
+                    for engine, mode, groups_played in excluded_variants
+                )
+                lines.append(
+                    f"Excluded for incomplete coverage: {excluded_text}."
+                )
+                lines.append("")
+        lines.append("")
+    return lines
+
+
+def _engine_only_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
+    eligible = [row for row in rows if _eligible_for_global_relevance(row)]
+    if not eligible:
+        return []
+
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
+    for row in eligible:
+        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+    total_groups = len(grouped)
+    if total_groups <= 0:
+        return []
+
+    per_engine_scores: dict[str, list[float]] = {}
+    per_engine_best_modes: dict[str, dict[str, int]] = {}
+    for _, group_rows in grouped.items():
+        best_by_engine: dict[str, ArtifactRow] = {}
+        for row in group_rows:
+            prev = best_by_engine.get(row.engine)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_engine[row.engine] = row
+        if not best_by_engine:
+            continue
+        scored_rows = [(engine, row, _row_canonical_metric_value(row)) for engine, row in best_by_engine.items()]
+        for engine, row, score in scored_rows:
+            per_engine_scores.setdefault(engine, []).append(float(score))
+            mode_counts = per_engine_best_modes.setdefault(engine, {})
+            mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
+
+    leaderboard: list[tuple[str, str, float, int]] = []
+    excluded_engines: list[tuple[str, int]] = []
+    for engine, scores in per_engine_scores.items():
+        groups_played = len(scores)
+        if groups_played < total_groups:
+            excluded_engines.append((engine, groups_played))
+            continue
+        avg_score = sum(scores) / groups_played if groups_played else 0.0
+        mode_counts = per_engine_best_modes.get(engine, {})
+        best_mode = "-"
+        if mode_counts:
+            best_mode = sorted(mode_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        leaderboard.append((engine, best_mode, avg_score, groups_played))
+
+    leaderboard.sort(key=lambda item: (-item[2], item[0].lower()))
+    if not leaderboard:
+        return []
+
+    lines = ["## Leaderboard", ""]
+    lines.append(
+        "This is the engine-level view of the same canonical-metric logic. "
+        "For each dataset/doc-count group, each engine contributes only its best mode for that group. "
+        "The table shows the average raw canonical metric across those groups. "
+        "Only engines with 100% group coverage are included here."
+    )
+    lines.append("")
+    lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
+    lines.append("")
+    lines.append("| Rank | Engine | Best mode | Score ↓ |")
+    lines.append("|---:|---|---|---:|")
+    for idx, (engine, best_mode, score, groups_played) in enumerate(leaderboard, start=1):
+        lines.append(
+            f"| {idx} | {engine} | {_display_mode(best_mode)} | `{_bar_metric_text(score)}` |"
+        )
+    lines.append("")
+    if excluded_engines:
+        excluded_engines.sort(key=lambda item: item[0].lower())
+        excluded_text = ", ".join(
+            f"`{engine}` ({groups_played}/{total_groups})"
+            for engine, groups_played in excluded_engines
+        )
+        lines.append(f"Excluded for incomplete coverage: {excluded_text}.")
+        lines.append("")
+    return lines
+
+
+def _canonical_grouped_rows(rows: list[ArtifactRow]) -> tuple[dict[tuple[str, int | None], list[ArtifactRow]], int]:
+    eligible = [row for row in rows if _eligible_for_global_relevance(row)]
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
+    for row in eligible:
+        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+    return grouped, len(grouped)
+
+
+def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float]], list[tuple[str, int]], int]:
+    grouped, total_groups = _canonical_grouped_rows(rows)
+    if total_groups <= 0:
+        return [], [], 0
+    per_engine_scores: dict[str, list[float]] = {}
+    per_engine_best_modes: dict[str, dict[str, int]] = {}
+    for _, group_rows in grouped.items():
+        best_by_engine: dict[str, ArtifactRow] = {}
+        for row in group_rows:
+            prev = best_by_engine.get(row.engine)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_engine[row.engine] = row
+        for engine, row in best_by_engine.items():
+            per_engine_scores.setdefault(engine, []).append(_row_canonical_metric_value(row))
+            mode_counts = per_engine_best_modes.setdefault(engine, {})
+            mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
+    leaderboard: list[tuple[str, str, float]] = []
+    excluded: list[tuple[str, int]] = []
+    for engine, scores in per_engine_scores.items():
+        groups_played = len(scores)
+        if groups_played < total_groups:
+            excluded.append((engine, groups_played))
+            continue
+        best_mode = "-"
+        mode_counts = per_engine_best_modes.get(engine, {})
+        if mode_counts:
+            best_mode = sorted(mode_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        leaderboard.append((engine, best_mode, sum(scores) / groups_played))
+    leaderboard.sort(key=lambda item: (-item[2], item[0].lower()))
+    excluded.sort(key=lambda item: item[0].lower())
+    return leaderboard, excluded, total_groups
+
+
+def _engine_mode_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float]], list[tuple[str, str, int]], int]:
+    grouped, total_groups = _canonical_grouped_rows(rows)
+    if total_groups <= 0:
+        return [], [], 0
+    per_variant_scores: dict[tuple[str, str], list[float]] = {}
+    for _, group_rows in grouped.items():
+        best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
+        for row in group_rows:
+            key = (row.engine, row.mode)
+            prev = best_by_variant.get(key)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_variant[key] = row
+        for key, row in best_by_variant.items():
+            per_variant_scores.setdefault(key, []).append(_row_canonical_metric_value(row))
+    leaderboard: list[tuple[str, str, float]] = []
+    excluded: list[tuple[str, str, int]] = []
+    for (engine, mode), scores in per_variant_scores.items():
+        groups_played = len(scores)
+        if groups_played < total_groups:
+            excluded.append((engine, mode, groups_played))
+            continue
+        leaderboard.append((engine, mode, sum(scores) / groups_played))
+    leaderboard.sort(key=lambda item: (-item[2], item[0].lower(), item[1].lower()))
+    excluded.sort(key=lambda item: (item[0].lower(), item[1].lower()))
+    return leaderboard, excluded, total_groups
+
+
+def _mermaid_pie(title: str, parts: list[tuple[str, float]]) -> list[str]:
+    if not parts:
+        return []
+    lines = ["```mermaid", "pie showData", f"    title \"{title}\""]
+    for label, value in parts:
+        lines.append(f"    \"{label}\" : {value:.4f}")
+    lines.extend(["```", ""])
+    return lines
+
+
+def _quickchart_horizontal_bar(title: str, parts: list[tuple[str, float]]) -> list[str]:
+    if not parts:
+        return []
+    labels = [label for label, _ in parts]
+    values = [round(float(value), 4) for _, value in parts]
+    height = max(360, 100 + 48 * len(parts))
+    chart_cfg = {
+        "type": "horizontalBar",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Score",
+                    "data": values,
+                    "backgroundColor": "#3b82f6",
+                    "borderColor": "#1d4ed8",
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "legend": {"display": False},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "xAxes": [
+                    {
+                        "ticks": {
+                            "beginAtZero": True,
+                            "min": 0,
+                            "max": 1,
+                            "precision": 4,
+                        }
+                    }
+                ],
+                "yAxes": [
+                    {
+                        "ticks": {
+                            "autoSkip": False,
+                        }
+                    }
+                ],
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1100&height={height}&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_pie(title: str, parts: list[tuple[str, float]]) -> list[str]:
+    if not parts:
+        return []
+    labels = [label for label, _ in parts]
+    values = [round(float(value), 4) for _, value in parts]
+    colors = [
+        "#3b82f6",
+        "#10b981",
+        "#f59e0b",
+        "#ef4444",
+        "#8b5cf6",
+        "#06b6d4",
+        "#84cc16",
+        "#f97316",
+        "#ec4899",
+        "#6366f1",
+        "#14b8a6",
+        "#eab308",
+    ]
+    chart_cfg = {
+        "type": "pie",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "data": values,
+                    "backgroundColor": colors[: len(values)],
+                    "borderColor": "#ffffff",
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "options": {
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1100&height=520&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_doughnut(title: str, parts: list[tuple[str, float]]) -> list[str]:
+    if not parts:
+        return []
+    labels = [label for label, _ in parts]
+    values = [round(float(value), 4) for _, value in parts]
+    colors = [
+        "#3b82f6",
+        "#10b981",
+        "#f59e0b",
+        "#ef4444",
+        "#8b5cf6",
+        "#06b6d4",
+        "#84cc16",
+        "#f97316",
+        "#ec4899",
+        "#6366f1",
+        "#14b8a6",
+        "#eab308",
+    ]
+    chart_cfg = {
+        "type": "doughnut",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "data": values,
+                    "backgroundColor": colors[: len(values)],
+                    "borderColor": "#ffffff",
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "options": {
+            "cutoutPercentage": 55,
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1100&height=520&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_polar_area(title: str, parts: list[tuple[str, float]]) -> list[str]:
+    if not parts:
+        return []
+    labels = [label for label, _ in parts]
+    values = [round(float(value), 4) for _, value in parts]
+    colors = [
+        "#3b82f680",
+        "#10b98180",
+        "#f59e0b80",
+        "#ef444480",
+        "#8b5cf680",
+        "#06b6d480",
+        "#84cc1680",
+        "#f9731680",
+    ]
+    chart_cfg = {
+        "type": "polarArea",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "data": values,
+                    "backgroundColor": colors[: len(values)],
+                    "borderColor": colors[: len(values)],
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "options": {
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "ticks": {
+                    "beginAtZero": True,
+                },
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1100&height=560&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_radar(title: str, labels: list[str], datasets: list[dict[str, Any]]) -> list[str]:
+    if not labels or not datasets:
+        return []
+    chart_cfg = {
+        "type": "radar",
+        "data": {
+            "labels": labels,
+            "datasets": datasets,
+        },
+        "options": {
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "scale": {
+                    "ticks": {
+                        "beginAtZero": True,
+                        "suggestedMax": 1.0,
+                    }
+                },
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1200&height=700&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_multi_line(title: str, labels: list[str], datasets: list[dict[str, Any]]) -> list[str]:
+    if not labels or not datasets:
+        return []
+    chart_cfg = {
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": datasets,
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "yAxes": [
+                    {
+                        "ticks": {
+                            "beginAtZero": True,
+                            "suggestedMax": 1.0,
+                        }
+                    }
+                ],
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1300&height=700&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_multi_bar(title: str, labels: list[str], datasets: list[dict[str, Any]]) -> list[str]:
+    if not labels or not datasets:
+        return []
+    chart_cfg = {
+        "type": "bar",
+        "data": {
+            "labels": labels,
+            "datasets": datasets,
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "yAxes": [
+                    {
+                        "ticks": {
+                            "beginAtZero": True,
+                            "suggestedMax": 1.0,
+                        }
+                    }
+                ],
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1400&height=760&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_stacked_bar(title: str, labels: list[str], datasets: list[dict[str, Any]]) -> list[str]:
+    if not labels or not datasets:
+        return []
+    chart_cfg = {
+        "type": "bar",
+        "data": {
+            "labels": labels,
+            "datasets": datasets,
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "xAxes": [{"stacked": True}],
+                "yAxes": [{"stacked": True, "ticks": {"beginAtZero": True}}],
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1300&height=720&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _quickchart_bubble(title: str, datasets: list[dict[str, Any]]) -> list[str]:
+    if not datasets:
+        return []
+    chart_cfg = {
+        "type": "bubble",
+        "data": {"datasets": datasets},
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "xAxes": [
+                    {
+                        "ticks": {"beginAtZero": True, "min": 0, "max": 1},
+                        "scaleLabel": {"display": True, "labelString": "Avg canonical score"},
+                    }
+                ],
+                "yAxes": [
+                    {
+                        "ticks": {"beginAtZero": True, "min": 0, "max": 1},
+                        "scaleLabel": {"display": True, "labelString": "Simplicity proxy (higher is simpler)"},
+                    }
+                ],
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1200&height=700&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
+def _heat_color(val: float, lo: float, hi: float) -> str:
+    if hi <= lo:
+        t = 1.0
+    else:
+        t = max(0.0, min(1.0, (val - lo) / (hi - lo)))
+    # light yellow -> orange -> deep blue
+    stops = [
+        (255, 247, 188),
+        (254, 196, 79),
+        (217, 95, 14),
+        (49, 130, 189),
+        (8, 81, 156),
+    ]
+    pos = t * (len(stops) - 1)
+    i = int(pos)
+    if i >= len(stops) - 1:
+        r, g, b = stops[-1]
+        return f"rgb({r},{g},{b})"
+    frac = pos - i
+    r1, g1, b1 = stops[i]
+    r2, g2, b2 = stops[i + 1]
+    r = round(r1 + (r2 - r1) * frac)
+    g = round(g1 + (g2 - g1) * frac)
+    b = round(b1 + (b2 - b1) * frac)
+    return f"rgb({r},{g},{b})"
+
+
+def _engine_group_win_shares(rows: list[ArtifactRow]) -> list[tuple[str, float]]:
+    grouped, _ = _canonical_grouped_rows(rows)
+    wins: dict[str, float] = {}
+    for _, group_rows in grouped.items():
+        best_by_engine: dict[str, ArtifactRow] = {}
+        for row in group_rows:
+            prev = best_by_engine.get(row.engine)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_engine[row.engine] = row
+        if not best_by_engine:
+            continue
+        best_value = max(_row_canonical_metric_value(row) for row in best_by_engine.values())
+        winners = [engine for engine, row in best_by_engine.items() if _row_canonical_metric_value(row) == best_value]
+        share = 1.0 / len(winners)
+        for engine in winners:
+            wins[engine] = wins.get(engine, 0.0) + share
+    return sorted(wins.items(), key=lambda item: (-item[1], item[0].lower()))
+
+
+def _engine_mode_group_win_shares(rows: list[ArtifactRow]) -> list[tuple[str, float]]:
+    grouped, _ = _canonical_grouped_rows(rows)
+    wins: dict[str, float] = {}
+    for _, group_rows in grouped.items():
+        best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
+        for row in group_rows:
+            key = (row.engine, row.mode)
+            prev = best_by_variant.get(key)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_variant[key] = row
+        if not best_by_variant:
+            continue
+        best_value = max(_row_canonical_metric_value(row) for row in best_by_variant.values())
+        winners = [f"{engine} / {_display_mode(mode)}" for (engine, mode), row in best_by_variant.items() if _row_canonical_metric_value(row) == best_value]
+        share = 1.0 / len(winners)
+        for label in winners:
+            wins[label] = wins.get(label, 0.0) + share
+    return sorted(wins.items(), key=lambda item: (-item[1], item[0].lower()))
+
+
+def _engine_consistency_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    group_headers = [_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
+    engine_to_cells: dict[str, list[str]] = {}
+    for engine, _, _ in leaderboard:
+        engine_to_cells[engine] = []
+        for key in group_keys:
+            group_rows = grouped[key]
+            best_val = None
+            for row in group_rows:
+                if row.engine != engine:
+                    continue
+                val = _row_canonical_metric_value(row)
+                if best_val is None or val > best_val:
+                    best_val = val
+            engine_to_cells[engine].append(f"`{_bar_metric_text(best_val or 0.0, width=8)}`")
+    lines = [
+        "### 18. Consistency Matrix",
+        "",
+        "This compact matrix shows the best canonical score each engine achieves in every dataset/doc-count group. It is useful for spotting consistency across groups rather than only the global average.",
+        "",
+    ]
+    cols = ["Engine", *group_headers]
+    lines.append("| " + " | ".join(cols) + " |")
+    lines.append("|" + "---|" * len(cols))
+    for engine, _, _ in leaderboard:
+        lines.append("| " + " | ".join([engine, *engine_to_cells[engine]]) + " |")
+    lines.append("")
+    return lines
+
+
+def _engine_consistency_radar_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    palette = [
+        ("qdrant", "#3b82f6"),
+        ("manticore", "#10b981"),
+        ("opensearch", "#f59e0b"),
+        ("elasticsearch", "#06b6d4"),
+        ("meilisearch", "#ef4444"),
+        ("typesense", "#8b5cf6"),
+    ]
+    color_map = {name: color for name, color in palette}
+    datasets: list[dict[str, Any]] = []
+    for engine, _, _ in leaderboard:
+        data: list[float] = []
+        for key in group_keys:
+            best_val = 0.0
+            for row in grouped[key]:
+                if row.engine != engine:
+                    continue
+                best_val = max(best_val, _row_canonical_metric_value(row))
+            data.append(round(best_val, 4))
+        color = color_map.get(engine, "#6366f1")
+        datasets.append(
+            {
+                "label": engine,
+                "data": data,
+                "borderColor": color,
+                "backgroundColor": color + "33",
+                "pointBackgroundColor": color,
+                "fill": True,
+            }
+        )
+    return _quickchart_radar("Engine Consistency Radar", labels, datasets)
+
+
+def _engine_consistency_series(rows: list[ArtifactRow]) -> tuple[list[str], list[dict[str, Any]]]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return [], []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    palette = [
+        ("qdrant", "#3b82f6"),
+        ("manticore", "#10b981"),
+        ("opensearch", "#f59e0b"),
+        ("elasticsearch", "#06b6d4"),
+        ("meilisearch", "#ef4444"),
+        ("typesense", "#8b5cf6"),
+    ]
+    color_map = {name: color for name, color in palette}
+    datasets: list[dict[str, Any]] = []
+    for engine, _, _ in leaderboard:
+        data: list[float] = []
+        for key in group_keys:
+            best_val = 0.0
+            for row in grouped[key]:
+                if row.engine != engine:
+                    continue
+                best_val = max(best_val, _row_canonical_metric_value(row))
+            data.append(round(best_val, 4))
+        color = color_map.get(engine, "#6366f1")
+        datasets.append(
+            {
+                "label": engine,
+                "data": data,
+                "borderColor": color,
+                "backgroundColor": color + "33",
+                "pointBackgroundColor": color,
+                "pointRadius": 4,
+                "pointHoverRadius": 5,
+                "fill": False,
+                "tension": 0.2,
+            }
+        )
+    return labels, datasets
+
+
+def _engine_consistency_heatmap_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    x_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    y_labels = [engine for engine, _, _ in leaderboard]
+    cells: list[tuple[str, str, float]] = []
+    for engine, _, _ in leaderboard:
+        for idx, key in enumerate(group_keys):
+            best_val = 0.0
+            for row in grouped[key]:
+                if row.engine != engine:
+                    continue
+                best_val = max(best_val, _row_canonical_metric_value(row))
+            cells.append((x_labels[idx], engine, best_val))
+    lines = [
+        "### 17. Heatmap",
+        "",
+        "Best for spotting hot and cold spots immediately. This HTML heatmap encodes each engine's best canonical score in every dataset/doc-count group as cell intensity.",
+        "",
+    ]
+    cell_map = {(x, y): v for x, y, v in cells}
+    values = [v for _, _, v in cells]
+    lo = min(values)
+    hi = max(values)
+    lines.append('<div style="overflow-x:auto;">')
+    lines.append('<table style="border-collapse:collapse; font-size:12px;">')
+    lines.append("<thead>")
+    header = ['<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">Engine</th>']
+    for label in x_labels:
+        header.append(
+            f'<th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left; min-width:110px;">{label}</th>'
+        )
+    header.append("</tr>")
+    lines.append("".join(header))
+    lines.append("</thead>")
+    lines.append("<tbody>")
+    for engine in y_labels:
+        row_parts = [
+            f'<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">{engine}</th>'
+        ]
+        for label in x_labels:
+            val = cell_map.get((label, engine), 0.0)
+            color = _heat_color(val, lo, hi)
+            row_parts.append(
+                '<td style="border:1px solid #ddd; padding:6px; text-align:center; '
+                f'background:{color}; color:#111;">{val:.4f}</td>'
+            )
+        row_parts.append("</tr>")
+        lines.append("".join(row_parts))
+    lines.append("</tbody>")
+    lines.append("</table>")
+    lines.append("</div>")
+    lines.append("")
+    return lines
+
+
+def _dataset_family_name(dataset_source: str) -> str:
+    ds = str(dataset_source or "").strip().lower()
+    if ds.startswith("msmarco-passage/"):
+        return "MSMARCO"
+    if ds.startswith("hf-beir:"):
+        return "HF-BEIR"
+    if ds.startswith("beir/"):
+        return "BEIR"
+    return "Other"
+
+
+def _best_mode_counts_chart_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    engines = [engine for engine, _, _ in leaderboard]
+    counts = {engine: {"fulltext": 0, "vector": 0, "hybrid": 0} for engine in engines}
+    for _, group_rows in grouped.items():
+        best_by_engine: dict[str, ArtifactRow] = {}
+        for row in group_rows:
+            prev = best_by_engine.get(row.engine)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_engine[row.engine] = row
+        for engine, row in best_by_engine.items():
+            if engine in counts:
+                counts[engine][row.mode] = counts[engine].get(row.mode, 0) + 1
+    datasets = []
+    for mode in ("fulltext", "vector", "hybrid"):
+        datasets.append(
+            {
+                "label": _display_mode(mode),
+                "data": [counts[engine].get(mode, 0) for engine in engines],
+                "backgroundColor": _mode_color(mode),
+                "borderColor": _mode_color(mode),
+                "borderWidth": 1,
+            }
+        )
+    return _quickchart_stacked_bar("Best Mode Counts by Engine", engines, datasets)
+
+
+def _coverage_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
+    all_groups: list[tuple[str, int | None]] = sorted(
+        {(row.dataset_source or "-", row.doc_count) for row in rows if row.engine and row.mode},
+        key=lambda item: ((item[0] or "").lower(), item[1] or 0),
+    )
+    if not all_groups:
+        return []
+    variants = sorted(
+        {(row.engine, row.mode) for row in rows if row.engine and row.mode},
+        key=lambda item: (item[0].lower(), item[1].lower()),
+    )
+    usable = {
+        (row.engine, row.mode, row.dataset_source or "-", row.doc_count)
+        for row in rows
+        if _eligible_for_global_relevance(row)
+    }
+    lines = [
+        '<div style="overflow-x:auto;">',
+        '<table style="border-collapse:collapse; font-size:12px;">',
+        "<thead>",
+    ]
+    header = ['<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">Engine / mode</th>']
+    for dataset, doc_count in all_groups:
+        label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        header.append(f'<th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left; min-width:110px;">{label}</th>')
+    header.append("</tr>")
+    lines.append("".join(header))
+    lines.append("</thead>")
+    lines.append("<tbody>")
+    for engine, mode in variants:
+        row_parts = [
+            f'<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">{engine} / {_display_mode(mode)}</th>'
+        ]
+        for dataset, doc_count in all_groups:
+            present = (engine, mode, dataset, doc_count) in usable
+            bg = "#dcfce7" if present else "#fee2e2"
+            text = "OK" if present else "MISSING"
+            row_parts.append(
+                f'<td style="border:1px solid #ddd; padding:6px; text-align:center; background:{bg}; color:#111;">{text}</td>'
+            )
+        row_parts.append("</tr>")
+        lines.append("".join(row_parts))
+    lines.append("</tbody>")
+    lines.append("</table>")
+    lines.append("</div>")
+    lines.append("")
+    return lines
+
+
+def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    engines = [engine for engine, _, _ in leaderboard]
+    family_scores: dict[str, dict[str, list[float]]] = {}
+    for (dataset, _), group_rows in grouped.items():
+        family = _dataset_family_name(dataset)
+        best_by_engine: dict[str, ArtifactRow] = {}
+        for row in group_rows:
+            prev = best_by_engine.get(row.engine)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_engine[row.engine] = row
+        for engine, row in best_by_engine.items():
+            family_scores.setdefault(family, {}).setdefault(engine, []).append(_row_canonical_metric_value(row))
+    family_labels = sorted(family_scores.keys())
+    palette = {
+        "qdrant": "#3b82f6",
+        "manticore": "#10b981",
+        "opensearch": "#f59e0b",
+        "elasticsearch": "#06b6d4",
+        "meilisearch": "#ef4444",
+        "typesense": "#8b5cf6",
+    }
+    datasets = []
+    for engine in engines:
+        values = []
+        for family in family_labels:
+            scores = family_scores.get(family, {}).get(engine, [])
+            values.append(round(sum(scores) / len(scores), 4) if scores else 0.0)
+        color = palette.get(engine, "#6366f1")
+        datasets.append(
+            {
+                "label": engine,
+                "data": values,
+                "backgroundColor": color,
+                "borderColor": color,
+                "borderWidth": 1,
+            }
+        )
+    return _quickchart_multi_bar("Engine Preference by Dataset Family", family_labels, datasets)
+
+
+def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    wins = dict(_engine_group_win_shares(rows))
+    palette = {
+        "qdrant": "#3b82f6",
+        "manticore": "#10b981",
+        "opensearch": "#f59e0b",
+        "elasticsearch": "#06b6d4",
+        "meilisearch": "#ef4444",
+        "typesense": "#8b5cf6",
+    }
+    datasets = []
+    for engine, _, avg_score in leaderboard:
+        modes_used: set[str] = set()
+        for _, group_rows in grouped.items():
+            best_row = None
+            best_val = -1.0
+            for row in group_rows:
+                if row.engine != engine:
+                    continue
+                val = _row_canonical_metric_value(row)
+                if val > best_val:
+                    best_val = val
+                    best_row = row
+            if best_row is not None:
+                modes_used.add(best_row.mode)
+        simplicity = 1.0 / max(1, len(modes_used))
+        radius = 8 + 6 * wins.get(engine, 0.0)
+        color = palette.get(engine, "#6366f1")
+        datasets.append(
+            {
+                "label": engine,
+                "data": [{"x": round(avg_score, 4), "y": round(simplicity, 4), "r": round(radius, 2)}],
+                "backgroundColor": color + "88",
+                "borderColor": color,
+                "borderWidth": 1,
+            }
+        )
+    return _quickchart_bubble("Quality vs Simplicity Proxy", datasets)
+
+
+def _top_engine_mode_relative_heatmap_lines(rows: list[ArtifactRow], limit: int = 5) -> list[str]:
+    leaderboard, _, total_groups = _engine_mode_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    top = leaderboard[:limit]
+    x_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    y_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, _ in top]
+
+    lines = [
+        '<div style="overflow-x:auto;">',
+        '<table style="border-collapse:collapse; font-size:12px;">',
+        "<thead>",
+    ]
+    header = ['<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">Engine / mode</th>']
+    for label in x_labels:
+        header.append(
+            f'<th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left; min-width:110px;">{label}</th>'
+        )
+    header.append("</tr>")
+    lines.append("".join(header))
+    lines.append("</thead>")
+    lines.append("<tbody>")
+
+    for engine, mode, _ in top:
+        row_parts = [
+            f'<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">{engine} / {_display_mode(mode)}</th>'
+        ]
+        for key in group_keys:
+            group_rows = grouped[key]
+            group_best = max(_row_canonical_metric_value(row) for row in group_rows) if group_rows else 0.0
+            own_best = 0.0
+            for row in group_rows:
+                if row.engine == engine and row.mode == mode:
+                    own_best = max(own_best, _row_canonical_metric_value(row))
+            rel = (own_best / group_best) if group_best > 0 else 0.0
+            color = _heat_color(rel, 0.0, 1.0)
+            row_parts.append(
+                '<td style="border:1px solid #ddd; padding:6px; text-align:center; '
+                f'background:{color}; color:#111;">{rel:.3f}</td>'
+            )
+        row_parts.append("</tr>")
+        lines.append("".join(row_parts))
+
+    lines.append("</tbody>")
+    lines.append("</table>")
+    lines.append("</div>")
+    lines.append("")
+    return lines
+
+
+def _top_engine_mode_series(rows: list[ArtifactRow], limit: int = 5) -> tuple[list[str], list[dict[str, Any]]]:
+    leaderboard, _, total_groups = _engine_mode_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return [], []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    palette = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"]
+    datasets: list[dict[str, Any]] = []
+    for idx, (engine, mode, _) in enumerate(leaderboard[:limit]):
+        data: list[float] = []
+        for key in group_keys:
+            best_val = 0.0
+            for row in grouped[key]:
+                if row.engine == engine and row.mode == mode:
+                    best_val = max(best_val, _row_canonical_metric_value(row))
+            data.append(round(best_val, 4))
+        color = palette[idx % len(palette)]
+        datasets.append(
+            {
+                "label": f"{engine} / {_display_mode(mode)}",
+                "data": data,
+                "borderColor": color,
+                "backgroundColor": color + "33",
+                "pointBackgroundColor": color,
+                "pointRadius": 4,
+                "showLine": True,
+                "fill": False,
+                "tension": 0.15,
+            }
+        )
+    return labels, datasets
+
+
+def _mode_color(mode: str) -> str:
+    m = str(mode or "").lower()
+    if m == "fulltext":
+        return "#6b7280"
+    if m == "vector":
+        return "#2563eb"
+    if m == "hybrid":
+        return "#16a34a"
+    return "#6366f1"
+
+
+def _best_mode_per_engine_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    lines = [
+        "### 12. Best Mode Per Engine by Group",
+        "",
+        "Best for seeing which retrieval mode carries each engine. This variant uses one grouped bar chart per dataset group, so the mode colors stay unambiguous: gray for full-text, blue for vector, green for hybrid.",
+        "",
+    ]
+    engine_labels = [engine for engine, _, _ in leaderboard]
+    for dataset, doc_count in group_keys:
+        group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        mode_values: dict[str, list[float | None]] = {
+            "fulltext": [],
+            "vector": [],
+            "hybrid": [],
+        }
+        group_rows = grouped[(dataset, doc_count)]
+        for engine in engine_labels:
+            best_row = None
+            best_val = -1.0
+            for row in group_rows:
+                if row.engine != engine:
+                    continue
+                val = _row_canonical_metric_value(row)
+                if val > best_val:
+                    best_val = val
+                    best_row = row
+            chosen_mode = best_row.mode if best_row else ""
+            for mode in mode_values:
+                mode_values[mode].append(round(max(best_val, 0.0), 4) if chosen_mode == mode else None)
+        datasets: list[dict[str, Any]] = []
+        for mode in ("fulltext", "vector", "hybrid"):
+            datasets.append(
+                {
+                    "label": _display_mode(mode),
+                    "data": mode_values[mode],
+                    "backgroundColor": _mode_color(mode),
+                    "borderColor": _mode_color(mode),
+                    "borderWidth": 1,
+                }
+            )
+        lines.append(f"#### `{group_label}`")
+        lines.append("")
+        lines.extend(_quickchart_multi_bar(f"Best Mode Per Engine: {group_label}", engine_labels, datasets))
+    lines.append("Mode colors: `full-text = gray`, `vector = blue`, `hybrid = green`.")
+    lines.append("")
+    return lines
+
+
+def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    palette = {
+        "qdrant": "#3b82f6",
+        "manticore": "#10b981",
+        "opensearch": "#f59e0b",
+        "elasticsearch": "#06b6d4",
+        "meilisearch": "#ef4444",
+        "typesense": "#8b5cf6",
+    }
+    datasets: list[dict[str, Any]] = []
+    for engine, _, _ in leaderboard:
+        values: list[float] = []
+        for key in group_keys:
+            group_rows = grouped[key]
+            best_score = max(_row_canonical_metric_value(row) for row in group_rows)
+            best_for_engine = 0.0
+            for row in group_rows:
+                if row.engine != engine:
+                    continue
+                best_for_engine = max(best_for_engine, _row_canonical_metric_value(row))
+            rel = (best_for_engine / best_score) if best_score > 0 else 0.0
+            values.append(round(rel, 4))
+        color = palette.get(engine, "#6366f1")
+        datasets.append(
+            {
+                "label": engine,
+                "data": values,
+                "backgroundColor": color,
+                "borderColor": color,
+                "borderWidth": 1,
+            }
+        )
+    lines = [
+        "### 13. Relative-to-Winner by Group",
+        "",
+        "Best for fair cross-dataset comparison. In each dataset group, the winning engine gets `1.0`, and the others show how close they are to that winner. This removes a lot of the distortion caused by very different raw metric ranges across datasets.",
+        "",
+    ]
+    lines.extend(_quickchart_multi_bar("Relative to Group Winner", labels, datasets))
+    return lines
+
+
+def _mode_family_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
+    grouped, total_groups = _canonical_grouped_rows(rows)
+    if total_groups <= 0:
+        return []
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    mode_order = [("fulltext", "full-text"), ("vector", "vector"), ("hybrid", "hybrid")]
+    datasets: list[dict[str, Any]] = []
+    for mode, label in mode_order:
+        values: list[float] = []
+        for key in group_keys:
+            best_val = 0.0
+            for row in grouped[key]:
+                if row.mode != mode:
+                    continue
+                best_val = max(best_val, _row_canonical_metric_value(row))
+            values.append(round(best_val, 4))
+        color = _mode_color(mode)
+        datasets.append(
+            {
+                "label": label,
+                "data": values,
+                "backgroundColor": color,
+                "borderColor": color,
+                "borderWidth": 1,
+            }
+        )
+    lines = [
+        "### 14. Mode Family Comparison",
+        "",
+        "Best for seeing whether the gains mostly come from full-text, vector, or hybrid as a family. Each bar is the best score any engine achieved in that mode family for the dataset group.",
+        "",
+    ]
+    lines.extend(_quickchart_multi_bar("Best Score by Mode Family", labels, datasets))
+    return lines
+
+
+def _top_engine_mode_grouped_bar_lines(rows: list[ArtifactRow], limit: int = 6) -> list[str]:
+    leaderboard, _, total_groups = _engine_mode_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    top = leaderboard[:limit]
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    lines = [
+        "### 15. Top Engine + Mode Grouped Comparison",
+        "",
+        "Best for comparing the strongest concrete variants directly. This variant uses one chart per dataset group, and every bar is colored by its mode family, which keeps the mode colors unambiguous.",
+        "",
+    ]
+    variant_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, _ in top]
+    for dataset, doc_count in group_keys:
+        group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        group_rows = grouped[(dataset, doc_count)]
+        datasets: list[dict[str, Any]] = []
+        for engine, mode, _ in top:
+            own_score = 0.0
+            for row in group_rows:
+                if row.engine == engine and row.mode == mode:
+                    own_score = max(own_score, _row_canonical_metric_value(row))
+            color = _mode_color(mode)
+            datasets.append(
+                {
+                    "label": f"{engine} / {_display_mode(mode)}",
+                    "data": [round(own_score, 4)],
+                    "backgroundColor": color,
+                    "borderColor": color,
+                    "borderWidth": 1,
+                }
+            )
+        lines.append(f"#### `{group_label}`")
+        lines.append("")
+        lines.extend(_quickchart_multi_bar(f"Top Engine + Mode: {group_label}", ["score"], datasets))
+    lines.append("Mode colors: `full-text = gray`, `vector = blue`, `hybrid = green`.")
+    lines.append("")
+    return lines
+
+
+def _engine_mode_relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow], limit: int = 6) -> list[str]:
+    leaderboard, _, total_groups = _engine_mode_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    top = leaderboard[:limit]
+    group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+    lines = [
+        "### 16. Engine + Mode Relative-to-Winner",
+        "",
+        "Best for seeing which top variants are consistently near the winner, even when they are not actually first. This variant also uses one chart per dataset group, so the mode colors stay unambiguous.",
+        "",
+    ]
+    for dataset, doc_count in group_keys:
+        group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        group_rows = grouped[(dataset, doc_count)]
+        best_score = max(_row_canonical_metric_value(row) for row in group_rows) if group_rows else 0.0
+        datasets: list[dict[str, Any]] = []
+        for engine, mode, _ in top:
+            own_score = 0.0
+            for row in group_rows:
+                if row.engine == engine and row.mode == mode:
+                    own_score = max(own_score, _row_canonical_metric_value(row))
+            rel = (own_score / best_score) if best_score > 0 else 0.0
+            color = _mode_color(mode)
+            datasets.append(
+                {
+                    "label": f"{engine} / {_display_mode(mode)}",
+                    "data": [round(rel, 4)],
+                    "backgroundColor": color,
+                    "borderColor": color,
+                    "borderWidth": 1,
+                }
+            )
+        lines.append(f"#### `{group_label}`")
+        lines.append("")
+        lines.extend(_quickchart_multi_bar(f"Top Engine + Mode Relative to Winner: {group_label}", ["score"], datasets))
+    lines.append("Mode colors: `full-text = gray`, `vector = blue`, `hybrid = green`.")
+    lines.append("")
+    return lines
+
+
+def _leaderboard_visualization_options_lines(rows: list[ArtifactRow]) -> list[str]:
+    lines = ["## Questions Answered Visually", ""]
+    engine_board, _, _ = _engine_leaderboard_data(rows)
+    engine_mode_board, _, _ = _engine_mode_leaderboard_data(rows)
+    line_labels, line_datasets = _engine_consistency_series(rows)
+    top_labels, top_datasets = _top_engine_mode_series(rows, limit=4)
+    if engine_mode_board:
+        lines.append("### 1. Which engine and mode gives me the best relevance overall?")
+        lines.append("")
+        lines.append("Best chart: a simple engine+mode leaderboard bar chart.")
+        lines.append("")
+        parts = [(f"{engine} / {_display_mode(mode)}", score) for engine, mode, score in engine_mode_board]
+        lines.extend(_quickchart_horizontal_bar("Engine + Mode Leaderboard Scores", parts))
+    if top_labels and top_datasets:
+        lines.append("### 2. Is that winner consistently good, or is it only carried by a few datasets?")
+        lines.append("")
+        lines.append("Best chart: a relative-to-winner heatmap for the top engine+mode variants. Values close to `1.0` mean the variant stays very close to the group winner, while colder cells show where it falls behind.")
+        lines.append("")
+        lines.extend(_top_engine_mode_relative_heatmap_lines(rows, limit=5))
+    if line_labels and line_datasets:
+        lines.append("### 3. For each dataset I care about, who wins and by how much?")
+        lines.append("")
+        lines.append("Best chart: grouped bars by dataset group using each engine's best score there.")
+        lines.append("")
+        bar_datasets = [
+            {
+                "label": ds["label"],
+                "data": ds["data"],
+                "backgroundColor": ds["borderColor"],
+                "borderColor": ds["borderColor"],
+                "borderWidth": 1,
+            }
+            for ds in line_datasets
+        ]
+        lines.extend(_quickchart_multi_bar("Engine Scores by Dataset Group", line_labels, bar_datasets))
+    lines.append("### 4. Does hybrid actually beat vector and full-text, or is it mostly extra complexity?")
+    lines.append("")
+    lines.append("Best chart: mode-family comparison by dataset group.")
+    lines.append("")
+    grouped, total_groups = _canonical_grouped_rows(rows)
+    if total_groups > 0:
+        group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
+        family_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+        mode_datasets = []
+        for mode in ("fulltext", "vector", "hybrid"):
+            vals = []
+            for key in group_keys:
+                best_val = 0.0
+                for row in grouped[key]:
+                    if row.mode == mode:
+                        best_val = max(best_val, _row_canonical_metric_value(row))
+                vals.append(round(best_val, 4))
+            mode_datasets.append(
+                {
+                    "label": _display_mode(mode),
+                    "data": vals,
+                    "backgroundColor": _mode_color(mode),
+                    "borderColor": _mode_color(mode),
+                    "borderWidth": 1,
+                }
+            )
+        lines.extend(_quickchart_multi_bar("Best Score by Mode Family", family_labels, mode_datasets))
+    lines.append("### 5. What is the best mode for each engine?")
+    lines.append("")
+    lines.append("Best chart: stacked counts of how often each engine's best result came from full-text, vector, or hybrid.")
+    lines.append("")
+    lines.extend(_best_mode_counts_chart_lines(rows))
+    lines.append("### 6. How close are the runners-up? Are the gaps real or tiny?")
+    lines.append("")
+    lines.append("Best chart: relative-to-winner grouped bars, where each group winner is normalized to `1.0`.")
+    lines.append("")
+    rel_lines = _relative_to_winner_grouped_bar_lines(rows)
+    lines.extend(rel_lines[4:] if len(rel_lines) > 4 else rel_lines)
+    lines.append("### 7. Which engines or modes fail to cover all datasets, or have missing runs?")
+    lines.append("")
+    lines.append("Best chart: a coverage matrix showing which engine+mode combinations have usable runs for each dataset group.")
+    lines.append("")
+    lines.extend(_coverage_matrix_lines(rows))
+    lines.append("### 8. Do different dataset families favor different engines?")
+    lines.append("")
+    lines.append("Best chart: grouped bars aggregated by dataset family.")
+    lines.append("")
+    lines.extend(_dataset_family_preference_chart_lines(rows))
+    lines.append("### 9. If I ignore pure relevance for a moment, which engine is the best tradeoff between quality and operational simplicity?")
+    lines.append("")
+    lines.append("Best chart: a bubble chart using average canonical score on one axis and a simplicity proxy on the other. The simplicity proxy here is fewer distinct best modes needed across groups.")
+    lines.append("")
+    lines.extend(_quality_vs_simplicity_chart_lines(rows))
+    lines.append("### 10. Are there any obvious outliers or surprising regressions on specific datasets that I should investigate before trusting the summary?")
+    lines.append("")
+    lines.append("Best chart: a heatmap of best engine scores by dataset group.")
+    lines.append("")
+    heatmap_lines = _engine_consistency_heatmap_lines(rows)
+    lines.extend(heatmap_lines[4:] if len(heatmap_lines) > 4 else heatmap_lines)
     return lines
 
 
@@ -770,6 +2586,13 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines.append("")
     lines.append(f"Generated at: `{datetime.now().isoformat(timespec='seconds')}`")
     lines.append("")
+    engine_lines = _engine_only_leaderboard_lines(rows)
+    if engine_lines:
+        lines.extend(engine_lines)
+    variant_lines = _global_variant_leaderboard_lines(rows)
+    if variant_lines:
+        lines.extend(variant_lines)
+    lines.extend(_leaderboard_visualization_options_lines(rows))
     by_dataset: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in rows:
         key = (row.dataset_source or "-", row.doc_count)
@@ -778,15 +2601,11 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     for dataset, doc_count in sorted(by_dataset.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0)):
         dataset_rows = by_dataset[(dataset, doc_count)]
         section_label = _dataset_group_label(dataset, doc_count)
-        lines.append(f"## Relevance for {section_label}")
+        lines.append(f"## {section_label}")
         lines.append("")
-        ndcg_table_lines = _metric_table_lines(dataset_rows, "ndcg@10")
-        lines.extend(ndcg_table_lines)
-        if ndcg_table_lines:
-            lines.append("")
-        mrr_table_lines = _metric_table_lines(dataset_rows, "mrr@10")
-        lines.extend(mrr_table_lines)
-        if mrr_table_lines:
+        canonical_table_lines = _canonical_metric_table_lines(dataset_rows)
+        lines.extend(canonical_table_lines)
+        if canonical_table_lines:
             lines.append("")
         show_docs = len({r.doc_count for r in dataset_rows}) > 1
         rel_keys = _collect_relevance_keys(dataset_rows)
@@ -818,10 +2637,13 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
         lines.append("")
         lines.append("</details>")
         lines.append("")
-        lines.append(f"## Query Performance for {section_label}")
-        lines.append("")
         lines.append("<details>")
         lines.append("<summary>Full Query Performance Table</summary>")
+        lines.append("")
+        lines.append(
+            "_Performance numbers below are informational only. This benchmark is primarily focused on relevance, "
+            "so latency/QPS figures may be noisy or inaccurate and should not be treated as authoritative._"
+        )
         lines.append("")
         perf_cols = ["Run ID", "Profile/System/Model"]
         if show_docs:
