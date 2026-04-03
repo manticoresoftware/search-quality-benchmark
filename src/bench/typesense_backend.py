@@ -115,7 +115,6 @@ class TypesenseBackend:
             payload={
                 "name": name,
                 "fields": fields,
-                "default_sorting_field": "id",
             },
         )
 
