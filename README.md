@@ -328,6 +328,12 @@ The services currently managed there are:
 
 Notes:
 - OpenSearch still needs the `opensearch-knn` plugin, and the provided service image includes it.
+- Before starting OpenSearch for the first time, prepare the host data directory:
+  ```bash
+  mkdir -p data/opensearch_data
+  chmod -R 777 data/opensearch_data
+  ```
+  OpenSearch itself runs as a non-root user, so the bind-mounted host directory must already be writable.
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
 - Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25, so treat it as a separate retrieval model in reports.
 

@@ -38,14 +38,6 @@ services:
       plugins.security.disabled: "true"
       plugins.security.ssl.http.enabled: "false"
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: "YourStrongPassword123!"
-    user: "0:0"
-    command:
-      - /bin/bash
-      - -lc
-      - |
-        mkdir -p /usr/share/opensearch/data
-        chmod -R 777 /usr/share/opensearch/data
-        exec /usr/share/opensearch/opensearch-docker-entrypoint.sh
     volumes:
       - ./data/opensearch_data:/usr/share/opensearch/data
 
