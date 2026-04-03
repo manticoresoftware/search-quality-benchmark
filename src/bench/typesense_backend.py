@@ -135,7 +135,10 @@ class TypesenseBackend:
             if not line:
                 continue
             row = json.loads(line)
-            if bool(row.get("success")):
+            if row.get("error"):
+                raise RuntimeError(f"Typesense import error: {row.get('error')}")
+            success = row.get("success")
+            if success is True or str(success).strip().lower() == "true" or "id" in row:
                 inserted += 1
         return inserted
 
