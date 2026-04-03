@@ -138,7 +138,7 @@ def _compose_service_rows(project_root: Path) -> dict[str, dict[str, Any]]:
 def _docker_stats(project_root: Path, container_names: list[str]) -> dict[str, dict[str, str]]:
     if not container_names:
         return {}
-    result = _run_docker(["stats", "--no-stream", "--format", "json", *container_names], project_root)
+    result = _run_docker(["stats", "--no-stream", "--format", "{{json .}}", *container_names], project_root)
     if result.returncode != 0:
         return {}
     out: dict[str, dict[str, str]] = {}
@@ -150,11 +150,29 @@ def _docker_stats(project_root: Path, container_names: list[str]) -> dict[str, d
             row = json.loads(line)
         except Exception:
             continue
-        name = str(row.get("Name", "") or "").strip()
+        name = str(
+            row.get("Name", "")
+            or row.get("Container", "")
+            or row.get("ContainerName", "")
+            or ""
+        ).strip().lstrip("/")
         if name:
+            cpu = str(
+                row.get("CPUPerc", "")
+                or row.get("CPU %", "")
+                or row.get("CpuPerc", "")
+                or ""
+            ).strip()
+            mem = str(
+                row.get("MemPerc", "")
+                or row.get("Mem %", "")
+                or row.get("MemUsage", "")
+                or row.get("Memory", "")
+                or ""
+            ).strip()
             out[name] = {
-                "cpu": str(row.get("CPUPerc", "") or "").strip(),
-                "mem": str(row.get("MemPerc", "") or "").strip(),
+                "cpu": cpu,
+                "mem": mem,
             }
     return out
 
