@@ -92,8 +92,8 @@ class TypesenseBackend:
         name = self.collection_name()
         self.delete_collection_if_exists(name)
         fields: list[dict[str, Any]] = [
-            {"name": "id", "type": "int64"},
             {"name": "doc_id", "type": "string"},
+            {"name": "bench_id", "type": "int64", "optional": True},
             {"name": "title", "type": "string", "optional": True},
             {"name": "abstract", "type": "string", "optional": True},
             {"name": "doi", "type": "string", "optional": True},
