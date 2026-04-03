@@ -143,40 +143,53 @@ class TypesenseBackend:
         resp = self._request("GET", f"/collections/{urlparse.quote(collection_name, safe='')}")
         return int(resp.get("num_documents", 0))
 
-    def search_lexical(self, query_text: str, limit: int) -> list[dict[str, Any]]:
+    def _search(self, params: dict[str, Any]) -> dict[str, Any]:
         resp = self._request(
-            "GET",
-            f"/collections/{urlparse.quote(self.collection_name(), safe='')}/documents/search",
-            params={
+            "POST",
+            "/multi_search",
+            payload={
+                "searches": [
+                    {
+                        "collection": self.collection_name(),
+                        **params,
+                    }
+                ]
+            },
+        )
+        results = list((resp or {}).get("results", []) or [])
+        if not results:
+            return {}
+        first = results[0]
+        return first if isinstance(first, dict) else {}
+
+    def search_lexical(self, query_text: str, limit: int) -> list[dict[str, Any]]:
+        resp = self._search(
+            {
                 "q": str(query_text or "*") or "*",
                 "query_by": ",".join(self.cfg.text_fields or ["title", "abstract"]),
                 "include_fields": "doc_id",
                 "per_page": int(limit),
-            },
+            }
         )
         return self._extract_hits(resp)
 
     def search_vector(self, query_vector: list[float], limit: int) -> list[dict[str, Any]]:
         vector_literal = ",".join(format(float(x), ".8g") for x in query_vector)
-        resp = self._request(
-            "GET",
-            f"/collections/{urlparse.quote(self.collection_name(), safe='')}/documents/search",
-            params={
+        resp = self._search(
+            {
                 "q": "*",
                 "query_by": ",".join(self.cfg.text_fields or ["title", "abstract"]),
                 "include_fields": "doc_id",
                 "per_page": int(limit),
                 "vector_query": f"{self.cfg.vector_field}:([{vector_literal}], k:{int(limit)})",
-            },
+            }
         )
         return self._extract_hits(resp)
 
     def search_hybrid(self, query_text: str, query_vector: list[float], limit: int) -> list[dict[str, Any]]:
         vector_literal = ",".join(format(float(x), ".8g") for x in query_vector)
-        resp = self._request(
-            "GET",
-            f"/collections/{urlparse.quote(self.collection_name(), safe='')}/documents/search",
-            params={
+        resp = self._search(
+            {
                 "q": str(query_text or "*") or "*",
                 "query_by": ",".join(self.cfg.text_fields or ["title", "abstract"]),
                 "include_fields": "doc_id",
@@ -185,7 +198,7 @@ class TypesenseBackend:
                     f"{self.cfg.vector_field}:([{vector_literal}], k:{int(limit)}, "
                     f"alpha:{float(self.cfg.hybrid_alpha)})"
                 ),
-            },
+            }
         )
         return self._extract_hits(resp)
 
