@@ -51,7 +51,7 @@ services:
 
   typesense:
     container_name: typesense
-    image: typesense/typesense:latest
+    image: typesense/typesense:30.1
     ports:
       - "8108:8108"
     command:
