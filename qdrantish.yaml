@@ -127,28 +127,3 @@ acord_manticore_hybrid_qdrantish:
   batch_size: 250
   query_timeout_seconds: 180
 
-dbpedia_entity_manticore_fulltext_qdrantish:
-  base: "manticore"
-  type: "fulltext"
-  source: "beir/dbpedia-entity/test"
-  fulltext_table: "dbpedia_entity_manticore_qdrantish"
-  vector_table: "dbpedia_entity_manticore_qdrantish"
-  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
-  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
-  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
-  fulltext_query_mode: "or"
-  fulltext_query_variant: "long"
-
-dbpedia_entity_manticore_hybrid_qdrantish:
-  base: "dbpedia_entity_manticore_fulltext_qdrantish"
-  source: "beir/dbpedia-entity/test"
-  type: "hybrid"
-  fulltext_table: "dbpedia_entity_manticore_qdrantish"
-  vector_table: "dbpedia_entity_manticore_qdrantish"
-  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
-  vector_quantization: "1bit"
-  vector_search_oversampling: 3.0
-  vector_search_rescore: 1
-  batch_size: 100
-  query_timeout_seconds: 300
-
