@@ -250,6 +250,15 @@ embedding:
 - `typesense.vector_distance`: vector distance metric for the collection schema
 - `typesense.hybrid_alpha`: hybrid blend parameter passed to `vector_query`
 
+### Weaviate Config
+- `weaviate.url`: server URL (default: `http://127.0.0.1:8080`)
+- `weaviate.api_key` / `weaviate.api_key_file`: optional API key
+- `weaviate.collection_name`: combined collection name used for full-text, vector, and hybrid search
+- `weaviate.text_fields`: text fields used by lexical and hybrid search
+- `weaviate.vector_field`: vector field name used when importing cached embeddings
+- `weaviate.vector_distance`: vector distance metric for the collection schema
+- `weaviate.hybrid_alpha`: hybrid alpha passed to Weaviate hybrid search
+
 ### Inheritance Mode
 - use top-level named entries (`manticore`, `qdrant`, `manticore_bm25`, ...).
 - derived entries define `base: "<entry_name>"` and only overrides.
@@ -321,6 +330,10 @@ manticore_vector_only:
   - combined collection name: `typesense.collection_name`
   - lexical, vector, and hybrid all use the same physical collection
   - vector and hybrid load document vectors from the local SQLite vector cache
+- Weaviate collections:
+  - combined collection name: `weaviate.collection_name`
+  - lexical, vector, and hybrid all use the same physical collection/class
+  - vector and hybrid load document vectors from the local SQLite vector cache
 - Note: native BM25 mode may download model artifacts on first use.
 
 ## Engine Setup
@@ -355,6 +368,7 @@ The services currently managed there are:
 - `opensearch`
 - `elasticsearch`
 - `typesense`
+- `weaviate`
 
 Notes:
 - OpenSearch still needs the `opensearch-knn` plugin, and the provided service image includes it.
@@ -371,6 +385,7 @@ Notes:
   ```
   The bundled service maps Elasticsearch to `http://127.0.0.1:9201`.
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
+- Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
 - Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25, so treat it as a separate retrieval model in reports.
 
 

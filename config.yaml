@@ -200,6 +200,21 @@ typesense:
   vector_distance: "cosine"
   hybrid_alpha: 0.5
 
+weaviate:
+  type: "weaviate"
+  url: "http://127.0.0.1:8080"
+  api_key: ""
+  api_key_file: ""
+  timeout_sec: 30
+  batch_size: 500
+  index_concurrency: 8
+  collection_name: "trec_covid_weaviate"
+  index_layout: "combined"
+  text_fields: ["title", "abstract"]
+  vector_field: "embedding"
+  vector_distance: "cosine"
+  hybrid_alpha: 0.5
+
 trec_covid_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
@@ -300,6 +315,23 @@ trec_covid_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   collection_name: "trec_covid_typesense"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_weaviate_fulltext:
+  base: "weaviate"
+  type: "fulltext"
+  collection_name: "trec_covid_weaviate"
+
+trec_covid_weaviate_vector:
+  base: "weaviate"
+  type: "vector"
+  collection_name: "trec_covid_weaviate"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_weaviate_hybrid:
+  base: "weaviate"
+  type: "hybrid"
+  collection_name: "trec_covid_weaviate"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 msmarco_passage_manticore_fulltext:
@@ -443,6 +475,29 @@ msmarco_passage_typesense_hybrid:
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_weaviate_fulltext:
+  base: "weaviate"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_weaviate"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_weaviate_vector:
+  base: "weaviate"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_weaviate"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_weaviate_hybrid:
+  base: "weaviate"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_weaviate"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
 msmarco_lite_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   max_docs: 250000
@@ -555,6 +610,24 @@ msmarco_lite_typesense_hybrid:
   keep_qrels_docs: true
   collection_name: "msmarco_lite_typesense"
 
+msmarco_lite_weaviate_fulltext:
+  base: "msmarco_passage_weaviate_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_weaviate"
+
+msmarco_lite_weaviate_vector:
+  base: "msmarco_passage_weaviate_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_weaviate"
+
+msmarco_lite_weaviate_hybrid:
+  base: "msmarco_passage_weaviate_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_weaviate"
+
 msmarco_trecdl_2019_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -627,6 +700,18 @@ msmarco_trecdl_2019_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_weaviate_fulltext:
+  base: "msmarco_passage_weaviate_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_weaviate_vector:
+  base: "msmarco_passage_weaviate_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_weaviate_hybrid:
+  base: "msmarco_passage_weaviate_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2020_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   source: "msmarco-passage/trec-dl-2020/judged"
@@ -697,6 +782,18 @@ msmarco_trecdl_2020_typesense_vector:
 
 msmarco_trecdl_2020_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_weaviate_fulltext:
+  base: "msmarco_passage_weaviate_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_weaviate_vector:
+  base: "msmarco_passage_weaviate_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_weaviate_hybrid:
+  base: "msmarco_passage_weaviate_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 nfcorpus_manticore_fulltext:
@@ -829,6 +926,27 @@ nfcorpus_typesense_hybrid:
   collection_name: "nfcorpus_typesense"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
+nfcorpus_weaviate_fulltext:
+  base: "weaviate"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_weaviate"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_weaviate_vector:
+  base: "weaviate"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_weaviate"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_weaviate_hybrid:
+  base: "weaviate"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_weaviate"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
 acord_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
@@ -957,4 +1075,25 @@ acord_typesense_hybrid:
   type: "hybrid"
   source: "hf-beir:theatticusproject/acord:test"
   collection_name: "acord_typesense"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_weaviate_fulltext:
+  base: "weaviate"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_weaviate"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_weaviate_vector:
+  base: "weaviate"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_weaviate"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_weaviate_hybrid:
+  base: "weaviate"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_weaviate"
   vector_cache_path: "vector_cache/acord-openai.sqlite"

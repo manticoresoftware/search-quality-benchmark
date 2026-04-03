@@ -19,6 +19,7 @@ from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
 from .search_options import normalize_search_options
 from .typesense_backend import TypesenseBackend
+from .weaviate_backend import WeaviateBackend
 from .table_filters import (
     draw_header_with_filters,
     filter_block_height,
@@ -37,6 +38,7 @@ _ENGINE_TARGET_KEYS = {
     "opensearch": {"index_name"},
     "elasticsearch": {"index_name"},
     "typesense": {"collection_name"},
+    "weaviate": {"collection_name"},
 }
 
 
@@ -69,6 +71,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "elasticsearch" in name
             else "typesense"
             if "typesense" in name
+            else "weaviate"
+            if "weaviate" in name
             else "",
             set(),
         )
@@ -226,6 +230,15 @@ def _typesense_hybrid_label(cfg: AppConfig) -> str:
     return f"{model} [alpha={float(cfg.typesense.hybrid_alpha):.2f}]"
 
 
+def _weaviate_vector_label(cfg: AppConfig) -> str:
+    return f"{resolved_embedding_model(cfg)} [field:{cfg.weaviate.vector_field}]"
+
+
+def _weaviate_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return f"{model} [alpha={float(cfg.weaviate.hybrid_alpha):.2f}]"
+
+
 def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     variants: list[RunVariant] = []
     for p in paths:
@@ -239,7 +252,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 continue
             cfg = target.cfg
             engine = target.type
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense") else ["fulltext", "vector"])
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
                     if engine == "manticore":
@@ -252,6 +265,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _elasticsearch_vector_label(cfg)
                     elif engine == "typesense":
                         model_or_ranker = _typesense_vector_label(cfg)
+                    elif engine == "weaviate":
+                        model_or_ranker = _weaviate_vector_label(cfg)
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
@@ -262,6 +277,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _qdrant_hybrid_label(cfg)
                     elif engine == "typesense":
                         model_or_ranker = _typesense_hybrid_label(cfg)
+                    elif engine == "weaviate":
+                        model_or_ranker = _weaviate_hybrid_label(cfg)
                     elif engine == "elasticsearch":
                         model_or_ranker = _elasticsearch_hybrid_label(cfg)
                     else:
@@ -288,6 +305,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = f"[fields:{','.join(cfg.elasticsearch.text_fields or ['title', 'abstract'])}]"
                 elif engine == "typesense":
                     model_or_ranker = f"[fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}]"
+                elif engine == "weaviate":
+                    model_or_ranker = f"[fields:{','.join(cfg.weaviate.text_fields or ['title', 'abstract'])}]"
                 else:
                     extras: list[str] = []
                     if cfg.meilisearch.searchable_attributes:
@@ -417,6 +436,8 @@ def _draw_row(
             color_engine = curses.color_pair(12)
         elif v.engine == "typesense":
             color_engine = curses.color_pair(11)
+        elif v.engine == "weaviate":
+            color_engine = curses.color_pair(13)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
 
@@ -460,6 +481,8 @@ def _variant_target_name(v: RunVariant) -> str:
         return str(v.cfg.elasticsearch.index_name or "").strip()
     if v.engine == "typesense":
         return str(v.cfg.typesense.collection_name or "").strip()
+    if v.engine == "weaviate":
+        return str(v.cfg.weaviate.collection_name or "").strip()
     base = str(v.cfg.meilisearch.index_name or "").strip()
     return base
 
@@ -497,6 +520,10 @@ def is_variant_runnable(v: RunVariant) -> bool:
             return backend.index_exists(target)
         if v.engine == "typesense":
             backend = TypesenseBackend(v.cfg.typesense)
+            backend.ensure_accessible()
+            return backend.collection_exists(target)
+        if v.engine == "weaviate":
+            backend = WeaviateBackend(v.cfg.weaviate)
             backend.ensure_accessible()
             return backend.collection_exists(target)
         backend = MeilisearchBackend(v.cfg.meilisearch)
@@ -542,6 +569,9 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
             return int(backend.get_document_count(_variant_target_name(v))), None
         if v.engine == "typesense":
             backend = TypesenseBackend(v.cfg.typesense)
+            return int(backend.get_document_count(_variant_target_name(v))), None
+        if v.engine == "weaviate":
+            backend = WeaviateBackend(v.cfg.weaviate)
             return int(backend.get_document_count(_variant_target_name(v))), None
         backend = MeilisearchBackend(v.cfg.meilisearch)
         return int(backend.get_document_count(_variant_target_name(v))), None
@@ -723,6 +753,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.init_pair(12, curses.COLOR_BLUE, -1)     # engine: elasticsearch
             curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_RED)    # target: missing
             curses.init_pair(11, curses.COLOR_RED, -1)      # engine: typesense
+            curses.init_pair(13, curses.COLOR_CYAN, -1)     # engine: weaviate
+            curses.init_pair(13, curses.COLOR_CYAN, -1)     # engine: weaviate
         widths = {
             "sel": 3,
             "entry": 18,
