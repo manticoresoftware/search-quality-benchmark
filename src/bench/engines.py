@@ -29,7 +29,9 @@ class EngineRow:
     status: str
     ready: str
     uptime: str
-    load: str
+    cpu: str
+    ram: str
+    disk: str
     action: str
     container_name: str
     compose_state: str
@@ -52,6 +54,10 @@ class RefreshState:
     running: bool = False
     last_started_at: float = 0.0
     last_finished_at: float = 0.0
+    disk_by_service: dict[str, str] | None = None
+    disk_last_started_at: float = 0.0
+    disk_last_finished_at: float = 0.0
+    disk_running: bool = False
 
 
 _SERVICES: list[tuple[str, str]] = [
@@ -117,6 +123,17 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
         target.chmod(0o777)
 
 
+def _engine_data_dir(project_root: Path, service: str) -> Path | None:
+    mapping = {
+        "manticore": project_root / "data" / "manticore_storage",
+        "qdrant": project_root / "data" / "qdrant_storage",
+        "meilisearch": project_root / "data" / "meilisearch_data",
+        "opensearch": project_root / "data" / "opensearch_data",
+        "typesense": project_root / "data" / "typesense_data",
+    }
+    return mapping.get(service)
+
+
 def _compose_service_rows(project_root: Path) -> dict[str, dict[str, Any]]:
     result = _run_compose(["ps", "--all", "--format", "json"], project_root)
     if result.returncode != 0:
@@ -174,6 +191,50 @@ def _docker_stats(project_root: Path, container_names: list[str]) -> dict[str, d
                 "cpu": cpu,
                 "mem": mem,
             }
+    return out
+
+
+def _human_size(num_bytes: int) -> str:
+    value = float(max(0, num_bytes))
+    units = ["B", "K", "M", "G", "T"]
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)}{unit}"
+            return f"{value:.1f}{unit}"
+        value /= 1024.0
+    return f"{int(num_bytes)}B"
+
+
+def _dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except Exception:
+            return 0
+    total = 0
+    try:
+        for child in path.rglob("*"):
+            if child.is_file():
+                try:
+                    total += child.stat().st_size
+                except Exception:
+                    continue
+    except Exception:
+        return 0
+    return total
+
+
+def _disk_sizes(project_root: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for service, _ in _SERVICES:
+        data_dir = _engine_data_dir(project_root, service)
+        if data_dir is None:
+            out[service] = "-"
+            continue
+        out[service] = _human_size(_dir_size(data_dir))
     return out
 
 
@@ -249,6 +310,7 @@ def _build_rows(
     cfg: AppConfig,
     project_root: Path,
     pending: dict[str, PendingAction],
+    disk_by_service: dict[str, str] | None = None,
 ) -> list[EngineRow]:
     compose_error = ""
     try:
@@ -263,6 +325,7 @@ def _build_rows(
     ]
     stats = _docker_stats(project_root, container_names) if not compose_error else {}
     inspect = _docker_inspect(project_root, container_names) if not compose_error else {}
+    disk_by_service = disk_by_service or {}
     rows: list[EngineRow] = []
     for service, label in _SERVICES:
         info = compose_rows.get(service, {})
@@ -292,11 +355,14 @@ def _build_rows(
         if container_name:
             started_at = (((inspect.get(container_name, {}) or {}).get("State") or {}).get("StartedAt") or "")
             uptime = _format_uptime(str(started_at))
-        load = "-"
+        cpu_label = "-"
+        ram_label = "-"
         if container_name and state == "running":
             cpu = str((stats.get(container_name, {}) or {}).get("cpu", "") or "").strip()
             mem = str((stats.get(container_name, {}) or {}).get("mem", "") or "").strip()
-            load = f"{cpu or '-'} / {mem or '-'}"
+            cpu_label = cpu or "-"
+            ram_label = mem or "-"
+        disk_label = str(disk_by_service.get(service, "-") or "-")
         action = "[Stop]" if status in {"running", "starting"} else "[Start]"
         last_error = ""
         if pending_action is not None and not pending_action.thread.is_alive() and pending_action.error:
@@ -312,7 +378,9 @@ def _build_rows(
                 status=status,
                 ready=ready_label,
                 uptime=uptime,
-                load=load,
+                cpu=cpu_label,
+                ram=ram_label,
+                disk=disk_label,
                 action=action,
                 container_name=container_name,
                 compose_state=state or "-",
@@ -380,6 +448,7 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             curses.init_pair(4, curses.COLOR_CYAN, -1)    # ready
 
         refresh_interval = 1.0
+        disk_refresh_interval = 15.0
 
         def _begin_refresh(force: bool = False) -> None:
             now = monotonic()
@@ -392,7 +461,7 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                 refresh.running = True
                 refresh.last_started_at = monotonic()
                 try:
-                    refresh.rows = _build_rows(cfg, project_root, pending)
+                    refresh.rows = _build_rows(cfg, project_root, pending, refresh.disk_by_service)
                     refresh.error = ""
                 except Exception as exc:
                     refresh.rows = []
@@ -403,9 +472,29 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
 
             threading.Thread(target=_worker, daemon=True).start()
 
+        def _begin_disk_refresh(force: bool = False) -> None:
+            now = monotonic()
+            if refresh.disk_running:
+                return
+            if not force and refresh.disk_last_started_at and (now - refresh.disk_last_started_at) < disk_refresh_interval:
+                return
+
+            def _worker() -> None:
+                refresh.disk_running = True
+                refresh.disk_last_started_at = monotonic()
+                try:
+                    refresh.disk_by_service = _disk_sizes(project_root)
+                finally:
+                    refresh.disk_last_finished_at = monotonic()
+                    refresh.disk_running = False
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        _begin_disk_refresh(force=True)
         _begin_refresh(force=True)
 
         while True:
+            _begin_disk_refresh()
             _begin_refresh()
             rows = refresh.rows
             if refresh.error and not rows:
@@ -430,13 +519,15 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             header = "Engines: ↑/↓ move  ENTER start/stop  r refresh  ESC/q cancel"
             if refresh.running:
                 header += "  [refreshing]"
+            if refresh.disk_running:
+                header += "  [disk]"
             stdscr.addstr(
                 0,
                 0,
                 _fit(header, max(1, w - 1)),
                 curses.A_BOLD,
             )
-            headers = [("ENGINE", 13), ("STATUS", 10), ("READY", 7), ("UPTIME", 10), ("LOAD", 18), ("ACTION", 8)]
+            headers = [("ENGINE", 13), ("STATUS", 10), ("READY", 7), ("UPTIME", 10), ("CPU", 9), ("RAM", 18), ("DISK", 8), ("ACTION", 8)]
             x = 0
             for title, width in headers:
                 stdscr.addstr(2, x, _fit(title, width), curses.A_BOLD)
@@ -459,7 +550,9 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                     (row.status, 10, attrs | status_color),
                     (row.ready, 7, attrs | ready_color),
                     (row.uptime, 10, attrs),
-                    (row.load, 18, attrs),
+                    (row.cpu, 9, attrs),
+                    (row.ram, 18, attrs),
+                    (row.disk, 8, attrs),
                     (row.action, 8, attrs),
                 ]
                 x = 0
@@ -495,6 +588,7 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             ch = stdscr.getch()
             if ch == -1 or ch in (ord("r"), ord("R")):
                 if ch in (ord("r"), ord("R")):
+                    _begin_disk_refresh(force=True)
                     _begin_refresh(force=True)
                 continue
             if ch in (curses.KEY_UP, ord("k")):
@@ -525,7 +619,27 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                 pending_action.thread = thread
                 pending_action.started_at = perf_counter()
                 pending[row.service] = pending_action
+                for i, existing_row in enumerate(refresh.rows):
+                    if existing_row.service != row.service:
+                        continue
+                    refresh.rows[i] = EngineRow(
+                        service=existing_row.service,
+                        label=existing_row.label,
+                        status="stopping" if action == "stop" else "starting",
+                        ready=existing_row.ready,
+                        uptime=existing_row.uptime,
+                        cpu=existing_row.cpu,
+                        ram=existing_row.ram,
+                        disk=existing_row.disk,
+                        action="[Start]" if action == "stop" else "[Stop]",
+                        container_name=existing_row.container_name,
+                        compose_state=existing_row.compose_state,
+                        health=existing_row.health,
+                        last_error="",
+                    )
+                    break
                 thread.start()
+                _begin_disk_refresh(force=True)
                 _begin_refresh(force=True)
                 continue
             if ch in (27, ord("q")):
