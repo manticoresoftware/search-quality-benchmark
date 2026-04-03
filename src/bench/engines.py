@@ -8,7 +8,9 @@ import json
 import subprocess
 import sys
 import threading
+from time import sleep
 from time import perf_counter
+from time import monotonic
 from typing import Any
 
 from .config import AppConfig
@@ -41,6 +43,15 @@ class PendingAction:
     thread: threading.Thread
     started_at: float
     error: str = ""
+
+
+@dataclass
+class RefreshState:
+    rows: list[EngineRow]
+    error: str = ""
+    running: bool = False
+    last_started_at: float = 0.0
+    last_finished_at: float = 0.0
 
 
 _SERVICES: list[tuple[str, str]] = [
@@ -338,9 +349,10 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
     def _inner(stdscr: Any) -> int:
         current = 0
         rows: list[EngineRow] = []
+        refresh = RefreshState(rows=[])
         curses.curs_set(0)
         stdscr.keypad(True)
-        stdscr.timeout(1000)
+        stdscr.timeout(100)
         if curses.has_colors():
             curses.start_color()
             curses.use_default_colors()
@@ -349,29 +361,61 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             curses.init_pair(3, curses.COLOR_RED, -1)     # stopped/error
             curses.init_pair(4, curses.COLOR_CYAN, -1)    # ready
 
+        refresh_interval = 1.0
+
+        def _begin_refresh(force: bool = False) -> None:
+            now = monotonic()
+            if refresh.running:
+                return
+            if not force and refresh.last_started_at and (now - refresh.last_started_at) < refresh_interval:
+                return
+
+            def _worker() -> None:
+                refresh.running = True
+                refresh.last_started_at = monotonic()
+                try:
+                    refresh.rows = _build_rows(cfg, project_root, pending)
+                    refresh.error = ""
+                except Exception as exc:
+                    refresh.rows = []
+                    refresh.error = str(exc)
+                finally:
+                    refresh.last_finished_at = monotonic()
+                    refresh.running = False
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        _begin_refresh(force=True)
+
         while True:
-            try:
-                rows = _build_rows(cfg, project_root, pending)
-            except Exception as exc:
-                rows = []
-                err = str(exc)
+            _begin_refresh()
+            rows = refresh.rows
+            if refresh.error and not rows:
                 stdscr.erase()
                 h, w = stdscr.getmaxyx()
-                stdscr.addstr(0, 0, _fit("Engines: refresh failed  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)
-                stdscr.addstr(2, 0, _fit(err, max(1, w - 1)), curses.A_DIM)
+                header = "Engines: refresh failed  ESC/q cancel"
+                if refresh.running:
+                    header = "Engines: refreshing  ESC/q cancel"
+                stdscr.addstr(0, 0, _fit(header, max(1, w - 1)), curses.A_BOLD)
+                stdscr.addstr(2, 0, _fit(refresh.error, max(1, w - 1)), curses.A_DIM)
                 stdscr.refresh()
                 ch = stdscr.getch()
                 if ch in (27, ord("q")):
                     return 1
+                if ch in (ord("r"), ord("R")):
+                    _begin_refresh(force=True)
                 continue
 
             current = min(max(0, current), max(0, len(rows) - 1))
             stdscr.erase()
             h, w = stdscr.getmaxyx()
+            header = "Engines: ↑/↓ move  ENTER start/stop  r refresh  ESC/q cancel"
+            if refresh.running:
+                header += "  [refreshing]"
             stdscr.addstr(
                 0,
                 0,
-                _fit("Engines: ↑/↓ move  ENTER start/stop  r refresh  ESC/q cancel", max(1, w - 1)),
+                _fit(header, max(1, w - 1)),
                 curses.A_BOLD,
             )
             headers = [("ENGINE", 13), ("STATUS", 10), ("READY", 7), ("UPTIME", 10), ("LOAD", 18), ("ACTION", 8)]
@@ -432,6 +476,8 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             stdscr.refresh()
             ch = stdscr.getch()
             if ch == -1 or ch in (ord("r"), ord("R")):
+                if ch in (ord("r"), ord("R")):
+                    _begin_refresh(force=True)
                 continue
             if ch in (curses.KEY_UP, ord("k")):
                 current = max(0, current - 1)
@@ -462,6 +508,7 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                 pending_action.started_at = perf_counter()
                 pending[row.service] = pending_action
                 thread.start()
+                _begin_refresh(force=True)
                 continue
             if ch in (27, ord("q")):
                 return 0
