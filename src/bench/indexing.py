@@ -1060,7 +1060,8 @@ def _run_index_typesense(
         batches = [
             [
                 {
-                    "id": int(row["id"]),
+                    "id": str(row["doc_id"]),
+                    "bench_id": int(row["id"]),
                     "doc_id": row["doc_id"],
                     "title": row.get("title", ""),
                     "abstract": row.get("abstract", ""),
@@ -1158,7 +1159,8 @@ def _run_index_typesense(
                             continue
                         batch.append(
                             {
-                                "id": int(doc["id"]),
+                                "id": str(doc["doc_id"]),
+                                "bench_id": int(doc["id"]),
                                 "doc_id": doc["doc_id"],
                                 "title": doc.get("title", ""),
                                 "abstract": doc.get("abstract", ""),
