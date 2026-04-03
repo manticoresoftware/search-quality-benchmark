@@ -111,10 +111,11 @@ bench
 ```
 
 Main actions:
-1. `prepare`: choose one or more dataset sources and download/prepare corpus/topics/qrels.
-2. `index`: build search indexes/tables for selected engine+mode (opens interactive index matrix when selected from `bench`; prints live indexing progress with `processed/total`, percent, inserted rows, retries/failures, elapsed seconds).
-3. `run`: execute topic queries with fixed benchmark settings and compute metrics (opens interactive run matrix; variants come from named config profiles and include `PROFILE`, `ENGINE`, `MODE`, `MODEL/OPTS`).
-4. `report`: render a combined report from selected artifacts.
+1. `engines`: start/stop Docker-backed engines and watch their status/load live.
+2. `prepare`: choose one or more dataset sources and download/prepare corpus/topics/qrels.
+3. `index`: build search indexes/tables for selected engine+mode (opens interactive index matrix when selected from `bench`; prints live indexing progress with `processed/total`, percent, inserted rows, retries/failures, elapsed seconds).
+4. `run`: execute topic queries with fixed benchmark settings and compute metrics (opens interactive run matrix; variants come from named config profiles and include `PROFILE`, `ENGINE`, `MODE`, `MODEL/OPTS`).
+5. `report`: render a combined report from selected artifacts.
 
 Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-select is available).
 
@@ -295,134 +296,40 @@ manticore_vector_only:
 
 ## Engine Setup
 
-### Manticore
+Engine containers are defined in:
+- `compose.yaml`
 
-Quick start (Docker):
+Use the interactive engine window:
 ```bash
-docker run -d --name manticore \
-  -p 9306:9306 -p 9308:9308 \
-  -v "$(pwd)/data/manticore_storage:/var/lib/manticore" \
-  manticoresearch/manticore:latest
-
-mysql -h 127.0.0.1 -P 9306 -e "SHOW TABLES"
+bench engines
 ```
 
-Expected reachable endpoints from config:
-- SQL: `manticore.host:manticore.sql_port` (default `127.0.0.1:9306`)
-- HTTP: `manticore.host:manticore.http_port` (default `127.0.0.1:9308`)
+or open `bench` and choose:
+- `Engines`
 
-### Qdrant
+What the engine window does:
+- shows all configured engines as a list
+- shows whether each engine is `running`, `starting`, `stopping`, or `stopped`
+- shows readiness, uptime, and current Docker load
+- lets you start/stop the selected engine with `ENTER`
+- refreshes every second
 
-Run Qdrant as a server (Docker).
+Container lifecycle policy:
+- engines are started with Docker Compose services from `compose.yaml`
+- when you stop an engine from the UI, its container is removed
+- persistent state is kept in the bind-mounted `data/...` directories
 
-Quick start (Docker):
-```bash
-docker run --rm -d --name qdrant \
-  -p 6333:6333 -p 6334:6334 \
-  -v "$(pwd)/data/qdrant_storage:/qdrant/storage" \
-  qdrant/qdrant:latest
+The services currently managed there are:
+- `manticore`
+- `qdrant`
+- `meilisearch`
+- `opensearch`
+- `typesense`
 
-curl http://127.0.0.1:6333/
-```
-
-### Meilisearch
-
-Quick start (Docker):
-```bash
-docker run --rm -d --name meilisearch \
-  -p 7700:7700 \
-  -e MEILI_NO_ANALYTICS=true \
-  -v "$(pwd)/data/meilisearch_data:/meili_data" \
-  getmeili/meilisearch:latest
-
-curl http://127.0.0.1:7700/health
-```
-
-Meilisearch modes in this benchmark:
-- lexical (`fulltext` in CLI): Meilisearch native lexical ranking
-- vector: user-provided cached vectors only
-- hybrid: lexical query text + cached query vector with `meilisearch.hybrid_semantic_ratio`
-
-Note:
-- Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25.
-- Treat Meilisearch lexical results as a separate retrieval model in reports.
-
-### OpenSearch
-
-Quick start (Docker):
-```bash
-mkdir -p "$(pwd)/data/opensearch_data"
-chmod -R 777 "$(pwd)/data/opensearch_data"
-
-docker run --rm -d --name opensearch \
-  -p 9200:9200 -p 9600:9600 \
-  -e discovery.type=single-node \
-  -e plugins.security.disabled=true \
-  -e plugins.security.ssl.http.enabled=false \
-  -e OPENSEARCH_INITIAL_ADMIN_PASSWORD='YourStrongPassword123!' \
-  -v "$(pwd)/data/opensearch_data:/usr/share/opensearch/data" \
-  opensearchproject/opensearch:3.5.0
-
-docker logs -f opensearch
-```
-
-Wait until OpenSearch is ready, then verify the node and plugins:
-```bash
-for i in $(seq 1 90); do
-  if curl -fsS 'http://127.0.0.1:9200/_cat/plugins?v' | grep -q knn; then
-    break
-  fi
-  sleep 1
-done
-
-curl http://127.0.0.1:9200/
-curl -s 'http://127.0.0.1:9200/_cat/plugins?v' | grep knn
-```
-
-Vector and hybrid modes in this benchmark require the `opensearch-knn` plugin.
-
-OpenSearch modes in this benchmark:
-- lexical (`fulltext` in CLI): `multi_match` over configured `opensearch.text_fields`
-- vector: `knn_vector` search using cached user-provided vectors
-- hybrid: lexical text query + `knn_vector` query over the same vector index
-
-Config fields:
-- `opensearch.url`: server URL (default `http://127.0.0.1:9200`)
-- `opensearch.index_name`: combined index name used for full-text, vector, and hybrid search
-- `opensearch.vector_field`: vector field name in OpenSearch mappings
-- `opensearch.text_fields`: text fields used by lexical and hybrid search
-- `opensearch.hybrid_text_boost` / `opensearch.hybrid_vector_boost`: relative weighting in hybrid search
-
-### Typesense
-
-Quick start (Docker):
-```bash
-mkdir -p "$(pwd)/data/typesense_data"
-
-docker run --rm -d --name typesense \
-  -p 8108:8108 \
-  -v "$(pwd)/data/typesense_data:/data" \
-  typesense/typesense:latest \
-  --data-dir /data \
-  --api-key=xyz \
-  --enable-cors
-
-curl -H 'X-TYPESENSE-API-KEY: xyz' 'http://127.0.0.1:8108/health'
-```
-
-Typesense modes in this benchmark:
-- lexical (`fulltext` in CLI): Typesense keyword search over `typesense.text_fields`
-- vector: `vector_query` using cached user-provided vectors
-- hybrid: keyword query + `vector_query` over the same collection
-
-Config fields:
-- `typesense.url`: server URL (default `http://127.0.0.1:8108`)
-- `typesense.api_key` / `typesense.api_key_file`: API key for the server
-- `typesense.collection_name`: combined collection name
-- `typesense.text_fields`: text fields used by lexical and hybrid search
-- `typesense.vector_field`: vector field name in the collection schema
-- `typesense.vector_distance`: vector distance metric for the collection schema
-- `typesense.hybrid_alpha`: hybrid blend parameter
+Notes:
+- OpenSearch still needs the `opensearch-knn` plugin, and the provided service image includes it.
+- Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
+- Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25, so treat it as a separate retrieval model in reports.
 
 
 ## Vector Cache

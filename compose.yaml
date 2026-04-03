@@ -1,0 +1,63 @@
+services:
+  manticore:
+    container_name: manticore
+    image: manticoresearch/manticore:latest
+    ports:
+      - "9306:9306"
+      - "9308:9308"
+    volumes:
+      - ./data/manticore_storage:/var/lib/manticore
+
+  qdrant:
+    container_name: qdrant
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant_storage:/qdrant/storage
+
+  meilisearch:
+    container_name: meilisearch
+    image: getmeili/meilisearch:latest
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - ./data/meilisearch_data:/meili_data
+
+  opensearch:
+    container_name: opensearch
+    image: opensearchproject/opensearch:3.5.0
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      plugins.security.ssl.http.enabled: "false"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "YourStrongPassword123!"
+    user: "0:0"
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        mkdir -p /usr/share/opensearch/data
+        chmod -R 777 /usr/share/opensearch/data
+        exec /usr/share/opensearch/opensearch-docker-entrypoint.sh
+    volumes:
+      - ./data/opensearch_data:/usr/share/opensearch/data
+
+  typesense:
+    container_name: typesense
+    image: typesense/typesense:latest
+    ports:
+      - "8108:8108"
+    command:
+      - --data-dir
+      - /data
+      - --api-key=xyz
+      - --enable-cors
+    volumes:
+      - ./data/typesense_data:/data

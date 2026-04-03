@@ -166,7 +166,7 @@ opensearch:
 typesense:
   type: "typesense"
   url: "http://127.0.0.1:8108"
-  api_key: ""
+  api_key: "xyz"
   api_key_file: ""
   timeout_sec: 30
   batch_size: 500

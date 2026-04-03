@@ -11,7 +11,8 @@ from time import perf_counter
 
 from .config import AppConfig, load_config, load_engine_targets
 from .configmap import generate_configmap
-from .discovery import discover_config_paths
+from .discovery import discover_config_paths, resolve_config_path
+from .engines import cmd_engines
 from .embedding_client import resolved_embedding_model
 from .index_matrix import build_index_variants_from_config_paths, select_index_variants_interactive
 from .indexing import run_index
@@ -90,8 +91,9 @@ def _select_simple_option_interactive(title: str, options: list[tuple[str, str]]
 
 def _select_top_command_interactive() -> str | None:
     options: list[tuple[str, str, str]] = [
+        ("engines", "Engines", "Start/stop Docker-backed engines and watch their status"),
         ("prepare", "Prepare", "Download dataset files and build embeddings"),
-        ("index", "Index", "Create/recreate benchmark indexes in Manticore/Qdrant"),
+        ("index", "Index", "Create/recreate benchmark indexes in supported engines"),
         ("run", "Run", "Execute benchmark queries and collect metrics"),
         ("report", "Report", "Pick artifacts and generate combined markdown report"),
         ("configmap", "Draw configmap", "Generate a Mermaid graph of profile dependencies"),
@@ -105,11 +107,12 @@ def _select_top_command_interactive() -> str | None:
                 if curses.has_colors():
                     curses.start_color()
                     curses.use_default_colors()
-                    curses.init_pair(1, curses.COLOR_WHITE, -1)   # prepare
-                    curses.init_pair(2, curses.COLOR_GREEN, -1)   # index
-                    curses.init_pair(3, curses.COLOR_CYAN, -1)    # run
-                    curses.init_pair(4, curses.COLOR_YELLOW, -1)  # report
-                    curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # configmap
+                    curses.init_pair(1, curses.COLOR_RED, -1)     # engines
+                    curses.init_pair(2, curses.COLOR_WHITE, -1)   # prepare
+                    curses.init_pair(3, curses.COLOR_GREEN, -1)   # index
+                    curses.init_pair(4, curses.COLOR_CYAN, -1)    # run
+                    curses.init_pair(5, curses.COLOR_YELLOW, -1)  # report
+                    curses.init_pair(6, curses.COLOR_MAGENTA, -1) # configmap
                 while True:
                     stdscr.erase()  # type: ignore[attr-defined]
                     h, w = stdscr.getmaxyx()  # type: ignore[attr-defined]
@@ -117,16 +120,18 @@ def _select_top_command_interactive() -> str | None:
                     for i, (name, label, desc) in enumerate(options):
                         attrs = curses.A_REVERSE if i == current else curses.A_NORMAL
                         if curses.has_colors():
-                            if name == "prepare":
+                            if name == "engines":
                                 attrs |= curses.color_pair(1)
-                            elif name == "index":
+                            elif name == "prepare":
                                 attrs |= curses.color_pair(2)
-                            elif name == "run":
+                            elif name == "index":
                                 attrs |= curses.color_pair(3)
-                            elif name == "report":
+                            elif name == "run":
                                 attrs |= curses.color_pair(4)
-                            elif name == "configmap":
+                            elif name == "report":
                                 attrs |= curses.color_pair(5)
+                            elif name == "configmap":
+                                attrs |= curses.color_pair(6)
                         line = f"{label:<10} {desc}"
                         stdscr.addstr(2 + i, 2, _fit(line, max(1, w - 3)), attrs)  # type: ignore[attr-defined]
                     stdscr.refresh()  # type: ignore[attr-defined]
@@ -380,6 +385,8 @@ def _confirm_vector_cache_coverage(
         engine_note = "Meilisearch vector indexing is likely to fail if cache misses remain."
     elif engine == "opensearch":
         engine_note = "OpenSearch vector indexing is likely to fail if cache misses remain."
+    elif engine == "typesense":
+        engine_note = "Typesense vector indexing is likely to fail if cache misses remain."
     else:
         engine_note = "Manticore vector indexing will fail if cache misses remain. Build embeddings during `bench prepare` first."
     sample_text = ", ".join(check.missing_keys) if check.missing_keys else "-"
@@ -849,13 +856,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=False)
 
+    sub.add_parser("engines", add_help=False)
+
     p_prepare = sub.add_parser("prepare", add_help=False)
     p_prepare.add_argument("--source", action="append", default=None, help="Dataset source(s) to prepare")
     p_prepare.add_argument("--entry", action="append", default=None, help="Entry name(s) to prepare source from")
     p_prepare.add_argument("--reset-embeddings", action="store_true", help="Clear current-model embeddings for the selected prepared dataset(s)")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "typesense"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -865,7 +874,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "typesense"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)
@@ -885,12 +894,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    args.config = str(resolve_config_path(args.config))
     if args.command is None:
         picked = _select_top_command_interactive()
         if picked is None:
             raise SystemExit(0)
         args = parser.parse_args(["--config", args.config, picked])
     cfg = load_config(args.config)
+    if args.command == "engines":
+        raise SystemExit(cmd_engines(cfg, args))
     if args.command == "prepare":
         raise SystemExit(cmd_prepare(cfg, args))
     if args.command == "index":
