@@ -5,9 +5,6 @@ trec_covid_manticore_fulltext_qdrantish:
   type: "fulltext"
   fulltext_table: "trec_covid_manticore_qdrantish"
   vector_table: "trec_covid_manticore_qdrantish"
-  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
-  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
-  fulltext_query_mode: "or"
   fulltext_query_variant: "long"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
@@ -29,9 +26,6 @@ msmarco_passage_manticore_fulltext_qdrantish:
   fulltext_table: "msmarco_passage_manticore_qdrantish"
   vector_table: "msmarco_passage_manticore_qdrantish"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
-  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
-  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
-  fulltext_query_mode: "or"
   fulltext_query_variant: "long"
 
 msmarco_passage_manticore_hybrid_qdrantish:
@@ -84,9 +78,6 @@ nfcorpus_manticore_fulltext_qdrantish:
   fulltext_table: "nfcorpus_manticore_qdrantish"
   vector_table: "nfcorpus_manticore_qdrantish"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
-  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
-  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
-  fulltext_query_mode: "or"
   fulltext_query_variant: "long"
 
 nfcorpus_manticore_hybrid_qdrantish:
@@ -109,9 +100,6 @@ acord_manticore_fulltext_qdrantish:
   fulltext_table: "acord_manticore_qdrantish"
   vector_table: "acord_manticore_qdrantish"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
-  fulltext_options: "index_field_lengths='1' morphology='stem_en' stopwords='en' stopwords_unstemmed='1'"
-  search_options: "ranker=expr('1000000*bm25a(1.2,0.75,256)')"
-  fulltext_query_mode: "or"
   fulltext_query_variant: "long"
 
 acord_manticore_hybrid_qdrantish:
@@ -126,4 +114,3 @@ acord_manticore_hybrid_qdrantish:
   vector_search_rescore: 1
   batch_size: 250
   query_timeout_seconds: 180
-

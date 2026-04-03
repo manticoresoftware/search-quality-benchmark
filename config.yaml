@@ -63,8 +63,8 @@ manticore:
   vector_cache_fetch_batch_size: 1000
   index_layout: "combined"
   fulltext_options: "morphology='stem_en' index_field_lengths='1'"
-  search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
-  fulltext_query_mode: "and"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75)')"
+  fulltext_query_mode: "or"
   fulltext_query_quorum: 0.5
   batch_size: 2000
   index_concurrency: 8
@@ -186,9 +186,6 @@ trec_covid_manticore_fulltext:
   type: "fulltext"
   fulltext_table: "trec_covid_manticore"
   vector_table: "trec_covid_manticore"
-  fulltext_options: "index_field_lengths='1'"
-  search_options: "ranker=bm25"
-  fulltext_query_mode: "and"
 
 trec_covid_manticore_vector:
   base: "manticore_vector_1bit"
@@ -278,9 +275,6 @@ msmarco_passage_manticore_fulltext:
   fulltext_table: "msmarco_passage_manticore"
   vector_table: "msmarco_passage_manticore"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
-  fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
-  search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
-  fulltext_query_mode: "or"
 
 msmarco_passage_manticore_vector:
   base: "manticore_vector_1bit"
@@ -612,9 +606,6 @@ nfcorpus_manticore_fulltext:
   fulltext_table: "nfcorpus_manticore"
   vector_table: "nfcorpus_manticore"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
-  fulltext_options: "index_field_lengths='1'"
-  search_options: "ranker=bm25"
-  fulltext_query_mode: "or"
 
 nfcorpus_manticore_vector:
   base: "manticore_vector_1bit"
@@ -724,9 +715,6 @@ acord_manticore_fulltext:
   fulltext_table: "acord_manticore"
   vector_table: "acord_manticore"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
-  fulltext_options: "index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'"
-  search_options: "ranker=expr('1000*bm25a(1.2,0.75)')"
-  fulltext_query_mode: "or"
 
 acord_manticore_vector:
   base: "manticore_vector_1bit"
