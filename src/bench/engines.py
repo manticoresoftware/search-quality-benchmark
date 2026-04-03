@@ -30,7 +30,9 @@ class EngineRow:
     ready: str
     uptime: str
     cpu: str
-    ram: str
+    anon_ram: str
+    mmap_ram: str
+    mmap_locked: str
     disk: str
     action: str
     container_name: str
@@ -85,6 +87,15 @@ def _fit(text: str, width: int) -> str:
     if width <= 1:
         return text[:width]
     return text[: width - 1] + "…"
+
+
+def _format_cpu_display(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "-"
+    if text.endswith("%"):
+        return text + "c"
+    return text
 
 
 def _run_compose(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -206,6 +217,10 @@ def _human_size(num_bytes: int) -> str:
     return f"{int(num_bytes)}B"
 
 
+def _human_size_kib(num_kib: int) -> str:
+    return _human_size(int(num_kib) * 1024)
+
+
 def _dir_size(path: Path) -> int:
     if not path.exists():
         return 0
@@ -225,6 +240,45 @@ def _dir_size(path: Path) -> int:
     except Exception:
         return 0
     return total
+
+
+def _parse_proc_status_kib(pid: int) -> dict[str, int]:
+    status_path = Path("/proc") / str(pid) / "status"
+    out: dict[str, int] = {}
+    try:
+        text = status_path.read_text(encoding="utf-8")
+    except Exception:
+        return out
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        value = value.strip()
+        if not value:
+            continue
+        parts = value.split()
+        try:
+            amount = int(parts[0])
+        except Exception:
+            continue
+        out[key.strip()] = amount
+    return out
+
+
+def _linux_mem_breakdown(pid: int) -> dict[str, str]:
+    if pid <= 0:
+        return {"anon": "-", "mmap": "-", "locked": "-"}
+    status = _parse_proc_status_kib(pid)
+    if not status:
+        return {"anon": "-", "mmap": "-", "locked": "-"}
+    anon_kib = int(status.get("RssAnon", 0))
+    mmap_kib = int(status.get("RssFile", 0)) + int(status.get("RssShmem", 0))
+    locked_kib = int(status.get("VmLck", 0))
+    return {
+        "anon": _human_size_kib(anon_kib),
+        "mmap": _human_size_kib(mmap_kib),
+        "locked": _human_size_kib(locked_kib),
+    }
 
 
 def _disk_sizes(project_root: Path) -> dict[str, str]:
@@ -356,12 +410,17 @@ def _build_rows(
             started_at = (((inspect.get(container_name, {}) or {}).get("State") or {}).get("StartedAt") or "")
             uptime = _format_uptime(str(started_at))
         cpu_label = "-"
-        ram_label = "-"
+        anon_label = "-"
+        mmap_label = "-"
+        locked_label = "-"
         if container_name and state == "running":
             cpu = str((stats.get(container_name, {}) or {}).get("cpu", "") or "").strip()
-            mem = str((stats.get(container_name, {}) or {}).get("mem", "") or "").strip()
-            cpu_label = cpu or "-"
-            ram_label = mem or "-"
+            cpu_label = _format_cpu_display(cpu)
+            pid = int((((inspect.get(container_name, {}) or {}).get("State") or {}).get("Pid") or 0) or 0)
+            mem_breakdown = _linux_mem_breakdown(pid)
+            anon_label = mem_breakdown["anon"]
+            mmap_label = mem_breakdown["mmap"]
+            locked_label = mem_breakdown["locked"]
         disk_label = str(disk_by_service.get(service, "-") or "-")
         action = "[Stop]" if status in {"running", "starting"} else "[Start]"
         last_error = ""
@@ -379,7 +438,9 @@ def _build_rows(
                 ready=ready_label,
                 uptime=uptime,
                 cpu=cpu_label,
-                ram=ram_label,
+                anon_ram=anon_label,
+                mmap_ram=mmap_label,
+                mmap_locked=locked_label,
                 disk=disk_label,
                 action=action,
                 container_name=container_name,
@@ -527,7 +588,7 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                 _fit(header, max(1, w - 1)),
                 curses.A_BOLD,
             )
-            headers = [("ENGINE", 13), ("STATUS", 10), ("READY", 7), ("UPTIME", 10), ("CPU", 9), ("RAM", 18), ("DISK", 8), ("ACTION", 8)]
+            headers = [("ENGINE", 13), ("STATUS", 10), ("READY", 7), ("UPTIME", 10), ("CPU*", 9), ("ANON", 8), ("MMAP", 8), ("LOCKED", 8), ("DISK", 8), ("ACTION", 8)]
             x = 0
             for title, width in headers:
                 stdscr.addstr(2, x, _fit(title, width), curses.A_BOLD)
@@ -551,7 +612,9 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                     (row.ready, 7, attrs | ready_color),
                     (row.uptime, 10, attrs),
                     (row.cpu, 9, attrs),
-                    (row.ram, 18, attrs),
+                    (row.anon_ram, 8, attrs),
+                    (row.mmap_ram, 8, attrs),
+                    (row.mmap_locked, 8, attrs),
                     (row.disk, 8, attrs),
                     (row.action, 8, attrs),
                 ]
@@ -570,6 +633,10 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
                     f"container: {row.container_name or '-'}",
                     f"compose state: {row.compose_state}",
                     f"health: {row.health}",
+                    "CPU*: Docker CPU%; 100% means one fully used host CPU core",
+                    "ANON: Linux RssAnon from /proc/<pid>/status",
+                    "MMAP: Linux RssFile + RssShmem from /proc/<pid>/status",
+                    "LOCKED: Linux VmLck from /proc/<pid>/status",
                     f"compose file: {compose_path}",
                 ]
                 if row.last_error:
