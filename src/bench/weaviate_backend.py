@@ -147,6 +147,21 @@ class WeaviateBackend:
                 obj["vector"] = [float(x) for x in vector]
             objects.append(obj)
         resp = self._request("POST", "/v1/batch/objects", payload={"objects": objects})
+        if isinstance(resp, list):
+            errors: list[Any] = []
+            inserted = 0
+            for row in resp:
+                if not isinstance(row, dict):
+                    continue
+                result = row.get("result") or {}
+                row_errors = list((result.get("errors") or {}).get("error") or [])
+                if row_errors:
+                    errors.extend(row_errors)
+                else:
+                    inserted += 1
+            if errors:
+                raise RuntimeError(f"Weaviate batch import error: {json.dumps(errors, ensure_ascii=True)}")
+            return inserted
         errs = (((resp or {}).get("errors") or {}).get("error") or [])
         if errs:
             raise RuntimeError(f"Weaviate batch import error: {json.dumps(errs, ensure_ascii=True)}")
