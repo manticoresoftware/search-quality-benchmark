@@ -1,16 +1,20 @@
-# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch)
+# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Typesense)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
-- Manticore full-text (`MATCH(...)`)
-- Manticore vector (`FLOAT_VECTOR` + auto-embeddings)
+- Manticore full-text
+- Manticore vector
+- Manticore hybrid
 - Qdrant full-text-like sparse retrieval (BM25 in Qdrant sparse vectors)
-- Qdrant dense vector retrieval (vectors sourced from Manticore)
+- Qdrant dense vector retrieval (vectors sourced from the shared cache)
 - Meilisearch lexical search
 - Meilisearch vector search (user-provided vectors from the shared cache)
 - Meilisearch hybrid search (query text + cached query vector)
 - OpenSearch lexical search
 - OpenSearch vector search (user-provided vectors from the shared cache)
 - OpenSearch hybrid search (query text + cached query vector)
+- Typesense lexical search
+- Typesense vector search (user-provided vectors from the shared cache)
+- Typesense hybrid search (query text + cached query vector)
 
 It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md`, diagnostics) per run.
 
@@ -145,7 +149,7 @@ Unit tests:
 ```bash
 ./.venv/bin/pytest -q tests/unit
 ```
-They validate core benchmark logic (for example metric calculations and run/report matrix behavior) without requiring live Manticore/Qdrant/Meilisearch services.
+They validate core benchmark logic (for example metric calculations and run/report matrix behavior) without requiring live engine services.
 
 ## Configuration
 
@@ -155,22 +159,25 @@ Config included in the repo:
 `config.yaml.template` is kept as a documented reference with inline comments for all options.
 
 ### Embedding API Credentials
-- in `config.yaml` under `manticore`:
-  - `vector_api_key: "..."` (inline), or
-  - `vector_api_key_file: "/absolute/path/to/keyfile"` (recommended).
+- in `config.yaml` under `embedding`:
+  - `provider: "openai"` or `provider: "openrouter"`
+  - `api_key: "..."` (inline), or
+  - `api_key_file: "/absolute/path/to/keyfile"` (recommended)
+  - `model: "..."` for the embedding model used by `bench prepare` and query embedding fallback
 
 Example:
 ```yaml
-manticore:
-  vector_model: "openai/text-embedding-3-large"
-  vector_api_key_file: "/Users/you/openai_key.txt"
+embedding:
+  provider: "openrouter"
+  model: "qwen/qwen3-embedding-8b"
+  api_key_file: "/Users/you/openrouter_key.txt"
 ```
 
 ### Manticore Full-Text Ranking Config
 - `manticore.fulltext_options`: raw Manticore RT table options appended to `CREATE TABLE ... )`.
   - default: `morphology='stem_en' index_field_lengths='1'`
   - example: `index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'`
-- `manticore.search_options`: raw SQL `OPTION` list appended to Manticore search queries (including ranker settings).
+- `manticore.search_options`: raw Manticore search options list (including ranker settings).
   - default: `ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')`
   - examples: `ranker=bm25`, `ranker=proximity_bm25`, `ranker=bm25, fuzzy=1`
   - applies to both full-text and vector query paths
@@ -197,9 +204,7 @@ manticore:
 ### Meilisearch Config
 - `meilisearch.host`: server URL (default: `http://127.0.0.1:7700`)
 - `meilisearch.api_key` / `meilisearch.api_key_file`: optional Meilisearch API key
-- `meilisearch.index_name`: base name used to derive index names
-  - lexical index: `<index_name>_lexical`
-  - vector/hybrid index: `<index_name>_<vector_index>`
+- `meilisearch.index_name`: combined index name used for full-text, vector, and hybrid search
 - `meilisearch.searchable_attributes`: fields searched by lexical and hybrid search
 - `meilisearch.ranking_rules`: lexical ranking rules used by Meilisearch
 - `meilisearch.stop_words`: optional stop word list
@@ -209,6 +214,15 @@ manticore:
 - `meilisearch.vector_index`: suffix for the vector index name
 - `meilisearch.hybrid_semantic_ratio`: hybrid search blend between lexical and semantic search
 - `meilisearch.binary_quantized`: enable Meilisearch 1-bit vector storage for the configured embedder
+
+### Typesense Config
+- `typesense.url`: server URL (default: `http://127.0.0.1:8108`)
+- `typesense.api_key` / `typesense.api_key_file`: Typesense API key
+- `typesense.collection_name`: combined collection name used for full-text, vector, and hybrid search
+- `typesense.text_fields`: text fields used by lexical and hybrid search
+- `typesense.vector_field`: vector field name in the collection schema
+- `typesense.vector_distance`: vector distance metric for the collection schema
+- `typesense.hybrid_alpha`: hybrid blend parameter passed to `vector_query`
 
 ### Inheritance Mode
 - use top-level named entries (`manticore`, `qdrant`, `manticore_bm25`, ...).
@@ -248,7 +262,7 @@ manticore_vector_only:
   - `KNN_TYPE='hnsw'`
   - `HNSW_SIMILARITY` from config (`manticore.vector_similarity`)
   - optional `quantization` from config (`vector_quantization`)
-  - indexing is cache-first; cache misses are auto-embedded by Manticore
+  - indexing is cache-first; cache misses are an error until you run `bench prepare`
 - Qdrant collections:
   - sparse BM25 collection name: `qdrant.bm25_collection`
   - dense collection name: `qdrant.dense_collection`
@@ -265,10 +279,18 @@ manticore_vector_only:
   - payload fields: `doc_id`, `title`, `abstract`, `doi`, `date`
   - vectors are loaded from local vector cache
 - Meilisearch indexes:
-  - lexical index name: `<meilisearch.index_name>_lexical`
-  - vector/hybrid index name: `<meilisearch.index_name>_<meilisearch.vector_index>`
+  - combined index name: `meilisearch.index_name`
+  - lexical, vector, and hybrid all use the same physical index
   - lexical and hybrid use `searchable_attributes`, `ranking_rules`, `stop_words`, `synonyms`, and `typo_tolerance`
   - vector and hybrid use a `userProvided` embedder and load document vectors from the local SQLite vector cache
+- OpenSearch indexes:
+  - combined index name: `opensearch.index_name`
+  - lexical, vector, and hybrid all use the same physical index
+  - vector and hybrid use a `knn_vector` field and load document vectors from the local SQLite vector cache
+- Typesense collections:
+  - combined collection name: `typesense.collection_name`
+  - lexical, vector, and hybrid all use the same physical collection
+  - vector and hybrid load document vectors from the local SQLite vector cache
 - Note: native BM25 mode may download model artifacts on first use.
 
 ## Engine Setup
@@ -366,15 +388,46 @@ OpenSearch modes in this benchmark:
 
 Config fields:
 - `opensearch.url`: server URL (default `http://127.0.0.1:9200`)
-- `opensearch.index_name`: base name; lexical index becomes `<index_name>_lexical`, vector/hybrid index becomes `<index_name>_<vector_index>`
+- `opensearch.index_name`: combined index name used for full-text, vector, and hybrid search
 - `opensearch.vector_field`: vector field name in OpenSearch mappings
 - `opensearch.text_fields`: text fields used by lexical and hybrid search
 - `opensearch.hybrid_text_boost` / `opensearch.hybrid_vector_boost`: relative weighting in hybrid search
 
+### Typesense
+
+Quick start (Docker):
+```bash
+mkdir -p "$(pwd)/data/typesense_data"
+
+docker run --rm -d --name typesense \
+  -p 8108:8108 \
+  -v "$(pwd)/data/typesense_data:/data" \
+  typesense/typesense:latest \
+  --data-dir /data \
+  --api-key=xyz \
+  --enable-cors
+
+curl -H 'X-TYPESENSE-API-KEY: xyz' 'http://127.0.0.1:8108/health'
+```
+
+Typesense modes in this benchmark:
+- lexical (`fulltext` in CLI): Typesense keyword search over `typesense.text_fields`
+- vector: `vector_query` using cached user-provided vectors
+- hybrid: keyword query + `vector_query` over the same collection
+
+Config fields:
+- `typesense.url`: server URL (default `http://127.0.0.1:8108`)
+- `typesense.api_key` / `typesense.api_key_file`: API key for the server
+- `typesense.collection_name`: combined collection name
+- `typesense.text_fields`: text fields used by lexical and hybrid search
+- `typesense.vector_field`: vector field name in the collection schema
+- `typesense.vector_distance`: vector distance metric for the collection schema
+- `typesense.hybrid_alpha`: hybrid blend parameter
+
 
 ## Vector Cache
 
-Vector cache is stored as SQLite file (configured by `manticore.vector_cache_path`).
+Vector cache is stored as SQLite files referenced by profile `vector_cache_path`.
 
 Recommended defaults in this repo:
 - `vector_cache/trec-covid-openai.sqlite`
@@ -385,27 +438,32 @@ This directory is important:
 - regenerating cache can take a long time and may cost money (for API-based models),
 - keep backups if you rely on expensive embeddings.
 
-Populate cache from existing Manticore vector table:
+Populate cache with:
 ```bash
-The vector cache is populated automatically by Manticore vector indexing and then reused by later Manticore and Qdrant vector runs.
+bench --config config.yaml prepare --source beir/trec-covid
 ```
 
 Behavior:
 - cache key = `md5(normalized_text + model + hnsw_similarity)`,
 - normalized text = selected `vector_from` fields joined with single spaces,
-- cache can store `NULL` status (embedding unavailable); such docs are skipped during vector indexing and not retried.
-- query embeddings use the same cache (same keying by normalized text + model + similarity); cache misses are embedded and written back automatically.
+- query embeddings use the same cache (same keying by normalized text + model + similarity)
 - Manticore vector indexing:
-  - uses cached vectors when available,
-  - auto-embeds only cache misses,
-  - syncs produced vectors back into cache automatically after indexing.
+  - uses cache only,
+  - fails on cache misses,
+  - reuses the same cached document/query vectors as the other engines for fair comparison.
 - Qdrant vector indexing:
   - uses cache only,
-  - fails on cache misses (no auto-embedding path in Qdrant indexing flow).
+  - fails on cache misses.
 - Meilisearch vector indexing:
   - uses cache only,
   - fails on cache misses,
-  - reuses the same cached document/query vectors as Manticore and Qdrant for fair comparison.
+  - reuses the same cached document/query vectors as the other engines for fair comparison.
+- OpenSearch vector indexing:
+  - uses cache only,
+  - fails on cache misses.
+- Typesense vector indexing:
+  - uses cache only,
+  - fails on cache misses.
 
 ## Metrics
 

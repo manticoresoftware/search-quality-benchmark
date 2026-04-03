@@ -3,8 +3,6 @@
 #   <dataset>_<engine>_<type>
 #
 # Internal helper bases remain non-canonical and are hidden from menus.
-# OpenSearch vector/hybrid profiles are intentionally omitted here because the
-# current OpenSearch backend in this repo does not implement 1-bit vectors.
 
 dataset:
   source: "beir/trec-covid"
@@ -165,6 +163,21 @@ opensearch:
   hybrid_text_boost: 1.0
   hybrid_vector_boost: 1.0
 
+typesense:
+  type: "typesense"
+  url: "http://127.0.0.1:8108"
+  api_key: ""
+  api_key_file: ""
+  timeout_sec: 30
+  batch_size: 500
+  index_concurrency: 1
+  collection_name: "trec_covid_typesense"
+  index_layout: "combined"
+  text_fields: ["title", "abstract"]
+  vector_field: "embedding"
+  vector_distance: "cosine"
+  hybrid_alpha: 0.5
+
 trec_covid_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
@@ -237,6 +250,23 @@ trec_covid_opensearch_hybrid:
   base: "opensearch"
   type: "hybrid"
   index_name: "trec_covid_opensearch"
+
+trec_covid_typesense_fulltext:
+  base: "typesense"
+  type: "fulltext"
+  collection_name: "trec_covid_typesense"
+
+trec_covid_typesense_vector:
+  base: "typesense"
+  type: "vector"
+  collection_name: "trec_covid_typesense"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_typesense_hybrid:
+  base: "typesense"
+  type: "hybrid"
+  collection_name: "trec_covid_typesense"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 msmarco_passage_manticore_fulltext:
   base: "manticore"
@@ -335,6 +365,29 @@ msmarco_passage_opensearch_hybrid:
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_typesense_fulltext:
+  base: "typesense"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_typesense"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_typesense_vector:
+  base: "typesense"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_typesense"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_typesense_hybrid:
+  base: "typesense"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_typesense"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
 msmarco_lite_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   max_docs: 250000
@@ -411,6 +464,24 @@ msmarco_lite_opensearch_hybrid:
   keep_qrels_docs: true
   index_name: "msmarco_lite_opensearch"
 
+msmarco_lite_typesense_fulltext:
+  base: "msmarco_passage_typesense_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_typesense"
+
+msmarco_lite_typesense_vector:
+  base: "msmarco_passage_typesense_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_typesense"
+
+msmarco_lite_typesense_hybrid:
+  base: "msmarco_passage_typesense_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_typesense"
+
 msmarco_trecdl_2019_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -459,6 +530,18 @@ msmarco_trecdl_2019_opensearch_hybrid:
   base: "msmarco_passage_opensearch_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_typesense_fulltext:
+  base: "msmarco_passage_typesense_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_typesense_vector:
+  base: "msmarco_passage_typesense_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_typesense_hybrid:
+  base: "msmarco_passage_typesense_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2020_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   source: "msmarco-passage/trec-dl-2020/judged"
@@ -505,6 +588,18 @@ msmarco_trecdl_2020_opensearch_vector:
 
 msmarco_trecdl_2020_opensearch_hybrid:
   base: "msmarco_passage_opensearch_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_typesense_fulltext:
+  base: "msmarco_passage_typesense_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_typesense_vector:
+  base: "msmarco_passage_typesense_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_typesense_hybrid:
+  base: "msmarco_passage_typesense_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 nfcorpus_manticore_fulltext:
@@ -598,6 +693,27 @@ nfcorpus_opensearch_hybrid:
   index_name: "nfcorpus_opensearch"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
+nfcorpus_typesense_fulltext:
+  base: "typesense"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_typesense"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_typesense_vector:
+  base: "typesense"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_typesense"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_typesense_hybrid:
+  base: "typesense"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_typesense"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
 acord_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
@@ -687,6 +803,27 @@ acord_opensearch_hybrid:
   type: "hybrid"
   source: "hf-beir:theatticusproject/acord:test"
   index_name: "acord_opensearch"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_typesense_fulltext:
+  base: "typesense"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_typesense"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_typesense_vector:
+  base: "typesense"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_typesense"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_typesense_hybrid:
+  base: "typesense"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_typesense"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 dbpedia_entity_manticore_fulltext:
@@ -780,4 +917,25 @@ dbpedia_entity_opensearch_hybrid:
   type: "hybrid"
   source: "beir/dbpedia-entity/test"
   index_name: "dbpedia_entity_opensearch"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_typesense_fulltext:
+  base: "typesense"
+  type: "fulltext"
+  source: "beir/dbpedia-entity/test"
+  collection_name: "dbpedia_entity_typesense"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_typesense_vector:
+  base: "typesense"
+  type: "vector"
+  source: "beir/dbpedia-entity/test"
+  collection_name: "dbpedia_entity_typesense"
+  vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"
+
+dbpedia_entity_typesense_hybrid:
+  base: "typesense"
+  type: "hybrid"
+  source: "beir/dbpedia-entity/test"
+  collection_name: "dbpedia_entity_typesense"
   vector_cache_path: "vector_cache/dbpedia-entity-openai.sqlite"

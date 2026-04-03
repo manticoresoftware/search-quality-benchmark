@@ -109,6 +109,22 @@ class OpenSearchConfig:
 
 
 @dataclass
+class TypesenseConfig:
+    url: str = "http://127.0.0.1:8108"
+    api_key: str = ""
+    api_key_file: str = ""
+    timeout_sec: int = 30
+    batch_size: int = 500
+    index_concurrency: int = 1
+    collection_name: str = "trec_covid_typesense"
+    index_layout: str = "combined"
+    text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
+    vector_field: str = "embedding"
+    vector_distance: str = "cosine"
+    hybrid_alpha: float = 0.5
+
+
+@dataclass
 class BenchmarkConfig:
     limit: int = 100
     warmup_queries: int = 5
@@ -172,6 +188,7 @@ class AppConfig:
     manticore: ManticoreConfig = field(default_factory=ManticoreConfig)
     meilisearch: MeilisearchConfig = field(default_factory=MeilisearchConfig)
     opensearch: OpenSearchConfig = field(default_factory=OpenSearchConfig)
+    typesense: TypesenseConfig = field(default_factory=TypesenseConfig)
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -230,11 +247,22 @@ _MANTICORE_FIELDS = set(vars(ManticoreConfig()).keys())
 _EMBEDDING_FIELDS = set(vars(EmbeddingConfig()).keys())
 _MEILISEARCH_FIELDS = set(vars(MeilisearchConfig()).keys())
 _OPENSEARCH_FIELDS = set(vars(OpenSearchConfig()).keys())
+_TYPESENSE_FIELDS = set(vars(TypesenseConfig()).keys())
 _QDRANT_FIELDS = set(vars(QdrantConfig()).keys())
 _BENCHMARK_FIELDS = set(vars(BenchmarkConfig()).keys())
 _DATASET_FIELDS = set(vars(DatasetConfig()).keys())
 _METRICS_FIELDS = set(vars(MetricsConfig()).keys())
-_SECTION_NAMES = {"embedding", "manticore", "meilisearch", "opensearch", "qdrant", "benchmark", "dataset", "metrics"}
+_SECTION_NAMES = {
+    "embedding",
+    "manticore",
+    "meilisearch",
+    "opensearch",
+    "typesense",
+    "qdrant",
+    "benchmark",
+    "dataset",
+    "metrics",
+}
 
 
 def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -255,6 +283,7 @@ def _defaults_dict() -> dict[str, Any]:
         "manticore": vars(defaults.manticore),
         "meilisearch": vars(defaults.meilisearch),
         "opensearch": vars(defaults.opensearch),
+        "typesense": vars(defaults.typesense),
         "qdrant": vars(defaults.qdrant),
         "benchmark": vars(defaults.benchmark),
         "metrics": vars(defaults.metrics),
@@ -269,6 +298,7 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
         manticore=ManticoreConfig(**merged["manticore"]),
         meilisearch=MeilisearchConfig(**merged["meilisearch"]),
         opensearch=OpenSearchConfig(**merged["opensearch"]),
+        typesense=TypesenseConfig(**merged["typesense"]),
         qdrant=QdrantConfig(**merged["qdrant"]),
         benchmark=BenchmarkConfig(**merged["benchmark"]),
         metrics=MetricsConfig(**merged["metrics"]),
@@ -335,19 +365,30 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "meilisearch", "opensearch", "qdrant"):
+        if e_type in ("manticore", "meilisearch", "opensearch", "typesense", "qdrant"):
             return e_type
-        if isinstance(ent.get("manticore"), dict) and not isinstance(ent.get("qdrant"), dict):
+        if isinstance(ent.get("manticore"), dict) and not any(
+            isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "typesense")
+        ):
             return "manticore"
-        if isinstance(ent.get("opensearch"), dict) and not isinstance(ent.get("manticore"), dict) and not isinstance(ent.get("meilisearch"), dict) and not isinstance(ent.get("qdrant"), dict):
+        if isinstance(ent.get("opensearch"), dict) and not any(
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "typesense")
+        ):
             return "opensearch"
-        if isinstance(ent.get("meilisearch"), dict) and not isinstance(ent.get("manticore"), dict) and not isinstance(ent.get("qdrant"), dict):
+        if isinstance(ent.get("meilisearch"), dict) and not any(
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "typesense")
+        ):
             return "meilisearch"
+        if isinstance(ent.get("typesense"), dict) and not any(
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "meilisearch", "opensearch")
+        ):
+            return "typesense"
         if isinstance(ent.get("qdrant"), dict) and not isinstance(ent.get("manticore"), dict):
             return "qdrant"
         m_hits = 0
         meili_hits = 0
         os_hits = 0
+        ts_hits = 0
         q_hits = 0
         for k in ent.keys():
             if k in ("type", "base") or k in _SECTION_NAMES:
@@ -360,12 +401,16 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 meili_hits += 1
             if k in _OPENSEARCH_FIELDS:
                 os_hits += 1
+            if k in _TYPESENSE_FIELDS:
+                ts_hits += 1
             if k in _QDRANT_FIELDS:
                 q_hits += 1
-        if meili_hits > max(m_hits, os_hits, q_hits):
+        if meili_hits > max(m_hits, os_hits, ts_hits, q_hits):
             return "meilisearch"
-        if os_hits > max(m_hits, q_hits):
+        if os_hits > max(m_hits, ts_hits, q_hits):
             return "opensearch"
+        if ts_hits > max(m_hits, q_hits):
+            return "typesense"
         if q_hits > m_hits:
             return "qdrant"
         if m_hits > q_hits:
@@ -374,6 +419,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "meilisearch"
         if name.lower().startswith("opensearch") or name.lower().startswith("osearch") or name.lower().startswith("os_"):
             return "opensearch"
+        if name.lower().startswith("typesense"):
+            return "typesense"
         if name.lower().startswith("qdrant"):
             return "qdrant"
         return "manticore"
@@ -407,6 +454,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 candidates.append("meilisearch")
             if k in _OPENSEARCH_FIELDS:
                 candidates.append("opensearch")
+            if k in _TYPESENSE_FIELDS:
+                candidates.append("typesense")
             if k in _QDRANT_FIELDS:
                 candidates.append("qdrant")
             if k in _BENCHMARK_FIELDS:
@@ -418,7 +467,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             if not candidates:
                 continue
 
-            preferred = e_type if e_type in ("manticore", "meilisearch", "opensearch", "qdrant") else "manticore"
+            preferred = e_type if e_type in ("manticore", "meilisearch", "opensearch", "typesense", "qdrant") else "manticore"
             if preferred in candidates:
                 sec = preferred
             elif len(candidates) == 1:

@@ -12,6 +12,7 @@ from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
+from .typesense_backend import TypesenseBackend
 from .vector_cache import VectorCache, cache_key_from_doc, parse_vector_from_fields
 
 
@@ -1022,6 +1023,193 @@ def _run_index_opensearch(
     return out
 
 
+def _run_index_typesense(
+    cfg: AppConfig,
+    mode: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> list[ModeIndexResult]:
+    docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "engine": "typesense",
+                "mode": mode,
+                "stage": "load_docs",
+                "processed": 0,
+                "total": 0,
+                "inserted": 0,
+                "failed_batches": 0,
+                "retried_batches": 0,
+            }
+        )
+    docs = read_jsonl(docs_path)
+    backend = TypesenseBackend(cfg.typesense)
+    backend.ensure_accessible()
+    out: list[ModeIndexResult] = []
+
+    if mode not in ("fulltext", "vector"):
+        raise ValueError("For engine=typesense, mode must be one of: fulltext, vector")
+
+    if mode == "fulltext":
+        backend.recreate_collection()
+        started = perf_counter()
+        inserted = 0
+        processed = 0
+        batches = [
+            [
+                {
+                    "id": int(row["id"]),
+                    "doc_id": row["doc_id"],
+                    "title": row.get("title", ""),
+                    "abstract": row.get("abstract", ""),
+                    "doi": row.get("doi", ""),
+                    "date": row.get("date", ""),
+                }
+                for row in docs[i : i + cfg.typesense.batch_size]
+            ]
+            for i in range(0, len(docs), cfg.typesense.batch_size)
+        ]
+
+        def _worker(batch: list[Any]) -> int:
+            return backend.import_documents(batch)
+
+        def _on_result(batch: list[Any], count: int) -> None:
+            nonlocal inserted, processed
+            inserted += count
+            processed += len(batch)
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "engine": "typesense",
+                        "mode": "fulltext",
+                        "stage": "ingest",
+                        "processed": processed,
+                        "total": len(docs),
+                        "inserted": inserted,
+                        "failed_batches": 0,
+                        "retried_batches": 0,
+                    }
+                )
+
+        _run_parallel_batches(
+            batches,
+            max_workers=max(1, int(cfg.typesense.index_concurrency)),
+            worker=_worker,
+            on_result=_on_result,
+        )
+        elapsed = perf_counter() - started
+        out.append(
+            ModeIndexResult(
+                mode="fulltext",
+                duration_seconds=elapsed,
+                rows_inserted=inserted,
+                docs_per_second=(inserted / elapsed) if elapsed > 0 else 0.0,
+                failed_batches=0,
+                retried_batches=0,
+            )
+        )
+
+    if mode == "vector":
+        docs_cached, missing_total, missing_keys = _collect_cached_docs(
+            docs=docs,
+            cfg=cfg,
+            engine="typesense",
+            mode="vector",
+            progress_callback=progress_callback,
+        )
+        if missing_keys:
+            raise RuntimeError(
+                "Vector cache miss during Typesense vector indexing. "
+                f"Missing keys={missing_total} sample={missing_keys}. "
+                "Build the corresponding embeddings in `bench prepare` first."
+            )
+        if not docs_cached:
+            raise RuntimeError("No vector documents available in cache (all missing/null).")
+        cache2 = VectorCache(cfg.manticore.vector_cache_path)
+        try:
+            first_key = docs_cached[0][1]
+            first_vec = (cache2.get_vectors_many([first_key]).get(first_key) or [])
+            dim = len(first_vec)
+        finally:
+            cache2.close()
+        if dim <= 0:
+            raise RuntimeError("Cached vectors have invalid dimension.")
+        backend.recreate_collection(dimension=dim)
+        started = perf_counter()
+        inserted = 0
+        processed = 0
+        cache3 = VectorCache(cfg.manticore.vector_cache_path)
+        try:
+            total_cached = len(docs_cached)
+            fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
+            insert_batch_size = max(1, int(cfg.typesense.batch_size))
+            for fetch_start in range(0, total_cached, fetch_batch_size):
+                fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
+                vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
+                prepared_batches: list[list[Any]] = []
+                for ins_start in range(0, len(fetch_chunk), insert_batch_size):
+                    chunk = fetch_chunk[ins_start : ins_start + insert_batch_size]
+                    batch: list[dict[str, Any]] = []
+                    for doc, key in chunk:
+                        vec = vecs.get(key, [])
+                        if not vec:
+                            continue
+                        batch.append(
+                            {
+                                "id": int(doc["id"]),
+                                "doc_id": doc["doc_id"],
+                                "title": doc.get("title", ""),
+                                "abstract": doc.get("abstract", ""),
+                                "doi": doc.get("doi", ""),
+                                "date": doc.get("date", ""),
+                                cfg.typesense.vector_field: [float(x) for x in vec],
+                            }
+                        )
+                    prepared_batches.append([batch, len(chunk)])
+
+                def _worker(item: list[Any]) -> int:
+                    return backend.import_documents(item[0])
+
+                def _on_result(item: list[Any], count: int) -> None:
+                    nonlocal inserted, processed
+                    inserted += count
+                    processed += int(item[1])
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "engine": "typesense",
+                                "mode": "vector",
+                                "stage": "ingest",
+                                "processed": processed,
+                                "total": total_cached,
+                                "inserted": inserted,
+                                "failed_batches": 0,
+                                "retried_batches": 0,
+                            }
+                        )
+
+                _run_parallel_batches(
+                    prepared_batches,
+                    max_workers=max(1, int(cfg.typesense.index_concurrency)),
+                    worker=_worker,
+                    on_result=_on_result,
+                )
+        finally:
+            cache3.close()
+        elapsed = perf_counter() - started
+        out.append(
+            ModeIndexResult(
+                mode="vector",
+                duration_seconds=elapsed,
+                rows_inserted=inserted,
+                docs_per_second=(inserted / elapsed) if elapsed > 0 else 0.0,
+                failed_batches=0,
+                retried_batches=0,
+            )
+        )
+    return out
+
+
 def run_index(
     cfg: AppConfig,
     engine: str,
@@ -1036,4 +1224,6 @@ def run_index(
         return _run_index_meilisearch(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "opensearch":
         return _run_index_opensearch(cfg, mode=mode, progress_callback=progress_callback)
+    if engine == "typesense":
+        return _run_index_typesense(cfg, mode=mode, progress_callback=progress_callback)
     raise ValueError(f"Unsupported engine: {engine}")

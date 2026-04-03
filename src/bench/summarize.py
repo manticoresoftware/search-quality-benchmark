@@ -91,6 +91,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "OpenSearch vector (opensearch)"
     if engine == "opensearch" and mode == "hybrid":
         return "OpenSearch hybrid (opensearch)"
+    if engine == "typesense" and mode == "fulltext":
+        return "Typesense full-text (typesense)"
+    if engine == "typesense" and mode == "vector":
+        return "Typesense vector (typesense)"
+    if engine == "typesense" and mode == "hybrid":
+        return "Typesense hybrid (typesense)"
     return f"{engine} {mode}"
 
 

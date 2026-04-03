@@ -17,6 +17,7 @@ from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
 from .search_options import normalize_search_options
+from .typesense_backend import TypesenseBackend
 from .table_filters import (
     draw_header_with_filters,
     filter_block_height,
@@ -33,6 +34,7 @@ _ENGINE_TARGET_KEYS = {
     "qdrant": {"bm25_collection", "dense_collection"},
     "meilisearch": {"index_name"},
     "opensearch": {"index_name"},
+    "typesense": {"collection_name"},
 }
 
 
@@ -61,6 +63,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "meilisearch" in name
             else "opensearch"
             if "opensearch" in name
+            else "typesense"
+            if "typesense" in name
             else "",
             set(),
         )
@@ -196,6 +200,15 @@ def _opensearch_hybrid_label(cfg: AppConfig) -> str:
     return f"{model} [{' '.join(extra)}]"
 
 
+def _typesense_vector_label(cfg: AppConfig) -> str:
+    return f"{resolved_embedding_model(cfg)} [field:{cfg.typesense.vector_field}]"
+
+
+def _typesense_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return f"{model} [alpha={float(cfg.typesense.hybrid_alpha):.2f}]"
+
+
 def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
     variants: list[RunVariant] = []
     for p in paths:
@@ -209,7 +222,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 continue
             cfg = target.cfg
             engine = target.type
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch") else ["fulltext", "vector"])
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "typesense") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
                     if engine == "manticore":
@@ -218,6 +231,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _qdrant_vector_label(cfg)
                     elif engine == "opensearch":
                         model_or_ranker = _opensearch_vector_label(cfg)
+                    elif engine == "typesense":
+                        model_or_ranker = _typesense_vector_label(cfg)
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
@@ -226,6 +241,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _manticore_vector_label(cfg).replace(model, f"{model} [fusion=rrf]", 1)
                     elif engine == "qdrant":
                         model_or_ranker = _qdrant_hybrid_label(cfg)
+                    elif engine == "typesense":
+                        model_or_ranker = _typesense_hybrid_label(cfg)
                     else:
                         model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
                 elif engine == "manticore":
@@ -246,6 +263,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = "Qdrant/bm25"
                 elif engine == "opensearch":
                     model_or_ranker = f"[fields:{','.join(cfg.opensearch.text_fields or ['title', 'abstract'])}]"
+                elif engine == "typesense":
+                    model_or_ranker = f"[fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}]"
                 else:
                     extras: list[str] = []
                     if cfg.meilisearch.searchable_attributes:
@@ -371,6 +390,8 @@ def _draw_row(
             color_engine = curses.color_pair(2)
         elif v.engine == "opensearch":
             color_engine = curses.color_pair(9)
+        elif v.engine == "typesense":
+            color_engine = curses.color_pair(11)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
 
@@ -410,6 +431,8 @@ def _variant_target_name(v: RunVariant) -> str:
     if v.engine == "opensearch":
         base = str(v.cfg.opensearch.index_name or "").strip()
         return base
+    if v.engine == "typesense":
+        return str(v.cfg.typesense.collection_name or "").strip()
     base = str(v.cfg.meilisearch.index_name or "").strip()
     return base
 
@@ -441,6 +464,10 @@ def is_variant_runnable(v: RunVariant) -> bool:
             backend = OpenSearchBackend(v.cfg.opensearch)
             backend.ensure_accessible()
             return backend.index_exists(target)
+        if v.engine == "typesense":
+            backend = TypesenseBackend(v.cfg.typesense)
+            backend.ensure_accessible()
+            return backend.collection_exists(target)
         backend = MeilisearchBackend(v.cfg.meilisearch)
         backend.ensure_accessible()
         return backend.index_exists(target)
@@ -478,6 +505,9 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
             return int(backend._count_points(collection)), None
         if v.engine == "opensearch":
             backend = OpenSearchBackend(v.cfg.opensearch)
+            return int(backend.get_document_count(_variant_target_name(v))), None
+        if v.engine == "typesense":
+            backend = TypesenseBackend(v.cfg.typesense)
             return int(backend.get_document_count(_variant_target_name(v))), None
         backend = MeilisearchBackend(v.cfg.meilisearch)
         return int(backend.get_document_count(_variant_target_name(v))), None
@@ -657,6 +687,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # profile: no previous run
             curses.init_pair(9, curses.COLOR_MAGENTA, -1)   # engine: opensearch
             curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_RED)    # target: missing
+            curses.init_pair(11, curses.COLOR_RED, -1)      # engine: typesense
         widths = {
             "sel": 3,
             "entry": 18,

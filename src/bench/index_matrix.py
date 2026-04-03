@@ -15,6 +15,7 @@ from .manticore import ManticoreClient
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
+from .typesense_backend import TypesenseBackend
 from .table_filters import (
     draw_header_with_filters,
     filter_block_height,
@@ -31,6 +32,7 @@ _ENGINE_TARGET_KEYS = {
     "qdrant": {"bm25_collection", "dense_collection"},
     "meilisearch": {"index_name"},
     "opensearch": {"index_name"},
+    "typesense": {"collection_name"},
 }
 
 
@@ -59,6 +61,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "meilisearch" in name
             else "opensearch"
             if "opensearch" in name
+            else "typesense"
+            if "typesense" in name
             else "",
             set(),
         )
@@ -124,6 +128,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [{' '.join(extra)}]"
         if engine == "opensearch":
             return f"{model} [field:{cfg.opensearch.vector_field}]"
+        if engine == "typesense":
+            return f"{model} [field:{cfg.typesense.vector_field}]"
         return model
     if mode == "hybrid":
         if engine == "manticore":
@@ -135,6 +141,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [{' '.join(extra)}]"
         if engine == "opensearch":
             return f"{model} [textBoost:{float(cfg.opensearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.opensearch.hybrid_vector_boost):.2f}]"
+        if engine == "typesense":
+            return f"{model} [alpha:{float(cfg.typesense.hybrid_alpha):.2f}]"
         return f"{model} [fusion=rrf]"
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
@@ -149,6 +157,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         return " ".join(extras) or "(meilisearch lexical)"
     if engine == "opensearch":
         return f"fields:{','.join(cfg.opensearch.text_fields or ['title', 'abstract'])}"
+    if engine == "typesense":
+        return f"fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}"
     return "Qdrant/bm25"
 
 
@@ -161,6 +171,8 @@ def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
     if engine == "opensearch":
         base = str(cfg.opensearch.index_name or "").strip()
         return base
+    if engine == "typesense":
+        return str(cfg.typesense.collection_name or "").strip()
     return cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
 
 
@@ -182,6 +194,8 @@ def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
     if engine == "meilisearch" and str(cfg.meilisearch.index_layout or "").strip().lower() == "combined":
         return "vector"
     if engine == "opensearch" and str(cfg.opensearch.index_layout or "").strip().lower() == "combined":
+        return "vector"
+    if engine == "typesense" and str(cfg.typesense.index_layout or "").strip().lower() == "combined":
         return "vector"
     return None
 
@@ -231,7 +245,11 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                             else (
                                 cfg.meilisearch.batch_size
                                 if engine == "meilisearch"
-                                else (cfg.opensearch.batch_size if engine == "opensearch" else cfg.qdrant.batch_size)
+                                else (
+                                    cfg.opensearch.batch_size
+                                    if engine == "opensearch"
+                                    else (cfg.typesense.batch_size if engine == "typesense" else cfg.qdrant.batch_size)
+                                )
                             )
                         ),
                         target=target,
@@ -291,7 +309,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             )
         )
 
-    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3}
+    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3, "typesense": 4}
     kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
     return sorted(
         out,
@@ -337,6 +355,12 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
             if not backend.index_exists(v.target):
                 return TargetStatus("pending", None, expected)
             actual = int(backend.get_document_count(v.target))
+        elif v.engine == "typesense":
+            backend = TypesenseBackend(v.cfg.typesense)
+            backend.ensure_accessible()
+            if not backend.collection_exists(v.target):
+                return TargetStatus("pending", None, expected)
+            actual = int(backend.get_document_count(v.target))
         else:
             backend = MeilisearchBackend(v.cfg.meilisearch)
             backend.ensure_accessible()
@@ -371,6 +395,8 @@ def _draw_row(
             color_engine = curses.color_pair(2)
         elif v.engine == "opensearch":
             color_engine = curses.color_pair(9)
+        elif v.engine == "typesense":
+            color_engine = curses.color_pair(11)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
         if v.mode == "fulltext":
@@ -560,6 +586,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(4, curses.COLOR_WHITE, -1)   # vector
             curses.init_pair(5, curses.COLOR_CYAN, -1)    # meilisearch
             curses.init_pair(9, curses.COLOR_MAGENTA, -1) # opensearch
+            curses.init_pair(11, curses.COLOR_RED, -1)    # typesense
             curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_GREEN)   # target ok
             curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # target unexpected
