@@ -391,6 +391,8 @@ def _confirm_vector_cache_coverage(
         engine_note = "Typesense vector indexing is likely to fail if cache misses remain."
     elif engine == "weaviate":
         engine_note = "Weaviate vector indexing is likely to fail if cache misses remain."
+    elif engine == "vespa":
+        engine_note = "Vespa vector indexing is likely to fail if cache misses remain."
     else:
         engine_note = "Manticore vector indexing will fail if cache misses remain. Build embeddings during `bench prepare` first."
     sample_text = ", ".join(check.missing_keys) if check.missing_keys else "-"
@@ -868,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--reset-embeddings", action="store_true", help="Clear current-model embeddings for the selected prepared dataset(s)")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -878,7 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)

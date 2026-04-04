@@ -112,6 +112,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "Weaviate vector (weaviate)"
     if engine == "weaviate" and mode == "hybrid":
         return "Weaviate hybrid (weaviate)"
+    if engine == "vespa" and mode == "fulltext":
+        return "Vespa full-text (vespa)"
+    if engine == "vespa" and mode == "vector":
+        return "Vespa vector (vespa)"
+    if engine == "vespa" and mode == "hybrid":
+        return "Vespa hybrid (vespa)"
     return f"{engine} {mode}"
 
 
@@ -278,6 +284,8 @@ def _color_pair_for_engine(engine: str) -> int:
         return 12
     if e == "weaviate":
         return 13
+    if e == "vespa":
+        return 14
     return 0
 
 
@@ -421,6 +429,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             curses.init_pair(9, curses.COLOR_MAGENTA, -1)   # opensearch
             curses.init_pair(12, curses.COLOR_BLUE, -1)     # elasticsearch
             curses.init_pair(13, curses.COLOR_CYAN, -1)     # weaviate
+            curses.init_pair(14, curses.COLOR_GREEN, -1)    # vespa
 
         widths = {
             "sel": 3,
@@ -1869,6 +1878,7 @@ def _engine_consistency_radar_lines(rows: list[ArtifactRow]) -> list[str]:
         ("meilisearch", "#ef4444"),
         ("typesense", "#8b5cf6"),
         ("weaviate", "#14b8a6"),
+        ("vespa", "#22c55e"),
     ]
     color_map = {name: color for name, color in palette}
     datasets: list[dict[str, Any]] = []
@@ -1910,6 +1920,7 @@ def _engine_consistency_series(rows: list[ArtifactRow]) -> tuple[list[str], list
         ("meilisearch", "#ef4444"),
         ("typesense", "#8b5cf6"),
         ("weaviate", "#14b8a6"),
+        ("vespa", "#22c55e"),
     ]
     color_map = {name: color for name, color in palette}
     datasets: list[dict[str, Any]] = []
@@ -2113,6 +2124,7 @@ def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]
         "meilisearch": "#ef4444",
         "typesense": "#8b5cf6",
         "weaviate": "#14b8a6",
+        "vespa": "#22c55e",
     }
     datasets = []
     for engine in engines:
@@ -2147,6 +2159,7 @@ def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
         "meilisearch": "#ef4444",
         "typesense": "#8b5cf6",
         "weaviate": "#14b8a6",
+        "vespa": "#22c55e",
     }
     datasets = []
     for engine, _, avg_score in leaderboard:
@@ -2343,6 +2356,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
         "meilisearch": "#ef4444",
         "typesense": "#8b5cf6",
         "weaviate": "#14b8a6",
+        "vespa": "#22c55e",
     }
     datasets: list[dict[str, Any]] = []
     for engine, _, _ in leaderboard:

@@ -17,6 +17,7 @@ from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .typesense_backend import TypesenseBackend
+from .vespa_backend import VespaBackend
 from .weaviate_backend import WeaviateBackend
 from .table_filters import (
     draw_header_with_filters,
@@ -36,6 +37,7 @@ _ENGINE_TARGET_KEYS = {
     "opensearch": {"index_name"},
     "elasticsearch": {"index_name"},
     "typesense": {"collection_name"},
+    "vespa": {"collection_name"},
     "weaviate": {"collection_name"},
 }
 
@@ -69,6 +71,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "elasticsearch" in name
             else "typesense"
             if "typesense" in name
+            else "vespa"
+            if "vespa" in name
             else "weaviate"
             if "weaviate" in name
             else "",
@@ -142,6 +146,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [field:{cfg.typesense.vector_field}]"
         if engine == "weaviate":
             return f"{model} [field:{cfg.weaviate.vector_field}]"
+        if engine == "vespa":
+            return f"{model} [field:{cfg.vespa.vector_field}]"
         return model
     if mode == "hybrid":
         if engine == "manticore":
@@ -159,6 +165,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [alpha:{float(cfg.typesense.hybrid_alpha):.2f}]"
         if engine == "weaviate":
             return f"{model} [alpha:{float(cfg.weaviate.hybrid_alpha):.2f}]"
+        if engine == "vespa":
+            return f"{model} [alpha:{float(cfg.vespa.hybrid_alpha):.2f}]"
         return f"{model} [fusion=rrf]"
     if engine == "manticore":
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
@@ -179,6 +187,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         return f"fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}"
     if engine == "weaviate":
         return f"fields:{','.join(cfg.weaviate.text_fields or ['title', 'abstract'])}"
+    if engine == "vespa":
+        return f"fields:{','.join(cfg.vespa.text_fields or ['title', 'abstract'])}"
     return "Qdrant/bm25"
 
 
@@ -197,6 +207,8 @@ def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
         return str(cfg.typesense.collection_name or "").strip()
     if engine == "weaviate":
         return str(cfg.weaviate.collection_name or "").strip()
+    if engine == "vespa":
+        return str(cfg.vespa.collection_name or "").strip()
     return cfg.qdrant.bm25_collection if mode == "fulltext" else cfg.qdrant.dense_collection
 
 
@@ -224,6 +236,8 @@ def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
     if engine == "typesense" and str(cfg.typesense.index_layout or "").strip().lower() == "combined":
         return "vector"
     if engine == "weaviate" and str(cfg.weaviate.index_layout or "").strip().lower() == "combined":
+        return "vector"
+    if engine == "vespa" and str(cfg.vespa.index_layout or "").strip().lower() == "combined":
         return "vector"
     return None
 
@@ -282,7 +296,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                                         else (
                                             cfg.typesense.batch_size
                                             if engine == "typesense"
-                                            else (cfg.weaviate.batch_size if engine == "weaviate" else cfg.qdrant.batch_size)
+                                            else (cfg.weaviate.batch_size if engine == "weaviate" else (cfg.vespa.batch_size if engine == "vespa" else cfg.qdrant.batch_size))
                                         )
                                     )
                                 )
@@ -345,7 +359,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             )
         )
 
-    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3, "elasticsearch": 4, "typesense": 5, "weaviate": 6}
+    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3, "elasticsearch": 4, "typesense": 5, "weaviate": 6, "vespa": 7}
     kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
     return sorted(
         out,
@@ -409,6 +423,12 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
             if not backend.collection_exists(v.target):
                 return TargetStatus("pending", None, expected)
             actual = int(backend.get_document_count(v.target))
+        elif v.engine == "vespa":
+            backend = VespaBackend(v.cfg.vespa)
+            backend.ensure_accessible()
+            if not backend.collection_exists(v.target):
+                return TargetStatus("pending", None, expected)
+            actual = int(backend.get_document_count(v.target))
         else:
             backend = MeilisearchBackend(v.cfg.meilisearch)
             backend.ensure_accessible()
@@ -449,6 +469,8 @@ def _draw_row(
             color_engine = curses.color_pair(11)
         elif v.engine == "weaviate":
             color_engine = curses.color_pair(13)
+        elif v.engine == "vespa":
+            color_engine = curses.color_pair(14)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
         if v.mode == "fulltext":
@@ -641,6 +663,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(12, curses.COLOR_BLUE, -1)   # elasticsearch
             curses.init_pair(11, curses.COLOR_RED, -1)    # typesense
             curses.init_pair(13, curses.COLOR_CYAN, -1)   # weaviate
+            curses.init_pair(14, curses.COLOR_GREEN, -1)  # vespa
             curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_GREEN)   # target ok
             curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # target unexpected

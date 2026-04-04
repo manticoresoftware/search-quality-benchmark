@@ -259,6 +259,18 @@ embedding:
 - `weaviate.vector_distance`: vector distance metric for the collection schema
 - `weaviate.hybrid_alpha`: hybrid alpha passed to Weaviate hybrid search
 
+### Vespa Config
+- `vespa.url`: query/document endpoint (default: `http://127.0.0.1:8081`)
+- `vespa.deploy_url`: configserver deploy endpoint (default: `http://127.0.0.1:19071`)
+- `vespa.collection_name`: logical collection name used for full-text, vector, and hybrid search
+- `vespa.text_fields`: text fields indexed for BM25-style lexical and hybrid search
+- `vespa.vector_field`: tensor field name used for dense retrieval
+- `vespa.vector_distance`: Vespa distance metric (`angular`, etc.)
+- `vespa.hybrid_alpha`: hybrid alpha baked into the generated Vespa rank profile
+- `vespa.app_name`: generated application name used during deploy
+- `vespa.namespace`: Vespa document namespace
+- `vespa.package_dir`: local generated application package/registry directory
+
 ### Inheritance Mode
 - use top-level named entries (`manticore`, `qdrant`, `manticore_bm25`, ...).
 - derived entries define `base: "<entry_name>"` and only overrides.
@@ -334,6 +346,11 @@ manticore_vector_only:
   - combined collection name: `weaviate.collection_name`
   - lexical, vector, and hybrid all use the same physical collection/class
   - vector and hybrid load document vectors from the local SQLite vector cache
+- Vespa collections:
+  - combined logical collection name: `vespa.collection_name`
+  - lexical, vector, and hybrid all use the same generated Vespa schema/document type
+  - indexing auto-generates and redeploys a local Vespa application package
+  - vector and hybrid load document vectors from the local SQLite vector cache
 - Note: native BM25 mode may download model artifacts on first use.
 
 ## Engine Setup
@@ -369,6 +386,7 @@ The services currently managed there are:
 - `elasticsearch`
 - `typesense`
 - `weaviate`
+- `vespa`
 
 Notes:
 - OpenSearch still needs the `opensearch-knn` plugin, and the provided service image includes it.
@@ -386,6 +404,7 @@ Notes:
   The bundled service maps Elasticsearch to `http://127.0.0.1:9201`.
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
 - Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
+- Vespa is exposed at `http://127.0.0.1:8081`, with deploy API at `http://127.0.0.1:19071`.
 - Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25, so treat it as a separate retrieval model in reports.
 
 

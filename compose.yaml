@@ -77,3 +77,12 @@ services:
       CLUSTER_HOSTNAME: "node1"
     volumes:
       - ./data/weaviate_data:/var/lib/weaviate
+
+  vespa:
+    container_name: vespa
+    image: vespaengine/vespa:latest
+    ports:
+      - "8081:8080"
+      - "19071:19071"
+    volumes:
+      - ./data/vespa_data:/opt/vespa/var

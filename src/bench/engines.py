@@ -21,6 +21,7 @@ from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .table_layout import wrap_text_lines
 from .typesense_backend import TypesenseBackend
+from .vespa_backend import VespaBackend
 from .weaviate_backend import WeaviateBackend
 
 
@@ -72,6 +73,7 @@ _SERVICES: list[tuple[str, str]] = [
     ("elasticsearch", "Elasticsearch"),
     ("typesense", "Typesense"),
     ("weaviate", "Weaviate"),
+    ("vespa", "Vespa"),
 ]
 
 
@@ -131,6 +133,7 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
         "elasticsearch": project_root / "data" / "elasticsearch_data",
         "typesense": project_root / "data" / "typesense_data",
         "weaviate": project_root / "data" / "weaviate_data",
+        "vespa": project_root / "data" / "vespa_data",
     }
     target = mapping.get(service)
     if target is None:
@@ -149,6 +152,7 @@ def _engine_data_dir(project_root: Path, service: str) -> Path | None:
         "elasticsearch": project_root / "data" / "elasticsearch_data",
         "typesense": project_root / "data" / "typesense_data",
         "weaviate": project_root / "data" / "weaviate_data",
+        "vespa": project_root / "data" / "vespa_data",
     }
     return mapping.get(service)
 
@@ -368,6 +372,9 @@ def _engine_ready(cfg: AppConfig, service: str) -> tuple[bool, str]:
             return True, ""
         if service == "weaviate":
             WeaviateBackend(cfg.weaviate).ensure_accessible()
+            return True, ""
+        if service == "vespa":
+            VespaBackend(cfg.vespa).ensure_accessible()
             return True, ""
         return False, "unknown service"
     except Exception as exc:

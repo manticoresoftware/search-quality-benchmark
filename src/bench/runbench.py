@@ -20,6 +20,7 @@ from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at
 from .qdrant_backend import QdrantBackend
 from .search_options import normalize_search_options
 from .typesense_backend import TypesenseBackend
+from .vespa_backend import VespaBackend
 from .weaviate_backend import WeaviateBackend
 from .vector_cache import VectorCache, cache_key_from_text, normalize_text
 
@@ -334,6 +335,8 @@ def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
         return str(cfg.typesense.collection_name or "").strip()
     if engine == "weaviate":
         return str(cfg.weaviate.collection_name or "").strip()
+    if engine == "vespa":
+        return str(cfg.vespa.collection_name or "").strip()
     base = str(cfg.meilisearch.index_name or "").strip()
     return base
 
@@ -524,6 +527,23 @@ def _weaviate_vector_label(cfg: AppConfig) -> str:
 def _weaviate_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     extras = [f"alpha={float(cfg.weaviate.hybrid_alpha):.2f}"]
+    return f"{model} [{' '.join(extras)}]"
+
+
+def _vespa_fulltext_label(cfg: AppConfig) -> str:
+    extras = [f"fields:{','.join(cfg.vespa.text_fields or ['title', 'abstract'])}"]
+    return f"[{' '.join(extras)}]"
+
+
+def _vespa_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    extras = [f"field:{cfg.vespa.vector_field}"]
+    return f"{model} [{' '.join(extras)}]"
+
+
+def _vespa_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    extras = [f"alpha={float(cfg.vespa.hybrid_alpha):.2f}"]
     return f"{model} [{' '.join(extras)}]"
 
 
@@ -856,6 +876,57 @@ def _collect_diagnostics_weaviate(
     return diagnostics
 
 
+def _collect_diagnostics_vespa(
+    cfg: AppConfig,
+    modes: list[str],
+    topics: list[dict[str, str]],
+    *,
+    query_vectors: dict[str, list[float]],
+) -> dict[str, list[dict[str, Any]]]:
+    diagnostics: dict[str, list[dict[str, Any]]] = {}
+    backend = VespaBackend(cfg.vespa)
+    diagnostics_topics = topics[: cfg.benchmark.diagnostics_queries]
+    for mode in modes:
+        diagnostics[mode] = []
+        for t in diagnostics_topics:
+            qtext = query_text_for_mode(t, mode, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
+            entry: dict[str, Any] = {"topic_id": t["topic_id"], "query": qtext}
+            try:
+                if mode == "fulltext":
+                    rows = backend.search_lexical(qtext, limit=min(cfg.benchmark.limit, 5))
+                    entry["request"] = {
+                        "collection": backend.collection_name(),
+                        "query": qtext,
+                        "fields": list(cfg.vespa.text_fields or ["title", "abstract"]),
+                    }
+                elif mode == "vector":
+                    qvec = query_vectors.get(
+                        query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                    )
+                    if not qvec:
+                        raise RuntimeError("Missing query vector for diagnostics.")
+                    rows = backend.search_vector(qvec, limit=min(cfg.benchmark.limit, 5))
+                    entry["request"] = {"collection": backend.collection_name(), "vector_dim": len(qvec)}
+                else:
+                    qvec = query_vectors.get(
+                        query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                    )
+                    if not qvec:
+                        raise RuntimeError("Missing query vector for diagnostics.")
+                    rows = backend.search_hybrid(qtext, qvec, limit=min(cfg.benchmark.limit, 5))
+                    entry["request"] = {
+                        "collection": backend.collection_name(),
+                        "query": qtext,
+                        "vector_dim": len(qvec),
+                        "alpha": float(cfg.vespa.hybrid_alpha),
+                    }
+                entry["top_hits"] = rows[:5]
+            except Exception as exc:
+                entry["error"] = str(exc)
+            diagnostics[mode].append(entry)
+    return diagnostics
+
+
 def _run_single_query_qdrant(
     cfg: AppConfig,
     backend: QdrantBackend,
@@ -1142,6 +1213,54 @@ def _run_single_query_weaviate(
         )
 
 
+def _run_single_query_vespa(
+    cfg: AppConfig,
+    backend: VespaBackend,
+    mode: str,
+    topic_id: str,
+    query_text: str,
+    repeat_idx: int,
+    query_vector: list[float] | None = None,
+) -> QueryResult:
+    try:
+        started = perf_counter()
+        if mode == "fulltext":
+            rows = backend.search_lexical(query_text, limit=cfg.benchmark.limit)
+        elif mode == "vector":
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Vespa vector search.")
+            rows = backend.search_vector(query_vector, limit=cfg.benchmark.limit)
+        else:
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Vespa hybrid search.")
+            rows = backend.search_hybrid(query_text, query_vector, limit=cfg.benchmark.limit)
+        latency_ms = (perf_counter() - started) * 1000.0
+        doc_ids = [str(r["doc_id"]) for r in rows if r.get("doc_id")]
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=latency_ms,
+            success=True,
+            error="",
+            hit_count=len(doc_ids),
+            doc_ids=doc_ids,
+        )
+    except Exception as exc:
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=0.0,
+            success=False,
+            error=str(exc),
+            hit_count=0,
+            doc_ids=[],
+        )
+
+
 def _mask_value(path: str, value: Any) -> Any:
     p = path.lower()
     if any(k in p for k in ("password", "api_key")) and str(value or "").strip():
@@ -1254,6 +1373,17 @@ def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> li
                 lines.append(f"rows ({collection_name}): n/a ({exc})")
         return lines
 
+    if engine == "vespa":
+        backend = VespaBackend(cfg.vespa)
+        for m in modes:
+            collection_name = backend.collection_name()
+            try:
+                cnt = backend.get_document_count(collection_name)
+                lines.append(f"rows ({collection_name}): {int(cnt):,}")
+            except Exception as exc:
+                lines.append(f"rows ({collection_name}): n/a ({exc})")
+        return lines
+
     backend = QdrantBackend(cfg.qdrant)
     for m in modes:
         if m == "hybrid":
@@ -1316,6 +1446,10 @@ def run_benchmark(
         if mode not in ("fulltext", "vector", "hybrid"):
             raise ValueError("For engine=weaviate, mode must be one of: fulltext, vector, hybrid")
         modes = [mode]
+    elif engine == "vespa":
+        if mode not in ("fulltext", "vector", "hybrid"):
+            raise ValueError("For engine=vespa, mode must be one of: fulltext, vector, hybrid")
+        modes = [mode]
     else:
         raise ValueError(f"Unsupported engine: {engine}")
     tasks: list[tuple[str, str, str, int]] = []
@@ -1344,6 +1478,7 @@ def run_benchmark(
     elasticsearch_backend: ElasticsearchBackend | None = None
     typesense_backend: TypesenseBackend | None = None
     weaviate_backend: WeaviateBackend | None = None
+    vespa_backend: VespaBackend | None = None
     if "vector" in modes or "hybrid" in modes:
         vector_queries = [
             query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant) for t in topics
@@ -1361,6 +1496,8 @@ def run_benchmark(
         typesense_backend = TypesenseBackend(cfg.typesense)
     elif engine == "weaviate":
         weaviate_backend = WeaviateBackend(cfg.weaviate)
+    elif engine == "vespa":
+        vespa_backend = VespaBackend(cfg.vespa)
 
     for m in modes:
         for t in warmup_topics:
@@ -1426,6 +1563,19 @@ def run_benchmark(
                     _run_single_query_weaviate(
                         cfg,
                         weaviate_backend,  # type: ignore[arg-type]
+                        m,
+                        t["topic_id"],
+                        qtext,
+                        repeat_idx=-1,
+                        query_vector=query_vectors.get(
+                            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                        ),
+                    )
+                    continue
+                if engine == "vespa":
+                    _run_single_query_vespa(
+                        cfg,
+                        vespa_backend,  # type: ignore[arg-type]
                         m,
                         t["topic_id"],
                         qtext,
@@ -1525,6 +1675,20 @@ def run_benchmark(
                     _run_single_query_weaviate,
                     cfg,
                     weaviate_backend,  # type: ignore[arg-type]
+                    m,
+                    tid,
+                    q,
+                    r,
+                    query_vectors.get(q, []) if m in ("vector", "hybrid") else None,
+                )
+                for (m, tid, q, r) in tasks
+            ]
+        elif engine == "vespa":
+            futures = [
+                pool.submit(
+                    _run_single_query_vespa,
+                    cfg,
+                    vespa_backend,  # type: ignore[arg-type]
                     m,
                     tid,
                     q,
@@ -1704,6 +1868,8 @@ def run_benchmark(
         diagnostics = _collect_diagnostics_typesense(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "weaviate":
         diagnostics = _collect_diagnostics_weaviate(cfg, modes, topics, query_vectors=query_vectors)
+    elif engine == "vespa":
+        diagnostics = _collect_diagnostics_vespa(cfg, modes, topics, query_vectors=query_vectors)
     else:
         diagnostics = {m: [] for m in modes}
 
@@ -1720,6 +1886,8 @@ def run_benchmark(
             model_label = _typesense_vector_label(cfg)
         elif engine == "weaviate":
             model_label = _weaviate_vector_label(cfg)
+        elif engine == "vespa":
+            model_label = _vespa_vector_label(cfg)
         else:
             model_label = _meilisearch_vector_label(cfg)
     elif mode == "hybrid":
@@ -1736,6 +1904,8 @@ def run_benchmark(
             model_label = _typesense_hybrid_label(cfg)
         elif engine == "weaviate":
             model_label = _weaviate_hybrid_label(cfg)
+        elif engine == "vespa":
+            model_label = _vespa_hybrid_label(cfg)
         else:
             model_label = _meilisearch_hybrid_label(cfg)
     elif mode == "fulltext":
@@ -1751,6 +1921,8 @@ def run_benchmark(
             model_label = _typesense_fulltext_label(cfg)
         elif engine == "weaviate":
             model_label = _weaviate_fulltext_label(cfg)
+        elif engine == "vespa":
+            model_label = _vespa_fulltext_label(cfg)
         else:
             model_label = _meilisearch_fulltext_label(cfg)
     else:
@@ -1763,6 +1935,8 @@ def run_benchmark(
                 model_label = _typesense_vector_label(cfg)
             elif engine == "weaviate":
                 model_label = _weaviate_vector_label(cfg)
+            elif engine == "vespa":
+                model_label = _vespa_vector_label(cfg)
             elif engine == "elasticsearch":
                 model_label = _elasticsearch_vector_label(cfg)
             else:

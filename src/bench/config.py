@@ -145,6 +145,24 @@ class WeaviateConfig:
 
 
 @dataclass
+class VespaConfig:
+    url: str = "http://127.0.0.1:8081"
+    deploy_url: str = "http://127.0.0.1:19071"
+    timeout_sec: int = 30
+    batch_size: int = 500
+    index_concurrency: int = 1
+    collection_name: str = "trec_covid_vespa"
+    index_layout: str = "combined"
+    text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
+    vector_field: str = "embedding"
+    vector_distance: str = "angular"
+    hybrid_alpha: float = 0.5
+    app_name: str = "bench"
+    namespace: str = "doc"
+    package_dir: str = "data/vespa_app"
+
+
+@dataclass
 class TypesenseConfig:
     url: str = "http://127.0.0.1:8108"
     api_key: str = ""
@@ -226,6 +244,7 @@ class AppConfig:
     opensearch: OpenSearchConfig = field(default_factory=OpenSearchConfig)
     elasticsearch: ElasticsearchConfig = field(default_factory=ElasticsearchConfig)
     weaviate: WeaviateConfig = field(default_factory=WeaviateConfig)
+    vespa: VespaConfig = field(default_factory=VespaConfig)
     typesense: TypesenseConfig = field(default_factory=TypesenseConfig)
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
@@ -287,6 +306,7 @@ _MEILISEARCH_FIELDS = set(vars(MeilisearchConfig()).keys())
 _OPENSEARCH_FIELDS = set(vars(OpenSearchConfig()).keys())
 _ELASTICSEARCH_FIELDS = set(vars(ElasticsearchConfig()).keys())
 _WEAVIATE_FIELDS = set(vars(WeaviateConfig()).keys())
+_VESPA_FIELDS = set(vars(VespaConfig()).keys())
 _TYPESENSE_FIELDS = set(vars(TypesenseConfig()).keys())
 _QDRANT_FIELDS = set(vars(QdrantConfig()).keys())
 _BENCHMARK_FIELDS = set(vars(BenchmarkConfig()).keys())
@@ -299,6 +319,7 @@ _SECTION_NAMES = {
     "opensearch",
     "elasticsearch",
     "weaviate",
+    "vespa",
     "typesense",
     "qdrant",
     "benchmark",
@@ -327,6 +348,7 @@ def _defaults_dict() -> dict[str, Any]:
         "opensearch": vars(defaults.opensearch),
         "elasticsearch": vars(defaults.elasticsearch),
         "weaviate": vars(defaults.weaviate),
+        "vespa": vars(defaults.vespa),
         "typesense": vars(defaults.typesense),
         "qdrant": vars(defaults.qdrant),
         "benchmark": vars(defaults.benchmark),
@@ -344,6 +366,7 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
         opensearch=OpenSearchConfig(**merged["opensearch"]),
         elasticsearch=ElasticsearchConfig(**merged["elasticsearch"]),
         weaviate=WeaviateConfig(**merged["weaviate"]),
+        vespa=VespaConfig(**merged["vespa"]),
         typesense=TypesenseConfig(**merged["typesense"]),
         qdrant=QdrantConfig(**merged["qdrant"]),
         benchmark=BenchmarkConfig(**merged["benchmark"]),
@@ -411,30 +434,34 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "meilisearch", "opensearch", "elasticsearch", "weaviate", "typesense", "qdrant"):
+        if e_type in ("manticore", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
             return e_type
         if isinstance(ent.get("manticore"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
         ):
             return "manticore"
         if isinstance(ent.get("opensearch"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "elasticsearch", "weaviate", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "elasticsearch", "weaviate", "vespa", "typesense")
         ):
             return "opensearch"
         if isinstance(ent.get("elasticsearch"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "weaviate", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "weaviate", "vespa", "typesense")
         ):
             return "elasticsearch"
         if isinstance(ent.get("weaviate"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "vespa", "typesense")
         ):
             return "weaviate"
+        if isinstance(ent.get("vespa"), dict) and not any(
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "weaviate", "typesense")
+        ):
+            return "vespa"
         if isinstance(ent.get("meilisearch"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "opensearch", "elasticsearch", "weaviate", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
         ):
             return "meilisearch"
         if isinstance(ent.get("typesense"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa")
         ):
             return "typesense"
         if isinstance(ent.get("qdrant"), dict) and not isinstance(ent.get("manticore"), dict):
@@ -444,6 +471,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "elasticsearch"
         if "weaviate" in lowered:
             return "weaviate"
+        if "vespa" in lowered:
+            return "vespa"
         if "opensearch" in lowered:
             return "opensearch"
         if "meilisearch" in lowered:
@@ -457,6 +486,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
         os_hits = 0
         es_hits = 0
         w_hits = 0
+        v_hits = 0
         ts_hits = 0
         q_hits = 0
         for k in ent.keys():
@@ -474,19 +504,23 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 es_hits += 1
             if k in _WEAVIATE_FIELDS:
                 w_hits += 1
+            if k in _VESPA_FIELDS:
+                v_hits += 1
             if k in _TYPESENSE_FIELDS:
                 ts_hits += 1
             if k in _QDRANT_FIELDS:
                 q_hits += 1
-        if meili_hits > max(m_hits, os_hits, es_hits, w_hits, ts_hits, q_hits):
+        if meili_hits > max(m_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, q_hits):
             return "meilisearch"
-        if os_hits > max(m_hits, es_hits, w_hits, ts_hits, q_hits):
+        if os_hits > max(m_hits, es_hits, w_hits, v_hits, ts_hits, q_hits):
             return "opensearch"
-        if es_hits > max(m_hits, w_hits, ts_hits, q_hits):
+        if es_hits > max(m_hits, w_hits, v_hits, ts_hits, q_hits):
             return "elasticsearch"
-        if w_hits > max(m_hits, ts_hits, q_hits):
+        if w_hits > max(m_hits, v_hits, ts_hits, q_hits):
             return "weaviate"
-        if ts_hits > max(m_hits, es_hits, w_hits, q_hits):
+        if v_hits > max(m_hits, ts_hits, q_hits):
+            return "vespa"
+        if ts_hits > max(m_hits, es_hits, w_hits, v_hits, q_hits):
             return "typesense"
         if q_hits > m_hits:
             return "qdrant"
@@ -500,6 +534,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "elasticsearch"
         if name.lower().startswith("weaviate"):
             return "weaviate"
+        if name.lower().startswith("vespa"):
+            return "vespa"
         if name.lower().startswith("typesense"):
             return "typesense"
         if name.lower().startswith("qdrant"):
@@ -539,6 +575,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 candidates.append("elasticsearch")
             if k in _WEAVIATE_FIELDS:
                 candidates.append("weaviate")
+            if k in _VESPA_FIELDS:
+                candidates.append("vespa")
             if k in _TYPESENSE_FIELDS:
                 candidates.append("typesense")
             if k in _QDRANT_FIELDS:
@@ -552,7 +590,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             if not candidates:
                 continue
 
-            preferred = e_type if e_type in ("manticore", "meilisearch", "opensearch", "elasticsearch", "weaviate", "typesense", "qdrant") else "manticore"
+            preferred = e_type if e_type in ("manticore", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant") else "manticore"
             if preferred in candidates:
                 sec = preferred
             elif len(candidates) == 1:
