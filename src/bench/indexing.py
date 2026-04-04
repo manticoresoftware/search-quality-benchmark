@@ -754,6 +754,8 @@ def _run_index_meilisearch(
         started = perf_counter()
         inserted = 0
         processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
         index_name = backend.vector_index_name()
         task_uids: list[int] = []
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
@@ -762,6 +764,7 @@ def _run_index_meilisearch(
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.meilisearch.batch_size))
             for fetch_start in range(0, total_cached, fetch_batch_size):
+                prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
                 prepared_batches: list[list[Any]] = []
@@ -787,6 +790,22 @@ def _run_index_meilisearch(
                             }
                         )
                     prepared_batches.append([batch, len(chunk)])
+                prepare_seconds += perf_counter() - prep_started
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "meilisearch",
+                            "mode": "vector",
+                            "stage": "prepare_cached",
+                            "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                            "total": total_cached,
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                            "prepare_seconds": prepare_seconds,
+                            "send_seconds": send_seconds,
+                        }
+                    )
 
                 def _worker(item: list[Any]) -> int | None:
                     return backend.enqueue_documents(index_name, item[0])
@@ -802,21 +821,25 @@ def _run_index_meilisearch(
                             {
                                 "engine": "meilisearch",
                                 "mode": "vector",
-                                "stage": "ingest",
+                                "stage": "send_cached",
                                 "processed": processed,
                                 "total": total_cached,
                                 "inserted": inserted,
                                 "failed_batches": 0,
                                 "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
                             }
                         )
 
+                send_started = perf_counter()
                 _run_parallel_batches(
                     prepared_batches,
                     max_workers=max(1, int(cfg.meilisearch.index_concurrency)),
                     worker=_worker,
-                            on_result=_on_result,
+                    on_result=_on_result,
                 )
+                send_seconds += perf_counter() - send_started
         finally:
             cache3.close()
         timeout_ms = max(3_600_000, int(cfg.meilisearch.timeout_sec) * 1000)
@@ -954,6 +977,8 @@ def _run_index_opensearch(
         started = perf_counter()
         inserted = 0
         processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
         index_name = backend.vector_index_name()
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
@@ -961,6 +986,7 @@ def _run_index_opensearch(
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.opensearch.batch_size))
             for fetch_start in range(0, total_cached, fetch_batch_size):
+                prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
                 prepared_batches: list[list[Any]] = []
@@ -983,6 +1009,22 @@ def _run_index_opensearch(
                             }
                         )
                     prepared_batches.append([batch, len(chunk)])
+                prepare_seconds += perf_counter() - prep_started
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "opensearch",
+                            "mode": "vector",
+                            "stage": "prepare_cached",
+                            "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                            "total": total_cached,
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                            "prepare_seconds": prepare_seconds,
+                            "send_seconds": send_seconds,
+                        }
+                    )
 
                 def _worker(item: list[Any]) -> int:
                     return backend.bulk_index(index_name, item[0])
@@ -996,21 +1038,25 @@ def _run_index_opensearch(
                             {
                                 "engine": "opensearch",
                                 "mode": "vector",
-                                "stage": "ingest",
+                                "stage": "send_cached",
                                 "processed": processed,
                                 "total": total_cached,
                                 "inserted": inserted,
                                 "failed_batches": 0,
                                 "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
                             }
                         )
 
+                send_started = perf_counter()
                 _run_parallel_batches(
                     prepared_batches,
                     max_workers=max(1, int(cfg.opensearch.index_concurrency)),
                     worker=_worker,
                     on_result=_on_result,
                 )
+                send_seconds += perf_counter() - send_started
         finally:
             cache3.close()
         backend.refresh(index_name)
@@ -1145,6 +1191,8 @@ def _run_index_elasticsearch(
         started = perf_counter()
         inserted = 0
         processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
         index_name = backend.vector_index_name()
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
@@ -1152,6 +1200,7 @@ def _run_index_elasticsearch(
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.elasticsearch.batch_size))
             for fetch_start in range(0, total_cached, fetch_batch_size):
+                prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
                 prepared_batches: list[list[Any]] = []
@@ -1174,6 +1223,22 @@ def _run_index_elasticsearch(
                             }
                         )
                     prepared_batches.append([batch, len(chunk)])
+                prepare_seconds += perf_counter() - prep_started
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "elasticsearch",
+                            "mode": "vector",
+                            "stage": "prepare_cached",
+                            "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                            "total": total_cached,
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                            "prepare_seconds": prepare_seconds,
+                            "send_seconds": send_seconds,
+                        }
+                    )
 
                 def _worker(item: list[Any]) -> int:
                     return backend.bulk_index(index_name, item[0])
@@ -1187,21 +1252,25 @@ def _run_index_elasticsearch(
                             {
                                 "engine": "elasticsearch",
                                 "mode": "vector",
-                                "stage": "ingest",
+                                "stage": "send_cached",
                                 "processed": processed,
                                 "total": total_cached,
                                 "inserted": inserted,
                                 "failed_batches": 0,
                                 "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
                             }
                         )
 
+                send_started = perf_counter()
                 _run_parallel_batches(
                     prepared_batches,
                     max_workers=max(1, int(cfg.elasticsearch.index_concurrency)),
                     worker=_worker,
                     on_result=_on_result,
                 )
+                send_seconds += perf_counter() - send_started
         finally:
             cache3.close()
         backend.refresh(index_name)
@@ -1335,12 +1404,15 @@ def _run_index_typesense(
         started = perf_counter()
         inserted = 0
         processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
             total_cached = len(docs_cached)
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.typesense.batch_size))
             for fetch_start in range(0, total_cached, fetch_batch_size):
+                prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
                 prepared_batches: list[list[Any]] = []
@@ -1364,6 +1436,22 @@ def _run_index_typesense(
                             }
                         )
                     prepared_batches.append([batch, len(chunk)])
+                prepare_seconds += perf_counter() - prep_started
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "typesense",
+                            "mode": "vector",
+                            "stage": "prepare_cached",
+                            "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                            "total": total_cached,
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                            "prepare_seconds": prepare_seconds,
+                            "send_seconds": send_seconds,
+                        }
+                    )
 
                 def _worker(item: list[Any]) -> int:
                     return backend.import_documents(item[0])
@@ -1377,21 +1465,25 @@ def _run_index_typesense(
                             {
                                 "engine": "typesense",
                                 "mode": "vector",
-                                "stage": "ingest",
+                                "stage": "send_cached",
                                 "processed": processed,
                                 "total": total_cached,
                                 "inserted": inserted,
                                 "failed_batches": 0,
                                 "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
                             }
                         )
 
+                send_started = perf_counter()
                 _run_parallel_batches(
                     prepared_batches,
                     max_workers=max(1, int(cfg.typesense.index_concurrency)),
                     worker=_worker,
                     on_result=_on_result,
                 )
+                send_seconds += perf_counter() - send_started
         finally:
             cache3.close()
         elapsed = perf_counter() - started
@@ -1524,12 +1616,15 @@ def _run_index_weaviate(
         started = perf_counter()
         inserted = 0
         processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
             total_cached = len(docs_cached)
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.weaviate.batch_size))
             for fetch_start in range(0, total_cached, fetch_batch_size):
+                prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
                 prepared_batches: list[list[Any]] = []
@@ -1553,6 +1648,22 @@ def _run_index_weaviate(
                             }
                         )
                     prepared_batches.append([batch, len(chunk)])
+                prepare_seconds += perf_counter() - prep_started
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "weaviate",
+                            "mode": "vector",
+                            "stage": "prepare_cached",
+                            "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                            "total": total_cached,
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                            "prepare_seconds": prepare_seconds,
+                            "send_seconds": send_seconds,
+                        }
+                    )
 
                 def _worker(item: list[Any]) -> int:
                     return backend.import_documents(item[0])
@@ -1566,21 +1677,25 @@ def _run_index_weaviate(
                             {
                                 "engine": "weaviate",
                                 "mode": "vector",
-                                "stage": "ingest",
+                                "stage": "send_cached",
                                 "processed": processed,
                                 "total": total_cached,
                                 "inserted": inserted,
                                 "failed_batches": 0,
                                 "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
                             }
                         )
 
+                send_started = perf_counter()
                 _run_parallel_batches(
                     prepared_batches,
                     max_workers=max(1, int(cfg.weaviate.index_concurrency)),
                     worker=_worker,
                     on_result=_on_result,
                 )
+                send_seconds += perf_counter() - send_started
         finally:
             cache3.close()
         elapsed = perf_counter() - started
@@ -1713,12 +1828,15 @@ def _run_index_vespa(
         started = perf_counter()
         inserted = 0
         processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
             total_cached = len(docs_cached)
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.vespa.batch_size))
             for fetch_start in range(0, total_cached, fetch_batch_size):
+                prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
                 prepared_batches: list[list[Any]] = []
@@ -1742,6 +1860,22 @@ def _run_index_vespa(
                             }
                         )
                     prepared_batches.append([batch, len(chunk)])
+                prepare_seconds += perf_counter() - prep_started
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "vespa",
+                            "mode": "vector",
+                            "stage": "prepare_cached",
+                            "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                            "total": total_cached,
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                            "prepare_seconds": prepare_seconds,
+                            "send_seconds": send_seconds,
+                        }
+                    )
 
                 def _worker(item: list[Any]) -> int:
                     return backend.import_documents(item[0])
@@ -1755,21 +1889,25 @@ def _run_index_vespa(
                             {
                                 "engine": "vespa",
                                 "mode": "vector",
-                                "stage": "ingest",
+                                "stage": "send_cached",
                                 "processed": processed,
                                 "total": total_cached,
                                 "inserted": inserted,
                                 "failed_batches": 0,
                                 "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
                             }
                         )
 
+                send_started = perf_counter()
                 _run_parallel_batches(
                     prepared_batches,
                     max_workers=max(1, int(cfg.vespa.index_concurrency)),
                     worker=_worker,
                     on_result=_on_result,
                 )
+                send_seconds += perf_counter() - send_started
         finally:
             cache3.close()
         elapsed = perf_counter() - started
