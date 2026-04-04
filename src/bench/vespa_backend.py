@@ -69,7 +69,11 @@ class VespaBackend:
 
     def ensure_accessible(self) -> None:
         try:
-            self._request("GET", self.connection_target(), "/ApplicationStatus")
+            resp = self._request("GET", self.deploy_target(), "/state/v1/health")
+            status = dict((resp or {}).get("status") or {})
+            code = str(status.get("code") or "").strip().lower()
+            if code not in {"up", "initializing"}:
+                raise RuntimeError(f"Unexpected Vespa health status: {json.dumps(resp, ensure_ascii=True)}")
         except Exception as exc:
             raise RuntimeError(f"Vespa is not reachable at {self.connection_target()}: {exc}") from exc
 
