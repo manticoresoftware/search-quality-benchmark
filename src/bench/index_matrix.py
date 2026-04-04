@@ -436,7 +436,7 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
                 return TargetStatus("pending", None, expected)
             actual = int(backend.get_document_count(v.target))
     except Exception as exc:
-        return TargetStatus("pending", None, expected, str(exc))
+        return TargetStatus("unavailable", None, expected, str(exc))
     if expected is not None and actual != expected:
         return TargetStatus("unexpected", actual, expected)
     return TargetStatus("ok", actual, expected)
@@ -727,7 +727,11 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             nonlocal variants, selected_idx, current, offset
             selected_ids = {_variant_id(variants[i]) for i in selected_idx if 0 <= i < len(variants)}
             current_id = _variant_id(variants[current]) if preserve_current_item and 0 <= current < len(variants) else None
-            variants = filter_rows(all_variants, filters, _filter_value)
+            variants = [
+                v
+                for v in filter_rows(all_variants, filters, _filter_value)
+                if _get_status(v).state != "unavailable"
+            ]
             variants.sort(key=lambda v: _sort_value(v, sort_key), reverse=sort_desc)
             selected_idx = {i for i, v in enumerate(variants) if _variant_id(v) in selected_ids}
             if current_id is not None:
