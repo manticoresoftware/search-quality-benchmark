@@ -122,6 +122,7 @@ class VespaBackend:
         self._save_registry(registry)
         self._write_schema_files(registry)
         self._deploy_current_package()
+        self._wait_for_schema_ready(schema)
 
     def import_documents(self, docs: list[dict[str, Any]]) -> int:
         if not docs:
@@ -392,6 +393,29 @@ class VespaBackend:
         if last_error:
             raise RuntimeError(f"Timed out waiting for Vespa application endpoint: {last_error}")
         raise RuntimeError("Timed out waiting for Vespa application endpoint.")
+
+    def _wait_for_schema_ready(self, schema: str) -> None:
+        deadline = monotonic() + max(int(self.cfg.timeout_sec), 30)
+        last_error = ""
+        while monotonic() < deadline:
+            try:
+                resp = self._query(
+                    {
+                        "yql": f"select doc_id from sources {schema} where true;",
+                        "hits": 0,
+                        "ranking.profile": "bm25",
+                    }
+                )
+                root = dict(resp.get("root") or {})
+                if root.get("errors"):
+                    raise RuntimeError(json.dumps(root.get("errors"), ensure_ascii=True))
+                return
+            except Exception as exc:
+                last_error = str(exc)
+            sleep(1.0)
+        if last_error:
+            raise RuntimeError(f"Timed out waiting for Vespa schema '{schema}': {last_error}")
+        raise RuntimeError(f"Timed out waiting for Vespa schema '{schema}'.")
 
     def _build_package_zip(self, pkg: Path) -> bytes:
         buf = BytesIO()
