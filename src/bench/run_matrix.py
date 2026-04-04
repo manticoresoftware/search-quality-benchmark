@@ -114,6 +114,7 @@ class RunHistoryStatus:
 
 @dataclass(frozen=True)
 class RunTargetStatus:
+    available: bool
     runnable: bool
     error: str | None = None
 
@@ -566,9 +567,9 @@ def filter_runnable_variants(variants: list[RunVariant]) -> list[RunVariant]:
 
 def _resolve_target_status(v: RunVariant) -> RunTargetStatus:
     try:
-        return RunTargetStatus(runnable=is_variant_runnable(v), error=None)
+        return RunTargetStatus(available=True, runnable=is_variant_runnable(v), error=None)
     except Exception as exc:
-        return RunTargetStatus(runnable=False, error=str(exc))
+        return RunTargetStatus(available=False, runnable=False, error=str(exc))
 
 
 def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
@@ -850,7 +851,11 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             nonlocal variants, selected_idx, current, offset
             selected_ids = {_variant_id(variants[i]) for i in selected_idx if 0 <= i < len(variants)}
             current_id = _variant_id(variants[current]) if preserve_current_item and 0 <= current < len(variants) else None
-            variants = filter_rows(all_variants, filters, _filter_value)
+            variants = [
+                v
+                for v in filter_rows(all_variants, filters, _filter_value)
+                if _target_status(v).available
+            ]
             variants.sort(key=lambda v: _sort_value(v, sort_key), reverse=sort_desc)
             selected_idx = {i for i, v in enumerate(variants) if _variant_id(v) in selected_ids}
             if current_id is not None:

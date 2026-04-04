@@ -803,6 +803,26 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                     h=h,
                     target_status=_get_status(variants[current]),
                 )
+            legend_y = h - 2
+            if legend_y >= rows_y + visible * row_h:
+                if curses.has_colors():
+                    x = 0
+                    stdscr.addstr(legend_y, x, "TARGET:", curses.A_BOLD)
+                    x += len("TARGET: ")
+                    stdscr.addstr(legend_y, x, "pending", curses.color_pair(7))
+                    x += len("pending")
+                    stdscr.addstr(legend_y, x, " = missing/not built, ", curses.A_DIM)
+                    x += len(" = missing/not built, ")
+                    stdscr.addstr(legend_y, x, "unexpected", curses.color_pair(8))
+                    x += len("unexpected")
+                    stdscr.addstr(legend_y, x, " = count mismatch", curses.A_DIM)
+                else:
+                    stdscr.addstr(
+                        legend_y,
+                        0,
+                        fit_text("TARGET: pending = missing/not built, unexpected = count mismatch", max(1, w - 1)),
+                        curses.A_DIM,
+                    )
             stdscr.addstr(h - 1, 0, fit_text(f"Selected: {len(selected_idx)} / {len(variants)}", max(1, w - 1)), curses.A_DIM)
             stdscr.refresh()
 
