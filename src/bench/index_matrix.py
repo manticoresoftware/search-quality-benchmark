@@ -479,9 +479,7 @@ def _draw_row(
             color_mode = curses.color_pair(4)
         elif v.mode == "both":
             color_mode = curses.color_pair(5)
-        if target_status.state == "ok":
-            color_target = curses.color_pair(6)
-        elif target_status.state == "pending":
+        if target_status.state == "pending":
             color_target = curses.color_pair(7)
         elif target_status.state == "unexpected":
             color_target = curses.color_pair(8)
@@ -664,7 +662,6 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(11, curses.COLOR_RED, -1)    # typesense
             curses.init_pair(13, curses.COLOR_CYAN, -1)   # weaviate
             curses.init_pair(14, curses.COLOR_GREEN, -1)  # vespa
-            curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_GREEN)   # target ok
             curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # target unexpected
 
