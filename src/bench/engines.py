@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import json
 import subprocess
@@ -126,21 +127,33 @@ def _run_docker(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 def _ensure_engine_dirs(project_root: Path, service: str) -> None:
     mapping = {
-        "manticore": project_root / "data" / "manticore_storage",
-        "qdrant": project_root / "data" / "qdrant_storage",
-        "meilisearch": project_root / "data" / "meilisearch_data",
-        "opensearch": project_root / "data" / "opensearch_data",
-        "elasticsearch": project_root / "data" / "elasticsearch_data",
-        "typesense": project_root / "data" / "typesense_data",
-        "weaviate": project_root / "data" / "weaviate_data",
-        "vespa": project_root / "data" / "vespa_data",
+        "manticore": [project_root / "data" / "manticore_storage"],
+        "qdrant": [project_root / "data" / "qdrant_storage"],
+        "meilisearch": [project_root / "data" / "meilisearch_data"],
+        "opensearch": [project_root / "data" / "opensearch_data"],
+        "elasticsearch": [project_root / "data" / "elasticsearch_data"],
+        "typesense": [project_root / "data" / "typesense_data"],
+        "weaviate": [project_root / "data" / "weaviate_data"],
+        "vespa": [
+            project_root / "data" / "vespa_data",
+            project_root / "data" / "vespa_logs",
+        ],
     }
-    target = mapping.get(service)
-    if target is None:
+    targets = mapping.get(service)
+    if targets is None:
         return
-    target.mkdir(parents=True, exist_ok=True)
-    if service in {"opensearch", "elasticsearch"}:
-        target.chmod(0o777)
+    for target in targets:
+        target.mkdir(parents=True, exist_ok=True)
+        if service in {"opensearch", "elasticsearch"}:
+            target.chmod(0o777)
+        if service == "vespa":
+            target.chmod(0o755)
+            try:
+                os.chown(target, 1000, 1000)
+            except PermissionError:
+                pass
+            except OSError:
+                pass
 
 
 def _engine_data_dir(project_root: Path, service: str) -> Path | None:

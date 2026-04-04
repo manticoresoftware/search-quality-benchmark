@@ -405,6 +405,13 @@ Notes:
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
 - Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
 - Vespa is exposed at `http://127.0.0.1:8081`, with deploy API at `http://127.0.0.1:19071`.
+- Before starting Vespa for the first time, prepare the host bind-mount directories:
+  ```bash
+  mkdir -p data/vespa_data data/vespa_logs
+  sudo chown -R 1000:1000 data/vespa_data data/vespa_logs
+  chmod -R 755 data/vespa_data data/vespa_logs
+  ```
+  The Vespa container runs as user `vespa` (`1000:1000`), so both mounted directories must be writable by that uid/gid.
 - Meilisearch lexical search is not BM25 in the same sense as Manticore or Qdrant sparse BM25, so treat it as a separate retrieval model in reports.
 
 
