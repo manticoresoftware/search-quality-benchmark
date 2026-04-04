@@ -4,6 +4,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 import re
+from time import monotonic, sleep
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -369,6 +370,23 @@ class VespaBackend:
             payload=archive,
             content_type="application/zip",
         )
+        self._wait_for_application_ready()
+
+    def _wait_for_application_ready(self) -> None:
+        deadline = monotonic() + max(int(self.cfg.timeout_sec), 30)
+        last_error = ""
+        while monotonic() < deadline:
+            try:
+                resp = self._request("GET", self.connection_target(), "/ApplicationStatus")
+                text = resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=True)
+                if "Application" in text or "application" in text:
+                    return
+            except Exception as exc:
+                last_error = str(exc)
+            sleep(1.0)
+        if last_error:
+            raise RuntimeError(f"Timed out waiting for Vespa application endpoint: {last_error}")
+        raise RuntimeError("Timed out waiting for Vespa application endpoint.")
 
     def _build_package_zip(self, pkg: Path) -> bytes:
         buf = BytesIO()
