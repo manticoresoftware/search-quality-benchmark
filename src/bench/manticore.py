@@ -116,9 +116,16 @@ class ManticoreClient:
         self,
         table_name: str,
         fulltext_options: str = "morphology='stem_en' index_field_lengths='1'",
+        table_engine: str = "",
     ) -> None:
+        opts_parts: list[str] = []
+        safe_engine = (table_engine or "").strip().lower().replace("'", "''")
+        if safe_engine:
+            opts_parts.append(f"engine='{safe_engine}'")
         opts = (fulltext_options or "").strip()
-        options_clause = f" {opts}" if opts else ""
+        if opts:
+            opts_parts.append(opts)
+        options_clause = f" {' '.join(opts_parts)}" if opts_parts else ""
         self.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {table_name} (
@@ -142,6 +149,7 @@ class ManticoreClient:
         hnsw_similarity: str = "cosine",
         quantization: str = "",
         fulltext_options: str = "",
+        table_engine: str = "",
         api_key: str = "",
         api_key_file: str = "",
     ) -> None:
@@ -155,8 +163,14 @@ class ManticoreClient:
         safe_api_key = resolved_api_key.replace("'", "''")
         api_key_clause = f"\n                    API_KEY='{safe_api_key}'" if safe_api_key else ""
         quantization_clause = f"\n                    quantization='{safe_quantization}'" if safe_quantization else ""
+        opts_parts: list[str] = []
+        safe_engine = (table_engine or "").strip().lower().replace("'", "''")
+        if safe_engine:
+            opts_parts.append(f"engine='{safe_engine}'")
         opts = (fulltext_options or "").strip()
-        options_clause = f" {opts}" if opts else ""
+        if opts:
+            opts_parts.append(opts)
+        options_clause = f" {' '.join(opts_parts)}" if opts_parts else ""
         if safe_model:
             vector_opts = (
                 f"KNN_TYPE='hnsw'\n"

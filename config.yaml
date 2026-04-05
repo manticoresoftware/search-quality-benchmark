@@ -85,6 +85,7 @@ manticore_vector_1bit:
 columnar:
   base: "manticore"
   type: "columnar"
+  table_engine: "columnar"
 
 columnar_vector_1bit:
   base: "columnar"
