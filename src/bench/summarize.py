@@ -1762,6 +1762,47 @@ def _quickchart_bubble(title: str, datasets: list[dict[str, Any]]) -> list[str]:
     return [f"![{title}]({url})", ""]
 
 
+def _quickchart_scatter(
+    title: str,
+    datasets: list[dict[str, Any]],
+    *,
+    y_label: str,
+    y_max: float | None = None,
+) -> list[str]:
+    if not datasets:
+        return []
+    y_ticks: dict[str, Any] = {"beginAtZero": True}
+    if y_max is not None and y_max > 0:
+        y_ticks["max"] = y_max
+    chart_cfg = {
+        "type": "scatter",
+        "data": {"datasets": datasets},
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "legend": {"position": "right"},
+            "title": {"display": True, "text": title},
+            "scales": {
+                "xAxes": [
+                    {
+                        "ticks": {"beginAtZero": True, "min": 0, "max": 1},
+                        "scaleLabel": {"display": True, "labelString": "Canonical relevance"},
+                    }
+                ],
+                "yAxes": [
+                    {
+                        "ticks": y_ticks,
+                        "scaleLabel": {"display": True, "labelString": y_label},
+                    }
+                ],
+            },
+        },
+    }
+    encoded = quote(json.dumps(chart_cfg, separators=(",", ":")))
+    url = f"https://quickchart.io/chart?width=1200&height=800&format=png&c={encoded}"
+    return [f"![{title}]({url})", ""]
+
+
 def _heat_color(val: float, lo: float, hi: float) -> str:
     if hi <= lo:
         t = 1.0
@@ -2288,6 +2329,150 @@ def _mode_color(mode: str) -> str:
     return "#6366f1"
 
 
+def _mode_point_style(mode: str) -> str:
+    m = str(mode or "").lower()
+    if m == "fulltext":
+        return "circle"
+    if m == "vector":
+        return "triangle"
+    if m == "hybrid":
+        return "rectRot"
+    return "circle"
+
+
+def _engine_color(engine: str) -> str:
+    e = str(engine or "").lower()
+    if e == "manticore":
+        return "#16a34a"
+    if e == "qdrant":
+        return "#eab308"
+    if e == "meilisearch":
+        return "#06b6d4"
+    if e == "opensearch":
+        return "#a855f7"
+    if e == "elasticsearch":
+        return "#2563eb"
+    if e == "typesense":
+        return "#ef4444"
+    if e == "weaviate":
+        return "#0891b2"
+    if e == "vespa":
+        return "#15803d"
+    return "#6366f1"
+
+
+def _relevance_vs_qps_scatter_lines(rows: list[ArtifactRow]) -> list[str]:
+    leaderboard, _, total_groups = _engine_mode_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    qps_by_variant: dict[tuple[str, str], list[float]] = {}
+    for _, group_rows in grouped.items():
+        best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
+        for row in group_rows:
+            key = (row.engine, row.mode)
+            prev = best_by_variant.get(key)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_variant[key] = row
+        for key, row in best_by_variant.items():
+            qps_by_variant.setdefault(key, []).append(float(row.performance.get("qps", 0.0) or 0.0))
+    points_by_engine: dict[str, list[dict[str, Any]]] = {}
+    max_qps = 0.0
+    for engine, mode, score in leaderboard:
+        vals = qps_by_variant.get((engine, mode), [])
+        if len(vals) < total_groups:
+            continue
+        avg_qps = sum(vals) / max(1, len(vals))
+        max_qps = max(max_qps, avg_qps)
+        points_by_engine.setdefault(engine, []).append(
+            {
+                "x": round(float(score), 4),
+                "y": round(float(avg_qps), 3),
+                "mode": mode,
+            }
+        )
+    datasets: list[dict[str, Any]] = []
+    for engine in sorted(points_by_engine.keys(), key=str.lower):
+        fill = _engine_color(engine)
+        pts = points_by_engine[engine]
+        datasets.append(
+            {
+                "label": engine,
+                "data": [{"x": p["x"], "y": p["y"]} for p in pts],
+                "backgroundColor": fill,
+                "borderColor": fill,
+                "borderWidth": 1,
+                "pointStyle": [_mode_point_style(str(p["mode"])) for p in pts],
+                "pointRadius": 6,
+                "pointHoverRadius": 8,
+            }
+        )
+    if not datasets:
+        return []
+    return _quickchart_scatter(
+        "Canonical Relevance vs QPS",
+        datasets,
+        y_label="QPS",
+        y_max=max_qps * 1.1 if max_qps > 0 else None,
+    )
+
+
+def _relevance_vs_latency_scatter_lines(rows: list[ArtifactRow], *, field: str, title: str, y_label: str) -> list[str]:
+    leaderboard, _, total_groups = _engine_mode_leaderboard_data(rows)
+    if not leaderboard or total_groups <= 0:
+        return []
+    grouped, _ = _canonical_grouped_rows(rows)
+    metric_by_variant: dict[tuple[str, str], list[float]] = {}
+    for _, group_rows in grouped.items():
+        best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
+        for row in group_rows:
+            key = (row.engine, row.mode)
+            prev = best_by_variant.get(key)
+            if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
+                best_by_variant[key] = row
+        for key, row in best_by_variant.items():
+            metric_by_variant.setdefault(key, []).append(float(row.performance.get(field, 0.0) or 0.0))
+    points_by_engine: dict[str, list[dict[str, Any]]] = {}
+    max_metric = 0.0
+    for engine, mode, score in leaderboard:
+        vals = metric_by_variant.get((engine, mode), [])
+        if len(vals) < total_groups:
+            continue
+        avg_metric = sum(vals) / max(1, len(vals))
+        max_metric = max(max_metric, avg_metric)
+        points_by_engine.setdefault(engine, []).append(
+            {
+                "x": round(float(score), 4),
+                "y": round(float(avg_metric), 3),
+                "mode": mode,
+            }
+        )
+    datasets: list[dict[str, Any]] = []
+    for engine in sorted(points_by_engine.keys(), key=str.lower):
+        fill = _engine_color(engine)
+        pts = points_by_engine[engine]
+        datasets.append(
+            {
+                "label": engine,
+                "data": [{"x": p["x"], "y": p["y"]} for p in pts],
+                "backgroundColor": fill,
+                "borderColor": fill,
+                "borderWidth": 1,
+                "pointStyle": [_mode_point_style(str(p["mode"])) for p in pts],
+                "pointRadius": 6,
+                "pointHoverRadius": 8,
+            }
+        )
+    if not datasets:
+        return []
+    return _quickchart_scatter(
+        title,
+        datasets,
+        y_label=y_label,
+        y_max=max_metric * 1.1 if max_metric > 0 else None,
+    )
+
+
 def _best_mode_per_engine_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
     leaderboard, _, total_groups = _engine_leaderboard_data(rows)
     if not leaderboard or total_groups <= 0:
@@ -2605,6 +2790,35 @@ def _leaderboard_visualization_options_lines(rows: list[ArtifactRow]) -> list[st
     lines.append("")
     heatmap_lines = _engine_consistency_heatmap_lines(rows)
     lines.extend(heatmap_lines[4:] if len(heatmap_lines) > 4 else heatmap_lines)
+    lines.append("### 11. Which engine+mode variants combine higher canonical relevance with higher QPS?")
+    lines.append("")
+    lines.append("Best chart: a dot graph with canonical relevance on the X axis and average QPS on the Y axis. Each point is an engine+mode variant. Fill color identifies the engine. Point shape identifies the mode: circle = full-text, triangle = vector, rotated square = hybrid.")
+    lines.append("")
+    lines.extend(_relevance_vs_qps_scatter_lines(rows))
+    lines.append("### 12. Which engine+mode variants combine higher canonical relevance with lower p99 latency?")
+    lines.append("")
+    lines.append("Best chart: the same dot graph, but with average p99 latency on the Y axis instead of QPS. Fill color identifies the engine. Point shape identifies the mode: circle = full-text, triangle = vector, rotated square = hybrid.")
+    lines.append("")
+    lines.extend(
+        _relevance_vs_latency_scatter_lines(
+            rows,
+            field="latency_p99_ms",
+            title="Canonical Relevance vs P99 Latency",
+            y_label="P99 latency (ms)",
+        )
+    )
+    lines.append("### 13. Which engine+mode variants combine higher canonical relevance with lower p50 latency?")
+    lines.append("")
+    lines.append("Best chart: the same dot graph, but with average p50 latency on the Y axis instead of QPS. Fill color identifies the engine. Point shape identifies the mode: circle = full-text, triangle = vector, rotated square = hybrid.")
+    lines.append("")
+    lines.extend(
+        _relevance_vs_latency_scatter_lines(
+            rows,
+            field="latency_p50_ms",
+            title="Canonical Relevance vs P50 Latency",
+            y_label="P50 latency (ms)",
+        )
+    )
     return lines
 
 
