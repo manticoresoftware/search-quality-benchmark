@@ -82,6 +82,20 @@ manticore_vector_1bit:
   query_timeout_seconds: 180
   search_options: ""
 
+columnar:
+  base: "manticore"
+  type: "columnar"
+
+columnar_vector_1bit:
+  base: "columnar"
+  type: "vector"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+  search_options: ""
+
 qdrant:
   type: "qdrant"
   path: ""
@@ -255,6 +269,29 @@ trec_covid_manticore_hybrid:
   batch_size: 250
   query_timeout_seconds: 180
 
+trec_covid_columnar_fulltext:
+  base: "columnar"
+  type: "fulltext"
+  fulltext_table: "trec_covid_columnar"
+  vector_table: "trec_covid_columnar"
+
+trec_covid_columnar_vector:
+  base: "columnar_vector_1bit"
+  fulltext_table: "trec_covid_columnar"
+  vector_table: "trec_covid_columnar"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_columnar_hybrid:
+  base: "trec_covid_columnar_fulltext"
+  type: "hybrid"
+  fulltext_table: "trec_covid_columnar"
+  vector_table: "trec_covid_columnar"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
 trec_covid_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
@@ -389,6 +426,31 @@ msmarco_passage_manticore_hybrid:
   type: "hybrid"
   fulltext_table: "msmarco_passage_manticore"
   vector_table: "msmarco_passage_manticore"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+
+msmarco_passage_columnar_fulltext:
+  base: "columnar"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  fulltext_table: "msmarco_passage_columnar"
+  vector_table: "msmarco_passage_columnar"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
+msmarco_passage_columnar_vector:
+  base: "columnar_vector_1bit"
+  source: "msmarco-passage/dev/small"
+  fulltext_table: "msmarco_passage_columnar"
+  vector_table: "msmarco_passage_columnar"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
+msmarco_passage_columnar_hybrid:
+  base: "msmarco_passage_columnar_fulltext"
+  source: "msmarco-passage/dev/small"
+  type: "hybrid"
+  fulltext_table: "msmarco_passage_columnar"
+  vector_table: "msmarco_passage_columnar"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   vector_quantization: "1bit"
   vector_search_oversampling: 3.0
@@ -576,6 +638,27 @@ msmarco_lite_manticore_hybrid:
   fulltext_table: "msmarco_lite_manticore"
   vector_table: "msmarco_lite_manticore"
 
+msmarco_lite_columnar_fulltext:
+  base: "msmarco_passage_columnar_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_columnar"
+  vector_table: "msmarco_lite_columnar"
+
+msmarco_lite_columnar_vector:
+  base: "msmarco_passage_columnar_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_columnar"
+  vector_table: "msmarco_lite_columnar"
+
+msmarco_lite_columnar_hybrid:
+  base: "msmarco_passage_columnar_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_columnar"
+  vector_table: "msmarco_lite_columnar"
+
 msmarco_lite_qdrant_fulltext:
   base: "msmarco_passage_qdrant_fulltext"
   max_docs: 250000
@@ -715,6 +798,18 @@ msmarco_trecdl_2019_manticore_hybrid:
   base: "msmarco_passage_manticore_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_columnar_fulltext:
+  base: "msmarco_passage_columnar_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_columnar_vector:
+  base: "msmarco_passage_columnar_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_columnar_hybrid:
+  base: "msmarco_passage_columnar_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_qdrant_fulltext:
   base: "msmarco_passage_qdrant_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -809,6 +904,18 @@ msmarco_trecdl_2020_manticore_vector:
 
 msmarco_trecdl_2020_manticore_hybrid:
   base: "msmarco_passage_manticore_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_columnar_fulltext:
+  base: "msmarco_passage_columnar_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_columnar_vector:
+  base: "msmarco_passage_columnar_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_columnar_hybrid:
+  base: "msmarco_passage_columnar_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_qdrant_fulltext:
@@ -916,6 +1023,34 @@ nfcorpus_manticore_hybrid:
   type: "hybrid"
   fulltext_table: "nfcorpus_manticore"
   vector_table: "nfcorpus_manticore"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+nfcorpus_columnar_fulltext:
+  base: "columnar"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  fulltext_table: "nfcorpus_columnar"
+  vector_table: "nfcorpus_columnar"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_columnar_vector:
+  base: "columnar_vector_1bit"
+  source: "beir/nfcorpus/test"
+  fulltext_table: "nfcorpus_columnar"
+  vector_table: "nfcorpus_columnar"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_columnar_hybrid:
+  base: "nfcorpus_columnar_fulltext"
+  source: "beir/nfcorpus/test"
+  type: "hybrid"
+  fulltext_table: "nfcorpus_columnar"
+  vector_table: "nfcorpus_columnar"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
   vector_quantization: "1bit"
   vector_search_oversampling: 3.0
@@ -1088,6 +1223,34 @@ acord_manticore_hybrid:
   type: "hybrid"
   fulltext_table: "acord_manticore"
   vector_table: "acord_manticore"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+acord_columnar_fulltext:
+  base: "columnar"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  fulltext_table: "acord_columnar"
+  vector_table: "acord_columnar"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_columnar_vector:
+  base: "columnar_vector_1bit"
+  source: "hf-beir:theatticusproject/acord:test"
+  fulltext_table: "acord_columnar"
+  vector_table: "acord_columnar"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_columnar_hybrid:
+  base: "acord_columnar_fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  type: "hybrid"
+  fulltext_table: "acord_columnar"
+  vector_table: "acord_columnar"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
   vector_quantization: "1bit"
   vector_search_oversampling: 3.0

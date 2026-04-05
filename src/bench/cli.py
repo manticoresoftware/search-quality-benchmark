@@ -678,7 +678,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 ):
                     print("Index canceled: vector cache coverage not confirmed.")
                     return 0
-            manticore_vector_cfgs = [v.cfg for v in selected if v.engine == "manticore" and v.mode == "vector"]
+            manticore_vector_cfgs = [v.cfg for v in selected if v.engine in ("manticore", "columnar") and v.mode == "vector"]
             if not _confirm_manticore_vector_reindex_for_configs(
                 manticore_vector_cfgs, auto_yes=bool(args.yes)
             ):
@@ -709,7 +709,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 f"Entry '{entry_name}' is restricted to mode '{entry_mode_filter}'. "
                 f"Requested mode '{args.mode}' is not allowed."
             )
-        if engine == "manticore":
+        if engine in ("manticore", "columnar"):
             needs_vector_reindex = args.mode == "vector"
             if needs_vector_reindex and not _confirm_vector_cache_coverage(
                 cfg=cfg_for_engine,
@@ -870,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--reset-embeddings", action="store_true", help="Clear current-model embeddings for the selected prepared dataset(s)")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -880,7 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)

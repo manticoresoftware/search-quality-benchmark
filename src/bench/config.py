@@ -326,6 +326,7 @@ _SECTION_NAMES = {
     "dataset",
     "metrics",
 }
+_MANTICORE_LIKE_TYPES = {"manticore", "columnar"}
 
 
 def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -434,7 +435,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
+        if e_type in ("manticore", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
             return e_type
         if isinstance(ent.get("manticore"), dict) and not any(
             isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
@@ -479,6 +480,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "meilisearch"
         if "typesense" in lowered:
             return "typesense"
+        if "columnar" in lowered:
+            return "columnar"
         if "qdrant" in lowered:
             return "qdrant"
         m_hits = 0
@@ -590,7 +593,9 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             if not candidates:
                 continue
 
-            preferred = e_type if e_type in ("manticore", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant") else "manticore"
+            preferred = "manticore" if e_type in _MANTICORE_LIKE_TYPES else (
+                e_type if e_type in ("meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant") else "manticore"
+            )
             if preferred in candidates:
                 sec = preferred
             elif len(candidates) == 1:
@@ -631,6 +636,6 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 def load_config(path: str | Path) -> AppConfig:
     targets = load_engine_targets(path)
     for t in targets:
-        if t.type == "manticore":
+        if t.type in _MANTICORE_LIKE_TYPES:
             return t.cfg
     return targets[0].cfg

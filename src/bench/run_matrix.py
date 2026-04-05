@@ -62,7 +62,7 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             continue
         target_keys = _ENGINE_TARGET_KEYS.get(
             "manticore"
-            if "manticore" in name
+            if "manticore" in name or "columnar" in name
             else "qdrant"
             if "qdrant" in name
             else "meilisearch"
@@ -269,7 +269,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
             modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
-                    if engine == "manticore":
+                    if engine in ("manticore", "columnar"):
                         model_or_ranker = _manticore_vector_label(cfg)
                     elif engine == "qdrant":
                         model_or_ranker = _qdrant_vector_label(cfg)
@@ -286,7 +286,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
-                    if engine == "manticore":
+                    if engine in ("manticore", "columnar"):
                         model = resolved_embedding_model(cfg)
                         model_or_ranker = _manticore_vector_label(cfg).replace(model, f"{model} [fusion=rrf]", 1)
                     elif engine == "qdrant":
@@ -301,7 +301,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _elasticsearch_hybrid_label(cfg)
                     else:
                         model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
-                elif engine == "manticore":
+                elif engine in ("manticore", "columnar"):
                     extras: list[str] = []
                     search_opts = normalize_search_options(cfg.manticore.search_options)
                     if search_opts:
@@ -448,6 +448,8 @@ def _draw_row(
             color_entry = curses.color_pair(8)
         if v.engine == "manticore":
             color_engine = curses.color_pair(1)
+        elif v.engine == "columnar":
+            color_engine = curses.color_pair(15)
         elif v.engine == "qdrant":
             color_engine = curses.color_pair(2)
         elif v.engine == "opensearch":
@@ -488,7 +490,7 @@ def _draw_row(
 
 
 def _variant_target_name(v: RunVariant) -> str:
-    if v.engine == "manticore":
+    if v.engine in ("manticore", "columnar"):
         return v.cfg.manticore.fulltext_table if v.mode == "fulltext" else v.cfg.manticore.vector_table
     if v.engine == "qdrant":
         if v.mode == "fulltext":
@@ -514,7 +516,7 @@ def _variant_target_name(v: RunVariant) -> str:
 def is_variant_runnable(v: RunVariant) -> bool:
     try:
         target = _variant_target_name(v)
-        if v.engine == "manticore":
+        if v.engine in ("manticore", "columnar"):
             client = ManticoreClient(v.cfg.manticore)
             try:
                 return bool(client.table_exists(target))
@@ -574,7 +576,7 @@ def _resolve_target_status(v: RunVariant) -> RunTargetStatus:
 
 def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
     try:
-        if v.engine == "manticore":
+        if v.engine in ("manticore", "columnar"):
             client = ManticoreClient(v.cfg.manticore)
             try:
                 table = _variant_target_name(v)
@@ -774,6 +776,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.start_color()
             curses.use_default_colors()
             curses.init_pair(1, curses.COLOR_GREEN, -1)     # engine: manticore
+            curses.init_pair(15, curses.COLOR_WHITE, -1)    # engine: columnar
             curses.init_pair(2, curses.COLOR_YELLOW, -1)    # engine: qdrant
             curses.init_pair(3, curses.COLOR_BLUE, -1)      # mode: full-text
             curses.init_pair(4, curses.COLOR_WHITE, -1)     # mode: vector

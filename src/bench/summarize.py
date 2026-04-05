@@ -76,6 +76,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "Manticore vector (manticore)"
     if engine == "manticore" and mode == "hybrid":
         return "Manticore hybrid (manticore)"
+    if engine == "columnar" and mode == "fulltext":
+        return "Columnar full-text (columnar)"
+    if engine == "columnar" and mode == "vector":
+        return "Columnar vector (columnar)"
+    if engine == "columnar" and mode == "hybrid":
+        return "Columnar hybrid (columnar)"
     if engine == "qdrant" and mode == "fulltext":
         return "Qdrant full-text (qdrant)"
     if engine == "qdrant" and mode == "vector":
@@ -274,6 +280,8 @@ def _color_pair_for_engine(engine: str) -> int:
     e = engine.lower()
     if e == "manticore":
         return 1
+    if e == "columnar":
+        return 15
     if e == "qdrant":
         return 2
     if e == "meilisearch":
@@ -421,6 +429,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             curses.start_color()
             curses.use_default_colors()
             curses.init_pair(1, curses.COLOR_GREEN, -1)     # manticore
+            curses.init_pair(15, curses.COLOR_WHITE, -1)    # columnar
             curses.init_pair(2, curses.COLOR_YELLOW, -1)    # qdrant
             curses.init_pair(3, curses.COLOR_BLUE, -1)      # full-text
             curses.init_pair(4, curses.COLOR_RED, -1)       # vector
@@ -2160,6 +2169,7 @@ def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]
     palette = {
         "qdrant": "#3b82f6",
         "manticore": "#10b981",
+        "columnar": "#94a3b8",
         "opensearch": "#f59e0b",
         "elasticsearch": "#06b6d4",
         "meilisearch": "#ef4444",
@@ -2195,6 +2205,7 @@ def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
     palette = {
         "qdrant": "#3b82f6",
         "manticore": "#10b981",
+        "columnar": "#94a3b8",
         "opensearch": "#f59e0b",
         "elasticsearch": "#06b6d4",
         "meilisearch": "#ef4444",
@@ -2344,6 +2355,8 @@ def _engine_color(engine: str) -> str:
     e = str(engine or "").lower()
     if e == "manticore":
         return "#16a34a"
+    if e == "columnar":
+        return "#94a3b8"
     if e == "qdrant":
         return "#eab308"
     if e == "meilisearch":
@@ -2536,6 +2549,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
     palette = {
         "qdrant": "#3b82f6",
         "manticore": "#10b981",
+        "columnar": "#94a3b8",
         "opensearch": "#f59e0b",
         "elasticsearch": "#06b6d4",
         "meilisearch": "#ef4444",

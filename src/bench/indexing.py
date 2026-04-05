@@ -1930,7 +1930,7 @@ def run_index(
     mode: str,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
-    if engine == "manticore":
+    if engine in ("manticore", "columnar"):
         return _run_index_manticore(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "qdrant":
         return _run_index_qdrant(cfg, mode=mode, progress_callback=progress_callback)

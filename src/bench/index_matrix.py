@@ -60,7 +60,7 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             continue
         target_keys = _ENGINE_TARGET_KEYS.get(
             "manticore"
-            if "manticore" in name
+            if "manticore" in name or "columnar" in name
             else "qdrant"
             if "qdrant" in name
             else "meilisearch"
@@ -150,7 +150,7 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [field:{cfg.vespa.vector_field}]"
         return model
     if mode == "hybrid":
-        if engine == "manticore":
+        if engine in ("manticore", "columnar"):
             return (cfg.manticore.fulltext_options or "").strip()
         if engine == "meilisearch":
             extra = [f"embedder:{cfg.meilisearch.embedder_name}", f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}"]
@@ -168,7 +168,7 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         if engine == "vespa":
             return f"{model} [alpha:{float(cfg.vespa.hybrid_alpha):.2f}]"
         return f"{model} [fusion=rrf]"
-    if engine == "manticore":
+    if engine in ("manticore", "columnar"):
         return (cfg.manticore.fulltext_options or "").strip() or "(none)"
     if engine == "meilisearch":
         extras: list[str] = []
@@ -193,7 +193,7 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
 
 
 def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
-    if engine == "manticore":
+    if engine in ("manticore", "columnar"):
         return cfg.manticore.fulltext_table if mode in ("fulltext", "hybrid") else cfg.manticore.vector_table
     if engine == "meilisearch":
         base = str(cfg.meilisearch.index_name or "").strip()
@@ -213,7 +213,7 @@ def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
 
 
 def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
-    if engine == "manticore":
+    if engine in ("manticore", "columnar"):
         # Native Manticore hybrid indexing only makes sense for explicit profiles that
         # point both full-text and vector settings at the same combined table.
         # The plain base Manticore config normally has different full-text/vector tables,
@@ -225,7 +225,7 @@ def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
 
 
 def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
-    if engine == "manticore" and str(cfg.manticore.index_layout or "").strip().lower() == "combined":
+    if engine in ("manticore", "columnar") and str(cfg.manticore.index_layout or "").strip().lower() == "combined":
         return "hybrid"
     if engine == "meilisearch" and str(cfg.meilisearch.index_layout or "").strip().lower() == "combined":
         return "vector"
@@ -258,7 +258,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             show_hybrid = _show_hybrid_index_target(cfg, engine)
             if (
                 target_cfg.mode_filter == "hybrid"
-                and engine == "manticore"
+                and engine in ("manticore", "columnar")
                 and str(cfg.manticore.fulltext_table) == str(cfg.manticore.vector_table)
             ):
                 show_hybrid = True
@@ -283,7 +283,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                         model=_model_opts_label(cfg, engine=engine, mode=mode),
                         batch_size=(
                             cfg.manticore.batch_size
-                            if engine == "manticore"
+                            if engine in ("manticore", "columnar")
                             else (
                                 cfg.meilisearch.batch_size
                                 if engine == "meilisearch"
@@ -315,7 +315,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
         if layout_mode is not None:
             return layout_mode
         modes = {r.mode for r in rows}
-        if "hybrid" in modes and rows[0].engine == "manticore":
+        if "hybrid" in modes and rows[0].engine in ("manticore", "columnar"):
             return "hybrid"
         if "vector" in modes:
             return "vector"
@@ -323,7 +323,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
 
     def _target_kind(rows: list[IndexVariant]) -> str:
         modes = {r.mode for r in rows}
-        if rows[0].engine == "manticore" and {"fulltext", "vector", "hybrid"} & modes and len(modes) > 1:
+        if rows[0].engine in ("manticore", "columnar") and {"fulltext", "vector", "hybrid"} & modes and len(modes) > 1:
             return "combined"
         if "vector" in modes and "fulltext" in modes:
             return "combined"
@@ -359,7 +359,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             )
         )
 
-    engine_order = {"manticore": 0, "qdrant": 1, "meilisearch": 2, "opensearch": 3, "elasticsearch": 4, "typesense": 5, "weaviate": 6, "vespa": 7}
+    engine_order = {"manticore": 0, "columnar": 1, "qdrant": 2, "meilisearch": 3, "opensearch": 4, "elasticsearch": 5, "typesense": 6, "weaviate": 7, "vespa": 8}
     kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
     return sorted(
         out,
@@ -385,7 +385,7 @@ def _expected_doc_count(v: IndexVariant) -> int | None:
 def _resolve_target_status(v: IndexVariant) -> TargetStatus:
     expected = _expected_doc_count(v)
     try:
-        if v.engine == "manticore":
+        if v.engine in ("manticore", "columnar"):
             client = ManticoreClient(v.cfg.manticore)
             try:
                 if not client.table_exists(v.target):
@@ -459,6 +459,8 @@ def _draw_row(
     if curses.has_colors():
         if v.engine == "manticore":
             color_engine = curses.color_pair(1)
+        elif v.engine == "columnar":
+            color_engine = curses.color_pair(15)
         elif v.engine == "qdrant":
             color_engine = curses.color_pair(2)
         elif v.engine == "opensearch":
@@ -653,6 +655,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.start_color()
             curses.use_default_colors()
             curses.init_pair(1, curses.COLOR_GREEN, -1)   # manticore
+            curses.init_pair(15, curses.COLOR_WHITE, -1)  # columnar
             curses.init_pair(2, curses.COLOR_YELLOW, -1)  # qdrant
             curses.init_pair(3, curses.COLOR_BLUE, -1)    # full-text
             curses.init_pair(4, curses.COLOR_WHITE, -1)   # vector
