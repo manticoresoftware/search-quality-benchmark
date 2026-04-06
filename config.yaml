@@ -1606,21 +1606,21 @@ scifact_vespa_hybrid:
 arguana_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   fulltext_table: "arguana_manticore"
   vector_table: "arguana_manticore"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_manticore_vector:
   base: "manticore_vector_1bit"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   fulltext_table: "arguana_manticore"
   vector_table: "arguana_manticore"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_manticore_hybrid:
   base: "arguana_manticore_fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   type: "hybrid"
   fulltext_table: "arguana_manticore"
   vector_table: "arguana_manticore"
@@ -1634,21 +1634,21 @@ arguana_manticore_hybrid:
 arguana_columnar_fulltext:
   base: "columnar"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   fulltext_table: "arguana_columnar"
   vector_table: "arguana_columnar"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_columnar_vector:
   base: "columnar_vector_1bit"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   fulltext_table: "arguana_columnar"
   vector_table: "arguana_columnar"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_columnar_hybrid:
   base: "arguana_columnar_fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   type: "hybrid"
   fulltext_table: "arguana_columnar"
   vector_table: "arguana_columnar"
@@ -1662,19 +1662,19 @@ arguana_columnar_hybrid:
 arguana_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   bm25_collection: "arguana_qdrant_fulltext"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_qdrant_vector:
   base: "qdrant_vector_1bit"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   dense_collection: "arguana_qdrant_vector"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   bm25_collection: "arguana_qdrant_fulltext"
   dense_collection: "arguana_qdrant_vector"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
@@ -1682,145 +1682,145 @@ arguana_qdrant_hybrid:
 arguana_meilisearch_fulltext:
   base: "meilisearch"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_meilisearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_meilisearch_vector:
   base: "meilisearch_vector_1bit"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_meilisearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_meilisearch_hybrid:
   base: "meilisearch_hybrid_1bit"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_meilisearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_opensearch_fulltext:
   base: "opensearch"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_opensearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_opensearch_vector:
   base: "opensearch"
   type: "vector"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_opensearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_opensearch_hybrid:
   base: "opensearch"
   type: "hybrid"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_opensearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_elasticsearch_fulltext:
   base: "elasticsearch"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_elasticsearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_elasticsearch_vector:
   base: "elasticsearch"
   type: "vector"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_elasticsearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_elasticsearch_hybrid:
   base: "elasticsearch"
   type: "hybrid"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   index_name: "arguana_elasticsearch"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_typesense_fulltext:
   base: "typesense"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_typesense"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_typesense_vector:
   base: "typesense"
   type: "vector"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_typesense"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_typesense"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_weaviate_fulltext:
   base: "weaviate"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_weaviate"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_weaviate_vector:
   base: "weaviate"
   type: "vector"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_weaviate"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_weaviate_hybrid:
   base: "weaviate"
   type: "hybrid"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_weaviate"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_vespa_fulltext:
   base: "vespa"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_vespa"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_vespa_vector:
   base: "vespa"
   type: "vector"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_vespa"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_vespa_hybrid:
   base: "vespa"
   type: "hybrid"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   collection_name: "arguana_vespa"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 scidocs_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   fulltext_table: "scidocs_manticore"
   vector_table: "scidocs_manticore"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_manticore_vector:
   base: "manticore_vector_1bit"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   fulltext_table: "scidocs_manticore"
   vector_table: "scidocs_manticore"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_manticore_hybrid:
   base: "scidocs_manticore_fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   type: "hybrid"
   fulltext_table: "scidocs_manticore"
   vector_table: "scidocs_manticore"
@@ -1834,21 +1834,21 @@ scidocs_manticore_hybrid:
 scidocs_columnar_fulltext:
   base: "columnar"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   fulltext_table: "scidocs_columnar"
   vector_table: "scidocs_columnar"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_columnar_vector:
   base: "columnar_vector_1bit"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   fulltext_table: "scidocs_columnar"
   vector_table: "scidocs_columnar"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_columnar_hybrid:
   base: "scidocs_columnar_fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   type: "hybrid"
   fulltext_table: "scidocs_columnar"
   vector_table: "scidocs_columnar"
@@ -1862,19 +1862,19 @@ scidocs_columnar_hybrid:
 scidocs_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   bm25_collection: "scidocs_qdrant_fulltext"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_qdrant_vector:
   base: "qdrant_vector_1bit"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   dense_collection: "scidocs_qdrant_vector"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   bm25_collection: "scidocs_qdrant_fulltext"
   dense_collection: "scidocs_qdrant_vector"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
@@ -1882,124 +1882,124 @@ scidocs_qdrant_hybrid:
 scidocs_meilisearch_fulltext:
   base: "meilisearch"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_meilisearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_meilisearch_vector:
   base: "meilisearch_vector_1bit"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_meilisearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_meilisearch_hybrid:
   base: "meilisearch_hybrid_1bit"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_meilisearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_opensearch_fulltext:
   base: "opensearch"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_opensearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_opensearch_vector:
   base: "opensearch"
   type: "vector"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_opensearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_opensearch_hybrid:
   base: "opensearch"
   type: "hybrid"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_opensearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_elasticsearch_fulltext:
   base: "elasticsearch"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_elasticsearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_elasticsearch_vector:
   base: "elasticsearch"
   type: "vector"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_elasticsearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_elasticsearch_hybrid:
   base: "elasticsearch"
   type: "hybrid"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   index_name: "scidocs_elasticsearch"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_typesense_fulltext:
   base: "typesense"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_typesense"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_typesense_vector:
   base: "typesense"
   type: "vector"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_typesense"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_typesense"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_weaviate_fulltext:
   base: "weaviate"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_weaviate"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_weaviate_vector:
   base: "weaviate"
   type: "vector"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_weaviate"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_weaviate_hybrid:
   base: "weaviate"
   type: "hybrid"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_weaviate"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_vespa_fulltext:
   base: "vespa"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_vespa"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_vespa_vector:
   base: "vespa"
   type: "vector"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_vespa"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_vespa_hybrid:
   base: "vespa"
   type: "hybrid"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   collection_name: "scidocs_vespa"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
@@ -2206,21 +2206,21 @@ fiqa_vespa_hybrid:
 cqadupstack_webmasters_manticore_fulltext:
   base: "manticore"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   fulltext_table: "cqadupstack_webmasters_manticore"
   vector_table: "cqadupstack_webmasters_manticore"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_manticore_vector:
   base: "manticore_vector_1bit"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   fulltext_table: "cqadupstack_webmasters_manticore"
   vector_table: "cqadupstack_webmasters_manticore"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_manticore_hybrid:
   base: "cqadupstack_webmasters_manticore_fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   type: "hybrid"
   fulltext_table: "cqadupstack_webmasters_manticore"
   vector_table: "cqadupstack_webmasters_manticore"
@@ -2234,21 +2234,21 @@ cqadupstack_webmasters_manticore_hybrid:
 cqadupstack_webmasters_columnar_fulltext:
   base: "columnar"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   fulltext_table: "cqadupstack_webmasters_columnar"
   vector_table: "cqadupstack_webmasters_columnar"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_columnar_vector:
   base: "columnar_vector_1bit"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   fulltext_table: "cqadupstack_webmasters_columnar"
   vector_table: "cqadupstack_webmasters_columnar"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_columnar_hybrid:
   base: "cqadupstack_webmasters_columnar_fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   type: "hybrid"
   fulltext_table: "cqadupstack_webmasters_columnar"
   vector_table: "cqadupstack_webmasters_columnar"
@@ -2262,19 +2262,19 @@ cqadupstack_webmasters_columnar_hybrid:
 cqadupstack_webmasters_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   bm25_collection: "cqadupstack_webmasters_qdrant_fulltext"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_qdrant_vector:
   base: "qdrant_vector_1bit"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   dense_collection: "cqadupstack_webmasters_qdrant_vector"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   bm25_collection: "cqadupstack_webmasters_qdrant_fulltext"
   dense_collection: "cqadupstack_webmasters_qdrant_vector"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
@@ -2282,123 +2282,123 @@ cqadupstack_webmasters_qdrant_hybrid:
 cqadupstack_webmasters_meilisearch_fulltext:
   base: "meilisearch"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_meilisearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_meilisearch_vector:
   base: "meilisearch_vector_1bit"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_meilisearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_meilisearch_hybrid:
   base: "meilisearch_hybrid_1bit"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_meilisearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_opensearch_fulltext:
   base: "opensearch"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_opensearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_opensearch_vector:
   base: "opensearch"
   type: "vector"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_opensearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_opensearch_hybrid:
   base: "opensearch"
   type: "hybrid"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_opensearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_elasticsearch_fulltext:
   base: "elasticsearch"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_elasticsearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_elasticsearch_vector:
   base: "elasticsearch"
   type: "vector"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_elasticsearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_elasticsearch_hybrid:
   base: "elasticsearch"
   type: "hybrid"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   index_name: "cqadupstack_webmasters_elasticsearch"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_typesense_fulltext:
   base: "typesense"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_typesense"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_typesense_vector:
   base: "typesense"
   type: "vector"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_typesense"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_typesense"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_weaviate_fulltext:
   base: "weaviate"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_weaviate"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_weaviate_vector:
   base: "weaviate"
   type: "vector"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_weaviate"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_weaviate_hybrid:
   base: "weaviate"
   type: "hybrid"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_weaviate"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_vespa_fulltext:
   base: "vespa"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_vespa"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_vespa_vector:
   base: "vespa"
   type: "vector"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_vespa"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_vespa_hybrid:
   base: "vespa"
   type: "hybrid"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_vespa"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"

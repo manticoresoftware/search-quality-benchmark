@@ -140,7 +140,7 @@ scifact_manticore_hybrid_qdrantish:
 arguana_manticore_fulltext_qdrantish:
   base: "manticore"
   type: "fulltext"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   fulltext_table: "arguana_manticore_qdrantish"
   vector_table: "arguana_manticore_qdrantish"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
@@ -148,7 +148,7 @@ arguana_manticore_fulltext_qdrantish:
 
 arguana_manticore_hybrid_qdrantish:
   base: "arguana_manticore_fulltext_qdrantish"
-  source: "beir/arguana/test"
+  source: "beir/arguana"
   type: "hybrid"
   fulltext_table: "arguana_manticore_qdrantish"
   vector_table: "arguana_manticore_qdrantish"
@@ -162,7 +162,7 @@ arguana_manticore_hybrid_qdrantish:
 scidocs_manticore_fulltext_qdrantish:
   base: "manticore"
   type: "fulltext"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   fulltext_table: "scidocs_manticore_qdrantish"
   vector_table: "scidocs_manticore_qdrantish"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
@@ -170,7 +170,7 @@ scidocs_manticore_fulltext_qdrantish:
 
 scidocs_manticore_hybrid_qdrantish:
   base: "scidocs_manticore_fulltext_qdrantish"
-  source: "beir/scidocs/test"
+  source: "beir/scidocs"
   type: "hybrid"
   fulltext_table: "scidocs_manticore_qdrantish"
   vector_table: "scidocs_manticore_qdrantish"
@@ -206,7 +206,7 @@ fiqa_manticore_hybrid_qdrantish:
 cqadupstack_webmasters_manticore_fulltext_qdrantish:
   base: "manticore"
   type: "fulltext"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   fulltext_table: "cqadupstack_webmasters_manticore_qdrantish"
   vector_table: "cqadupstack_webmasters_manticore_qdrantish"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
@@ -214,7 +214,7 @@ cqadupstack_webmasters_manticore_fulltext_qdrantish:
 
 cqadupstack_webmasters_manticore_hybrid_qdrantish:
   base: "cqadupstack_webmasters_manticore_fulltext_qdrantish"
-  source: "beir/cqadupstack.webmasters/test"
+  source: "beir/cqadupstack/webmasters"
   type: "hybrid"
   fulltext_table: "cqadupstack_webmasters_manticore_qdrantish"
   vector_table: "cqadupstack_webmasters_manticore_qdrantish"
