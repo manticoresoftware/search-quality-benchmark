@@ -114,3 +114,113 @@ acord_manticore_hybrid_qdrantish:
   vector_search_rescore: 1
   batch_size: 250
   query_timeout_seconds: 180
+
+scifact_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/scifact/test"
+  fulltext_table: "scifact_manticore_qdrantish"
+  vector_table: "scifact_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+  fulltext_query_variant: "long"
+
+scifact_manticore_hybrid_qdrantish:
+  base: "scifact_manticore_fulltext_qdrantish"
+  source: "beir/scifact/test"
+  type: "hybrid"
+  fulltext_table: "scifact_manticore_qdrantish"
+  vector_table: "scifact_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+arguana_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/arguana/test"
+  fulltext_table: "arguana_manticore_qdrantish"
+  vector_table: "arguana_manticore_qdrantish"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+  fulltext_query_variant: "long"
+
+arguana_manticore_hybrid_qdrantish:
+  base: "arguana_manticore_fulltext_qdrantish"
+  source: "beir/arguana/test"
+  type: "hybrid"
+  fulltext_table: "arguana_manticore_qdrantish"
+  vector_table: "arguana_manticore_qdrantish"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+scidocs_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/scidocs/test"
+  fulltext_table: "scidocs_manticore_qdrantish"
+  vector_table: "scidocs_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+  fulltext_query_variant: "long"
+
+scidocs_manticore_hybrid_qdrantish:
+  base: "scidocs_manticore_fulltext_qdrantish"
+  source: "beir/scidocs/test"
+  type: "hybrid"
+  fulltext_table: "scidocs_manticore_qdrantish"
+  vector_table: "scidocs_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+fiqa_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/fiqa/test"
+  fulltext_table: "fiqa_manticore_qdrantish"
+  vector_table: "fiqa_manticore_qdrantish"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+  fulltext_query_variant: "long"
+
+fiqa_manticore_hybrid_qdrantish:
+  base: "fiqa_manticore_fulltext_qdrantish"
+  source: "beir/fiqa/test"
+  type: "hybrid"
+  fulltext_table: "fiqa_manticore_qdrantish"
+  vector_table: "fiqa_manticore_qdrantish"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+cqadupstack_webmasters_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/cqadupstack.webmasters/test"
+  fulltext_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+  fulltext_query_variant: "long"
+
+cqadupstack_webmasters_manticore_hybrid_qdrantish:
+  base: "cqadupstack_webmasters_manticore_fulltext_qdrantish"
+  source: "beir/cqadupstack.webmasters/test"
+  type: "hybrid"
+  fulltext_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180

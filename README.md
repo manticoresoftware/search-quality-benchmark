@@ -1,4 +1,4 @@
-# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense)
+# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense + Weaviate + Vespa)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text
@@ -18,13 +18,19 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Typesense lexical search
 - Typesense vector search (user-provided vectors from the shared cache)
 - Typesense hybrid search (query text + cached query vector)
+- Weaviate lexical search
+- Weaviate vector search (user-provided vectors from the shared cache)
+- Weaviate hybrid search (query text + cached query vector)
+- Vespa lexical search
+- Vespa vector search (user-provided vectors from the shared cache)
+- Vespa hybrid search (query text + cached query vector)
 
 It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md`, diagnostics) per run.
 
 ## Dataset
 
 - Default source: `beir/trec-covid` via `ir_datasets`.
-- Additional ready examples: `beir/nfcorpus/test`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `hf-beir:theatticusproject/acord:test`.
+- Additional ready examples: `beir/nfcorpus/test`, `beir/scifact/test`, `beir/arguana/test`, `beir/scidocs/test`, `beir/fiqa/test`, `beir/cqadupstack.webmasters/test`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `hf-beir:theatticusproject/acord:test`.
 - Dataset catalogs/docs:
   - [ir-datasets.com](https://ir-datasets.com/)
   - [ACORD on Hugging Face](https://huggingface.co/datasets/theatticusproject/acord)
@@ -57,8 +63,20 @@ Prepared outputs (source-scoped):
 Examples:
 - `beir/trec-covid` -> `data/prepared/beir-trec-covid/`
 - `beir/nfcorpus/test` -> `data/prepared/beir-nfcorpus-test/`
+- `beir/scifact/test` -> `data/prepared/beir-scifact-test/`
+- `beir/arguana/test` -> `data/prepared/beir-arguana-test/`
+- `beir/scidocs/test` -> `data/prepared/beir-scidocs-test/`
+- `beir/fiqa/test` -> `data/prepared/beir-fiqa-test/`
+- `beir/cqadupstack.webmasters/test` -> `data/prepared/beir-cqadupstack-webmasters-test/`
 - `msmarco-passage/dev/small` -> `data/prepared/msmarco-passage-dev-small/`
 - `hf-beir:theatticusproject/acord:test` -> `data/prepared/hf-beir-theatticusproject-acord-test/`
+
+Recommended smaller BEIR datasets for faster iteration:
+- `beir/scifact/test`
+- `beir/arguana/test`
+- `beir/scidocs/test`
+- `beir/fiqa/test`
+- `beir/cqadupstack.webmasters/test`
 
 Hugging Face BEIR-style sources:
 - format: `hf-beir:<repo_id>:<split>`
