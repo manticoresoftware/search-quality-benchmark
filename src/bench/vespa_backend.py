@@ -19,6 +19,16 @@ def _sanitize_vespa_string(value: Any) -> str:
     return "".join(ch for ch in text if ch >= " " or ch in "\t\n\r")
 
 
+def _sanitize_vespa_query_text(query_text: str) -> str:
+    text = _sanitize_vespa_string(query_text)
+    # Vespa userQuery() treats quotes as phrase syntax. Benchmark topics can
+    # contain long quoted passages, which may trip phrase limits on repeated
+    # stopwords such as "the".
+    text = re.sub(r"[\"'`“”‘’«»]", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text, flags=re.UNICODE).strip()
+    return text
+
+
 class VespaBackend:
     def __init__(self, cfg: VespaConfig):
         self.cfg = cfg
@@ -179,7 +189,7 @@ class VespaBackend:
         resp = self._query(
             {
                 "yql": f"select doc_id from sources {self.document_type()} where userQuery();",
-                "query": str(query_text or ""),
+                "query": _sanitize_vespa_query_text(query_text),
                 "hits": int(limit),
                 "ranking.profile": "bm25",
             }
@@ -207,7 +217,7 @@ class VespaBackend:
                     f"select doc_id from sources {self.document_type()} "
                     f"where userQuery() or ({{targetHits:{int(limit)}}}nearestNeighbor({self.cfg.vector_field}, q));"
                 ),
-                "query": str(query_text or ""),
+                "query": _sanitize_vespa_query_text(query_text),
                 "hits": int(limit),
                 "ranking.profile": "hybrid",
                 "input.query(q)": [float(x) for x in query_vector],
