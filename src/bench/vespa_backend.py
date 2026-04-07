@@ -303,6 +303,7 @@ class VespaBackend:
             '    <tuning>\n'
             '      <resource-limits>\n'
             '        <disk>0.99</disk>\n'
+            '        <memory>0.99</memory>\n'
             '      </resource-limits>\n'
             '    </tuning>\n'
             '    <nodes count="1" />\n'
