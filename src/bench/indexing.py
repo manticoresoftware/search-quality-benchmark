@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from threading import local
 from time import perf_counter
 from typing import Any, Callable
 
@@ -463,8 +464,16 @@ def _run_index_qdrant(
         started = perf_counter()
         inserted = 0
         processed = 0
+        worker_state = local()
+
         def _worker(batch: list[Any]) -> int:
-            return qdrant.upsert_bm25_text_batch(batch)
+            backend = getattr(worker_state, "backend", None)
+            if backend is None:
+                # Qdrant's BM25 auto-embedder keeps mutable per-client state and is not
+                # safe to share across indexing threads.
+                backend = QdrantBackend(cfg.qdrant)
+                worker_state.backend = backend
+            return backend.upsert_bm25_text_batch(batch)
 
         def _on_result(batch: list[Any], count: int) -> None:
             nonlocal inserted, processed
