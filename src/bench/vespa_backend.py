@@ -14,6 +14,11 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from .config import VespaConfig
 
 
+def _sanitize_vespa_string(value: Any) -> str:
+    text = str(value or "")
+    return "".join(ch for ch in text if ch >= " " or ch in "\t\n\r")
+
+
 class VespaBackend:
     def __init__(self, cfg: VespaConfig):
         self.cfg = cfg
@@ -137,10 +142,10 @@ class VespaBackend:
             fields = {
                 "id": int(doc.get("bench_id", doc.get("id", 0)) or 0),
                 "doc_id": doc_id,
-                "title": str(doc.get("title", "")),
-                "abstract": str(doc.get("abstract", "")),
-                "doi": str(doc.get("doi", "")),
-                "date": str(doc.get("date", "")),
+                "title": _sanitize_vespa_string(doc.get("title", "")),
+                "abstract": _sanitize_vespa_string(doc.get("abstract", "")),
+                "doi": _sanitize_vespa_string(doc.get("doi", "")),
+                "date": _sanitize_vespa_string(doc.get("date", "")),
             }
             vector = doc.get(self.cfg.vector_field)
             if isinstance(vector, list) and vector:
