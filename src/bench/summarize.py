@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 from dataclasses import dataclass
 from datetime import datetime
+import itertools
 import json
 import math
 from pathlib import Path
@@ -1368,6 +1369,113 @@ def _engine_only_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     return lines
 
 
+def _leaderboard_sections_lines(rows: list[ArtifactRow]) -> list[str]:
+    grouped, scopes = _leaderboard_scopes(rows)
+    if not scopes:
+        return []
+
+    all_group_keys = frozenset(grouped.keys())
+    lines: list[str] = []
+    for idx, scope in enumerate(scopes):
+        scope_title = "all datasets" if idx == 0 else _short_scope_title(scope)
+        scope_detail = _group_scope_title(scope, all_group_keys)
+        engine_board, excluded_engines, total_groups = _engine_leaderboard_data_for_scope(grouped, scope)
+        if not engine_board:
+            continue
+        lines.append(f"## Leaderboard ({scope_title})")
+        lines.append("")
+        lines.append(f"Datasets: {scope_detail}.")
+        lines.append("")
+        lines.append(
+            "This leaderboard uses the canonical metric for each dataset family. "
+            "For each dataset/doc-count group in this scope, it first chooses the single best run for each engine across all modes. "
+            "Then `Score`, `QPS`, and `P50` are averaged over those selected rows only. "
+            "`Mode counts` shows how many times each mode was selected for that engine across the groups in this scope, using the format `ft:x vec:y hyb:z`. "
+            "Only engines with 100% coverage within this scope are included here."
+        )
+        lines.append("")
+        lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
+        lines.append("")
+        lines.append("| Rank | Engine | Mode counts | QPS | P50 (ms) | Score ↓ |")
+        lines.append("|---:|---|---|---:|---:|---:|")
+        for idx, (engine, mode_counts, score, avg_qps, avg_p50) in enumerate(engine_board, start=1):
+            lines.append(
+                f"| {idx} | {engine} | `{mode_counts}` | {avg_qps:.2f} | {avg_p50:.1f} | `{_bar_metric_text(score)}` |"
+            )
+        lines.append("")
+        if excluded_engines:
+            excluded_text = ", ".join(
+                f"`{engine}` ({groups_played}/{total_groups})"
+                for engine, groups_played in excluded_engines
+            )
+            lines.append(f"Excluded for incomplete coverage: {excluded_text}.")
+            lines.append("")
+
+        variant_board, excluded_variants, total_variant_groups = _engine_mode_leaderboard_data_for_scope(grouped, scope)
+        lines.append("### Engine + Mode Leaderboard")
+        lines.append("")
+        lines.append(
+            "This is the engine+mode view for the same dataset scope. "
+            "For each dataset/doc-count group in this scope, it chooses the best run for each exact engine+mode pair. "
+            "Then `Score`, `QPS`, and `P50` are averaged over those selected rows only. "
+            "Only full-coverage engine+mode entries are included."
+        )
+        lines.append("")
+        lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
+        lines.append("")
+        if not variant_board:
+            lines.append("_No eligible engine+mode entries for this scope._")
+            lines.append("")
+            continue
+        lines.append("| Rank | Engine | Mode | QPS | P50 (ms) | Score ↓ |")
+        lines.append("|---:|---|---|---:|---:|---:|")
+        for idx, (engine, mode, score, avg_qps, avg_p50) in enumerate(variant_board, start=1):
+            lines.append(
+                f"| {idx} | {engine} | {_display_mode(mode)} | {avg_qps:.2f} | {avg_p50:.1f} | `{_bar_metric_text(score)}` |"
+            )
+        lines.append("")
+        if excluded_variants:
+            excluded_text = ", ".join(
+                f"`{engine} / {_display_mode(mode)}` ({groups_played}/{total_variant_groups})"
+                for engine, mode, groups_played in excluded_variants
+            )
+            lines.append(f"Excluded for incomplete coverage: {excluded_text}.")
+            lines.append("")
+    return lines
+
+
+def _dataset_engine_coverage_table_lines(rows: list[ArtifactRow]) -> list[str]:
+    successful = [row for row in rows if str(row.status or "").strip().lower() == "ok"]
+    if not successful:
+        return []
+    group_keys = sorted(
+        {(row.dataset_source or "-", row.doc_count) for row in successful},
+        key=lambda item: ((item[0] or "").lower(), item[1] or 0),
+    )
+    engines = sorted({row.engine for row in successful}, key=str.lower)
+    if not group_keys or not engines:
+        return []
+    counts: dict[tuple[tuple[str, int | None], str], int] = {}
+    for row in successful:
+        key = ((row.dataset_source or "-", row.doc_count), row.engine)
+        counts[key] = counts.get(key, 0) + 1
+    lines = ["## Dataset x Engine Coverage", ""]
+    lines.append("Successful runs only. Each cell shows how many runs completed with `status=ok` for that dataset and engine.")
+    lines.append("")
+    header = "| Dataset | " + " | ".join(engines) + " |"
+    sep = "|---|" + "---:|" * len(engines)
+    lines.append(header)
+    lines.append(sep)
+    for group_key in group_keys:
+        dataset, doc_count = group_key
+        row_vals = [_dataset_group_label(dataset, doc_count)]
+        for engine in engines:
+            row_vals.append(str(counts.get((group_key, engine), 0)))
+        lines.append("| " + " | ".join(row_vals) + " |")
+    lines.append("")
+    return lines
+
+
 def _canonical_grouped_rows(rows: list[ArtifactRow]) -> tuple[dict[tuple[str, int | None], list[ArtifactRow]], int]:
     eligible = [row for row in rows if _eligible_for_global_relevance(row)]
     grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
@@ -1376,13 +1484,100 @@ def _canonical_grouped_rows(rows: list[ArtifactRow]) -> tuple[dict[tuple[str, in
     return grouped, len(grouped)
 
 
-def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float]], list[tuple[str, int]], int]:
+def _group_scope_title(
+    group_keys: frozenset[tuple[str, int | None]],
+    all_group_keys: frozenset[tuple[str, int | None]],
+) -> str:
+    if group_keys == all_group_keys:
+        return "all datasets"
+    labels = [_dataset_group_label(dataset, doc_count) for dataset, doc_count in sorted(group_keys, key=lambda item: ((item[0] or "").lower(), item[1] or 0))]
+    return ", ".join(labels)
+
+
+def _short_dataset_name(dataset: str, doc_count: int | None) -> str:
+    ds = str(dataset or "")
+    if ds == "beir/nfcorpus/test":
+        return "nfcorpus"
+    if ds == "beir/trec-covid":
+        return "trec-covid"
+    if ds == "hf-beir:theatticusproject/acord:test":
+        return "acord"
+    if ds == "beir/scifact/test":
+        return "scifact"
+    if ds == "beir/arguana":
+        return "arguana"
+    if ds == "beir/scidocs":
+        return "scidocs"
+    if ds == "beir/fiqa/test":
+        return "fiqa"
+    if ds == "beir/cqadupstack/webmasters":
+        return "cqadupstack/webmasters"
+    if ds == "msmarco-passage/dev/small":
+        if doc_count is not None and int(doc_count) < 1000000:
+            return "msmarco-dev (250K)"
+        return "msmarco-dev"
+    if ds == "msmarco-passage/trec-dl-2019/judged":
+        return "trec-dl-2019"
+    if ds == "msmarco-passage/trec-dl-2020/judged":
+        return "trec-dl-2020"
+    return ds
+
+
+def _short_scope_title(group_keys: frozenset[tuple[str, int | None]]) -> str:
+    labels = [_short_dataset_name(dataset, doc_count) for dataset, doc_count in sorted(group_keys, key=lambda item: ((item[0] or "").lower(), item[1] or 0))]
+    if len(labels) <= 4:
+        return ", ".join(labels)
+    return f"{', '.join(labels[:3])}, +{len(labels) - 3} more"
+
+
+def _leaderboard_scopes(
+    rows: list[ArtifactRow],
+) -> tuple[dict[tuple[str, int | None], list[ArtifactRow]], list[frozenset[tuple[str, int | None]]]]:
     grouped, total_groups = _canonical_grouped_rows(rows)
+    if total_groups <= 0:
+        return grouped, []
+    engine_group_sets: dict[str, set[tuple[str, int | None]]] = {}
+    for group_key, group_rows in grouped.items():
+        for engine in {row.engine for row in group_rows}:
+            engine_group_sets.setdefault(engine, set()).add(group_key)
+    engines = sorted(engine_group_sets.keys())
+    scope_sets: set[frozenset[tuple[str, int | None]]] = set()
+    for size in range(2, len(engines) + 1):
+        for combo in itertools.combinations(engines, size):
+            shared = set.intersection(*(engine_group_sets[e] for e in combo))
+            if not shared:
+                continue
+            scope = frozenset(shared)
+            covering = [e for e, covered in engine_group_sets.items() if scope.issubset(covered)]
+            if len(covering) >= 2:
+                scope_sets.add(scope)
+    if not scope_sets:
+        return grouped, []
+    all_group_keys = frozenset(grouped.keys())
+    scopes = sorted(
+        scope_sets,
+        key=lambda scope: (
+            0 if scope == all_group_keys else 1,
+            -len(scope),
+            _group_scope_title(scope, all_group_keys).lower(),
+        ),
+    )
+    return grouped, scopes
+
+
+def _engine_leaderboard_data_for_scope(
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]],
+    scope: frozenset[tuple[str, int | None]],
+) -> tuple[list[tuple[str, str, float, float, float]], list[tuple[str, int]], int]:
+    total_groups = len(scope)
     if total_groups <= 0:
         return [], [], 0
     per_engine_scores: dict[str, list[float]] = {}
+    per_engine_qps: dict[str, list[float]] = {}
+    per_engine_p50: dict[str, list[float]] = {}
     per_engine_best_modes: dict[str, dict[str, int]] = {}
-    for _, group_rows in grouped.items():
+    for group_key in scope:
+        group_rows = grouped.get(group_key, [])
         best_by_engine: dict[str, ArtifactRow] = {}
         for row in group_rows:
             prev = best_by_engine.get(row.engine)
@@ -1390,31 +1585,49 @@ def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, s
                 best_by_engine[row.engine] = row
         for engine, row in best_by_engine.items():
             per_engine_scores.setdefault(engine, []).append(_row_canonical_metric_value(row))
+            per_engine_qps.setdefault(engine, []).append(float(row.performance.get("qps", 0.0) or 0.0))
+            per_engine_p50.setdefault(engine, []).append(float(row.performance.get("latency_p50_ms", 0.0) or 0.0))
             mode_counts = per_engine_best_modes.setdefault(engine, {})
             mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
-    leaderboard: list[tuple[str, str, float]] = []
+    leaderboard: list[tuple[str, str, float, float, float]] = []
     excluded: list[tuple[str, int]] = []
     for engine, scores in per_engine_scores.items():
         groups_played = len(scores)
         if groups_played < total_groups:
             excluded.append((engine, groups_played))
             continue
-        best_mode = "-"
         mode_counts = per_engine_best_modes.get(engine, {})
-        if mode_counts:
-            best_mode = sorted(mode_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
-        leaderboard.append((engine, best_mode, sum(scores) / groups_played))
+        mode_summary = (
+            f"ft:{int(mode_counts.get('fulltext', 0))} "
+            f"vec:{int(mode_counts.get('vector', 0))} "
+            f"hyb:{int(mode_counts.get('hybrid', 0))}"
+        )
+        leaderboard.append(
+            (
+                engine,
+                mode_summary,
+                sum(scores) / groups_played,
+                sum(per_engine_qps.get(engine, [])) / groups_played,
+                sum(per_engine_p50.get(engine, [])) / groups_played,
+            )
+        )
     leaderboard.sort(key=lambda item: (-item[2], item[0].lower()))
     excluded.sort(key=lambda item: item[0].lower())
     return leaderboard, excluded, total_groups
 
 
-def _engine_mode_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float]], list[tuple[str, str, int]], int]:
-    grouped, total_groups = _canonical_grouped_rows(rows)
+def _engine_mode_leaderboard_data_for_scope(
+    grouped: dict[tuple[str, int | None], list[ArtifactRow]],
+    scope: frozenset[tuple[str, int | None]],
+) -> tuple[list[tuple[str, str, float, float, float]], list[tuple[str, str, int]], int]:
+    total_groups = len(scope)
     if total_groups <= 0:
         return [], [], 0
     per_variant_scores: dict[tuple[str, str], list[float]] = {}
-    for _, group_rows in grouped.items():
+    per_variant_qps: dict[tuple[str, str], list[float]] = {}
+    per_variant_p50: dict[tuple[str, str], list[float]] = {}
+    for group_key in scope:
+        group_rows = grouped.get(group_key, [])
         best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
         for row in group_rows:
             key = (row.engine, row.mode)
@@ -1423,17 +1636,37 @@ def _engine_mode_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[s
                 best_by_variant[key] = row
         for key, row in best_by_variant.items():
             per_variant_scores.setdefault(key, []).append(_row_canonical_metric_value(row))
-    leaderboard: list[tuple[str, str, float]] = []
+            per_variant_qps.setdefault(key, []).append(float(row.performance.get("qps", 0.0) or 0.0))
+            per_variant_p50.setdefault(key, []).append(float(row.performance.get("latency_p50_ms", 0.0) or 0.0))
+    leaderboard: list[tuple[str, str, float, float, float]] = []
     excluded: list[tuple[str, str, int]] = []
     for (engine, mode), scores in per_variant_scores.items():
         groups_played = len(scores)
         if groups_played < total_groups:
             excluded.append((engine, mode, groups_played))
             continue
-        leaderboard.append((engine, mode, sum(scores) / groups_played))
+        leaderboard.append(
+            (
+                engine,
+                mode,
+                sum(scores) / groups_played,
+                sum(per_variant_qps.get((engine, mode), [])) / groups_played,
+                sum(per_variant_p50.get((engine, mode), [])) / groups_played,
+            )
+        )
     leaderboard.sort(key=lambda item: (-item[2], item[0].lower(), item[1].lower()))
     excluded.sort(key=lambda item: (item[0].lower(), item[1].lower()))
     return leaderboard, excluded, total_groups
+
+
+def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float, float, float]], list[tuple[str, int]], int]:
+    grouped, total_groups = _canonical_grouped_rows(rows)
+    return _engine_leaderboard_data_for_scope(grouped, frozenset(grouped.keys()))
+
+
+def _engine_mode_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float, float, float]], list[tuple[str, str, int]], int]:
+    grouped, total_groups = _canonical_grouped_rows(rows)
+    return _engine_mode_leaderboard_data_for_scope(grouped, frozenset(grouped.keys()))
 
 
 def _mermaid_pie(title: str, parts: list[tuple[str, float]]) -> list[str]:
@@ -1886,7 +2119,7 @@ def _engine_consistency_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
     group_headers = [_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     engine_to_cells: dict[str, list[str]] = {}
-    for engine, _, _ in leaderboard:
+    for engine, *rest in leaderboard:
         engine_to_cells[engine] = []
         for key in group_keys:
             group_rows = grouped[key]
@@ -1907,7 +2140,7 @@ def _engine_consistency_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
     cols = ["Engine", *group_headers]
     lines.append("| " + " | ".join(cols) + " |")
     lines.append("|" + "---|" * len(cols))
-    for engine, _, _ in leaderboard:
+    for engine, *rest in leaderboard:
         lines.append("| " + " | ".join([engine, *engine_to_cells[engine]]) + " |")
     lines.append("")
     return lines
@@ -1932,7 +2165,7 @@ def _engine_consistency_radar_lines(rows: list[ArtifactRow]) -> list[str]:
     ]
     color_map = {name: color for name, color in palette}
     datasets: list[dict[str, Any]] = []
-    for engine, _, _ in leaderboard:
+    for engine, *rest in leaderboard:
         data: list[float] = []
         for key in group_keys:
             best_val = 0.0
@@ -1974,7 +2207,7 @@ def _engine_consistency_series(rows: list[ArtifactRow]) -> tuple[list[str], list
     ]
     color_map = {name: color for name, color in palette}
     datasets: list[dict[str, Any]] = []
-    for engine, _, _ in leaderboard:
+    for engine, *rest in leaderboard:
         data: list[float] = []
         for key in group_keys:
             best_val = 0.0
@@ -2007,9 +2240,9 @@ def _engine_consistency_heatmap_lines(rows: list[ArtifactRow]) -> list[str]:
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
     x_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
-    y_labels = [engine for engine, _, _ in leaderboard]
+    y_labels = [item[0] for item in leaderboard]
     cells: list[tuple[str, str, float]] = []
-    for engine, _, _ in leaderboard:
+    for engine, *rest in leaderboard:
         for idx, key in enumerate(group_keys):
             best_val = 0.0
             for row in grouped[key]:
@@ -2075,7 +2308,7 @@ def _best_mode_counts_chart_lines(rows: list[ArtifactRow]) -> list[str]:
     if not leaderboard or total_groups <= 0:
         return []
     grouped, _ = _canonical_grouped_rows(rows)
-    engines = [engine for engine, _, _ in leaderboard]
+    engines = [item[0] for item in leaderboard]
     counts = {engine: {"fulltext": 0, "vector": 0, "hybrid": 0} for engine in engines}
     for _, group_rows in grouped.items():
         best_by_engine: dict[str, ArtifactRow] = {}
@@ -2154,7 +2387,7 @@ def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]
     if not leaderboard or total_groups <= 0:
         return []
     grouped, _ = _canonical_grouped_rows(rows)
-    engines = [engine for engine, _, _ in leaderboard]
+    engines = [item[0] for item in leaderboard]
     family_scores: dict[str, dict[str, list[float]]] = {}
     for (dataset, _), group_rows in grouped.items():
         family = _dataset_family_name(dataset)
@@ -2214,7 +2447,7 @@ def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
         "vespa": "#22c55e",
     }
     datasets = []
-    for engine, _, avg_score in leaderboard:
+    for engine, _, avg_score, *_ in leaderboard:
         modes_used: set[str] = set()
         for _, group_rows in grouped.items():
             best_row = None
@@ -2251,7 +2484,7 @@ def _top_engine_mode_relative_heatmap_lines(rows: list[ArtifactRow], limit: int 
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
     top = leaderboard[:limit]
     x_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
-    y_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, _ in top]
+    y_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, *_ in top]
 
     lines = [
         '<div style="overflow-x:auto;">',
@@ -2268,7 +2501,7 @@ def _top_engine_mode_relative_heatmap_lines(rows: list[ArtifactRow], limit: int 
     lines.append("</thead>")
     lines.append("<tbody>")
 
-    for engine, mode, _ in top:
+    for engine, mode, *_ in top:
         row_parts = [
             f'<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">{engine} / {_display_mode(mode)}</th>'
         ]
@@ -2304,7 +2537,7 @@ def _top_engine_mode_series(rows: list[ArtifactRow], limit: int = 5) -> tuple[li
     labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
     palette = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"]
     datasets: list[dict[str, Any]] = []
-    for idx, (engine, mode, _) in enumerate(leaderboard[:limit]):
+    for idx, (engine, mode, *_) in enumerate(leaderboard[:limit]):
         data: list[float] = []
         for key in group_keys:
             best_val = 0.0
@@ -2391,7 +2624,7 @@ def _relevance_vs_qps_scatter_lines(rows: list[ArtifactRow]) -> list[str]:
             qps_by_variant.setdefault(key, []).append(float(row.performance.get("qps", 0.0) or 0.0))
     points_by_engine: dict[str, list[dict[str, Any]]] = {}
     max_qps = 0.0
-    for engine, mode, score in leaderboard:
+    for engine, mode, score, *_ in leaderboard:
         vals = qps_by_variant.get((engine, mode), [])
         if len(vals) < total_groups:
             continue
@@ -2447,7 +2680,7 @@ def _relevance_vs_latency_scatter_lines(rows: list[ArtifactRow], *, field: str, 
             metric_by_variant.setdefault(key, []).append(float(row.performance.get(field, 0.0) or 0.0))
     points_by_engine: dict[str, list[dict[str, Any]]] = {}
     max_metric = 0.0
-    for engine, mode, score in leaderboard:
+    for engine, mode, score, *_ in leaderboard:
         vals = metric_by_variant.get((engine, mode), [])
         if len(vals) < total_groups:
             continue
@@ -2498,7 +2731,7 @@ def _best_mode_per_engine_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str
         "Best for seeing which retrieval mode carries each engine. This variant uses one grouped bar chart per dataset group, so the mode colors stay unambiguous: gray for full-text, blue for vector, green for hybrid.",
         "",
     ]
-    engine_labels = [engine for engine, _, _ in leaderboard]
+    engine_labels = [item[0] for item in leaderboard]
     for dataset, doc_count in group_keys:
         group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
         mode_values: dict[str, list[float | None]] = {
@@ -2558,7 +2791,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
         "vespa": "#22c55e",
     }
     datasets: list[dict[str, Any]] = []
-    for engine, _, _ in leaderboard:
+    for engine, *rest in leaderboard:
         values: list[float] = []
         for key in group_keys:
             group_rows = grouped[key]
@@ -2640,12 +2873,12 @@ def _top_engine_mode_grouped_bar_lines(rows: list[ArtifactRow], limit: int = 6) 
         "Best for comparing the strongest concrete variants directly. This variant uses one chart per dataset group, and every bar is colored by its mode family, which keeps the mode colors unambiguous.",
         "",
     ]
-    variant_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, _ in top]
+    variant_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, *_ in top]
     for dataset, doc_count in group_keys:
         group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
         group_rows = grouped[(dataset, doc_count)]
         datasets: list[dict[str, Any]] = []
-        for engine, mode, _ in top:
+        for engine, mode, *_ in top:
             own_score = 0.0
             for row in group_rows:
                 if row.engine == engine and row.mode == mode:
@@ -2686,7 +2919,7 @@ def _engine_mode_relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow], l
         group_rows = grouped[(dataset, doc_count)]
         best_score = max(_row_canonical_metric_value(row) for row in group_rows) if group_rows else 0.0
         datasets: list[dict[str, Any]] = []
-        for engine, mode, _ in top:
+        for engine, mode, *_ in top:
             own_score = 0.0
             for row in group_rows:
                 if row.engine == engine and row.mode == mode:
@@ -2721,7 +2954,7 @@ def _leaderboard_visualization_options_lines(rows: list[ArtifactRow]) -> list[st
         lines.append("")
         lines.append("Best chart: a simple engine+mode leaderboard bar chart.")
         lines.append("")
-        parts = [(f"{engine} / {_display_mode(mode)}", score) for engine, mode, score in engine_mode_board]
+        parts = [(f"{engine} / {_display_mode(mode)}", score) for engine, mode, score, *_ in engine_mode_board]
         lines.extend(_quickchart_horizontal_bar("Engine + Mode Leaderboard Scores", parts))
     if top_labels and top_datasets:
         lines.append("### 2. Is that winner consistently good, or is it only carried by a few datasets?")
@@ -2842,12 +3075,10 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines.append("")
     lines.append(f"Generated at: `{datetime.now().isoformat(timespec='seconds')}`")
     lines.append("")
-    engine_lines = _engine_only_leaderboard_lines(rows)
-    if engine_lines:
-        lines.extend(engine_lines)
-    variant_lines = _global_variant_leaderboard_lines(rows)
-    if variant_lines:
-        lines.extend(variant_lines)
+    lines.extend(_dataset_engine_coverage_table_lines(rows))
+    leaderboard_lines = _leaderboard_sections_lines(rows)
+    if leaderboard_lines:
+        lines.extend(leaderboard_lines)
     lines.extend(_leaderboard_visualization_options_lines(rows))
     by_dataset: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in rows:
