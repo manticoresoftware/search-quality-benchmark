@@ -4,8 +4,8 @@
 #
 # Internal helper bases remain non-canonical and are hidden from menus.
 
-include_configs:
-  - "qdrantish.yaml"
+#include_configs:
+#  - "qdrantish.yaml"
 
 dataset:
   source: "beir/trec-covid"
@@ -60,14 +60,14 @@ manticore:
   vector_search_oversampling:
   vector_search_rescore:
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
-  vector_cache_fetch_batch_size: 1000
+  vector_cache_fetch_batch_size: 20000
   index_layout: "combined"
   fulltext_options: "morphology='stem_en' index_field_lengths='1'"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75)')"
   fulltext_query_mode: "or"
   fulltext_query_quorum: 0.5
   batch_size: 2000
-  index_concurrency: 8
+  index_concurrency: 16
   insert_retries: 3
   connect_timeout_seconds: 10
   query_timeout_seconds: 60
@@ -234,7 +234,9 @@ vespa:
   type: "vespa"
   url: "http://127.0.0.1:8081"
   deploy_url: "http://127.0.0.1:19071"
-  timeout_sec: 30
+  timeout_sec: 120
+  retry_attempts: 3
+  retry_backoff_seconds: 2.0
   batch_size: 250
   index_concurrency: 8
   collection_name: "trec_covid_vespa"
