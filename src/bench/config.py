@@ -149,7 +149,9 @@ class WeaviateConfig:
 class VespaConfig:
     url: str = "http://127.0.0.1:8081"
     deploy_url: str = "http://127.0.0.1:19071"
-    timeout_sec: int = 30
+    timeout_sec: int = 120
+    retry_attempts: int = 3
+    retry_backoff_seconds: float = 2.0
     batch_size: int = 500
     index_concurrency: int = 1
     collection_name: str = "trec_covid_vespa"

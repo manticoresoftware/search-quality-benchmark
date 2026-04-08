@@ -4,6 +4,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 import re
+import socket
 from time import monotonic, sleep
 from typing import Any
 from urllib import error as urlerror
@@ -61,14 +62,25 @@ class VespaBackend:
         if payload is not None:
             headers["Content-Type"] = content_type
         req = urlrequest.Request(url, data=body, method=method.upper(), headers=headers)
-        try:
-            with urlrequest.urlopen(req, timeout=max(int(self.cfg.timeout_sec), 30)) as resp:
-                data = resp.read()
-        except urlerror.HTTPError as exc:
-            body_text = exc.read().decode("utf-8", errors="replace").strip()
-            if exc.code == 404:
-                raise
-            raise RuntimeError(f"Vespa HTTP {exc.code}: {body_text}") from exc
+        attempts = max(1, int(getattr(self.cfg, "retry_attempts", 1) or 1))
+        backoff = max(0.0, float(getattr(self.cfg, "retry_backoff_seconds", 0.0) or 0.0))
+        timeout = max(int(self.cfg.timeout_sec), 30)
+        data: bytes = b""
+        for attempt in range(1, attempts + 1):
+            try:
+                with urlrequest.urlopen(req, timeout=timeout) as resp:
+                    data = resp.read()
+                break
+            except urlerror.HTTPError as exc:
+                body_text = exc.read().decode("utf-8", errors="replace").strip()
+                if exc.code == 404:
+                    raise
+                raise RuntimeError(f"Vespa HTTP {exc.code}: {body_text}") from exc
+            except Exception as exc:
+                if attempt >= attempts or not self._is_retryable_request_error(exc):
+                    raise
+                if backoff > 0:
+                    sleep(backoff * (2 ** (attempt - 1)))
         if not data:
             return {}
         text = data.decode("utf-8", errors="replace")
@@ -76,6 +88,19 @@ class VespaBackend:
             return json.loads(text)
         except Exception:
             return text
+
+    @staticmethod
+    def _is_retryable_request_error(exc: Exception) -> bool:
+        if isinstance(exc, (TimeoutError, socket.timeout)):
+            return True
+        if isinstance(exc, urlerror.URLError):
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, (TimeoutError, socket.timeout)):
+                return True
+            text = str(reason or exc).strip().lower()
+            return "timed out" in text or "timeout" in text
+        text = str(exc).strip().lower()
+        return text == "timed out" or "timed out" in text
 
     def _query(self, payload: dict[str, Any]) -> dict[str, Any]:
         resp = self._request("POST", self.connection_target(), "/search/", payload=payload)
@@ -168,6 +193,21 @@ class VespaBackend:
             )
             inserted += 1
         return inserted
+
+    def document_exists(self, doc_id: str) -> bool:
+        namespace = str(self.cfg.namespace or "doc")
+        doc_type = self.document_type()
+        try:
+            self._request(
+                "GET",
+                self.connection_target(),
+                f"/document/v1/{namespace}/{doc_type}/docid/{urlparse.quote(str(doc_id), safe='')}",
+            )
+            return True
+        except urlerror.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
 
     def get_document_count(self, collection_name: str) -> int:
         resp = self._query(

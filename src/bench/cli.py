@@ -685,10 +685,18 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 print("Index canceled: Manticore vector reindex not confirmed.")
                 return 0
             for v in selected:
+                if bool(args.resume) and not (v.engine == "vespa" and v.mode == "vector"):
+                    raise ValueError("--resume is only supported for engine=vespa with mode=vector.")
                 started_by_key.clear()
                 last_by_key.clear()
                 run_id = generate_run_id()
-                results = run_index(v.cfg, engine=v.engine, mode=v.mode, progress_callback=_progress)
+                results = run_index(
+                    v.cfg,
+                    engine=v.engine,
+                    mode=v.mode,
+                    resume=bool(args.resume),
+                    progress_callback=_progress,
+                )
                 model_note = f" model={v.model}" if v.mode == "vector" else ""
                 print(f"Indexed profile={v.entry} engine={v.engine} mode={v.mode}{model_note} run_id={run_id}")
                 _print_index_result_details(results)
@@ -698,6 +706,8 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         if args.mode is None:
             raise ValueError("--mode is required unless running interactive `bench index` with no index parameters.")
         engine = args.engine or "manticore"
+        if bool(args.resume) and not (engine == "vespa" and args.mode == "vector"):
+            raise ValueError("--resume is only supported for engine=vespa with mode=vector.")
         cfg_for_engine, entry_name, entry_mode_filter = _resolve_entry_cfg(
             config_path=args.config,
             engine=engine,
@@ -736,7 +746,13 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         started_by_key.clear()
         last_by_key.clear()
         run_id = generate_run_id()
-        results = run_index(cfg_for_engine, engine=engine, mode=args.mode, progress_callback=_progress)
+        results = run_index(
+            cfg_for_engine,
+            engine=engine,
+            mode=args.mode,
+            resume=bool(args.resume),
+            progress_callback=_progress,
+        )
         model_note = f" model={resolved_embedding_model(cfg_for_engine)}" if args.mode in ("vector", "hybrid") else ""
         print(f"Indexed profile={entry_name} engine={engine} mode={args.mode}{model_note}")
         _print_index_result_details(results)
@@ -877,6 +893,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Skip Manticore vector table recreation confirmation",
+    )
+    p_index.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume Vespa vector indexing from the current document count after verifying boundary docs",
     )
 
     p_run = sub.add_parser("run", add_help=False)

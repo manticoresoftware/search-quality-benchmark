@@ -1,3 +1,6 @@
+import socket
+from urllib import error as urlerror
+
 from bench.config import VespaConfig
 from bench.vespa_backend import VespaBackend, _sanitize_vespa_query_text, _sanitize_vespa_string
 
@@ -84,3 +87,38 @@ def test_search_lexical_sanitizes_query_before_user_query(monkeypatch):
             "ranking.profile": "bm25",
         }
     ]
+
+
+def test_retryable_request_error_detects_timeouts():
+    assert VespaBackend._is_retryable_request_error(TimeoutError("timed out"))
+    assert VespaBackend._is_retryable_request_error(socket.timeout("timed out"))
+    assert VespaBackend._is_retryable_request_error(urlerror.URLError(socket.timeout("timed out")))
+    assert not VespaBackend._is_retryable_request_error(RuntimeError("boom"))
+
+
+def test_request_retries_timeout_then_succeeds(monkeypatch):
+    backend = VespaBackend(VespaConfig(timeout_sec=120, retry_attempts=3, retry_backoff_seconds=0.0))
+    attempts = {"count": 0}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise socket.timeout("timed out")
+        return FakeResponse()
+
+    monkeypatch.setattr("bench.vespa_backend.urlrequest.urlopen", fake_urlopen)
+
+    resp = backend._request("GET", backend.connection_target(), "/test")
+
+    assert resp == {"ok": True}
+    assert attempts["count"] == 3

@@ -216,7 +216,9 @@ vespa:
   type: "vespa"
   url: "http://127.0.0.1:8081"
   deploy_url: "http://127.0.0.1:19071"
-  timeout_sec: 30
+  timeout_sec: 120
+  retry_attempts: 3
+  retry_backoff_seconds: 2.0
   batch_size: 250
   index_concurrency: 1
   collection_name: "trec_covid_vespa"

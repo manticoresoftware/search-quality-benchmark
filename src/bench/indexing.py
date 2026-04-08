@@ -1726,6 +1726,7 @@ def _run_index_weaviate(
 def _run_index_vespa(
     cfg: AppConfig,
     mode: str,
+    resume: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
@@ -1835,18 +1836,40 @@ def _run_index_vespa(
             cache2.close()
         if dim <= 0:
             raise RuntimeError("Cached vectors have invalid dimension.")
-        backend.recreate_collection(dimension=dim)
+        total_cached = len(docs_cached)
+        resume_offset = 0
+        if resume:
+            resume_offset = _resolve_vespa_resume_offset(
+                backend=backend,
+                docs_cached=docs_cached,
+                total_cached=total_cached,
+                dimension=dim,
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "engine": "vespa",
+                        "mode": "vector",
+                        "stage": "resume",
+                        "processed": resume_offset,
+                        "total": total_cached,
+                        "inserted": resume_offset,
+                        "failed_batches": 0,
+                        "retried_batches": 0,
+                    }
+                )
+        else:
+            backend.recreate_collection(dimension=dim)
         started = perf_counter()
-        inserted = 0
-        processed = 0
+        inserted = resume_offset
+        processed = resume_offset
         prepare_seconds = 0.0
         send_seconds = 0.0
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
-            total_cached = len(docs_cached)
             fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
             insert_batch_size = max(1, int(cfg.vespa.batch_size))
-            for fetch_start in range(0, total_cached, fetch_batch_size):
+            for fetch_start in range(resume_offset, total_cached, fetch_batch_size):
                 prep_started = perf_counter()
                 fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
                 vecs = cache3.get_vectors_many([k for _, k in fetch_chunk])
@@ -1935,10 +1958,51 @@ def _run_index_vespa(
     return out
 
 
+def _resolve_vespa_resume_offset(
+    *,
+    backend: VespaBackend,
+    docs_cached: list[tuple[dict[str, Any], str]],
+    total_cached: int,
+    dimension: int,
+) -> int:
+    try:
+        existing_count = int(backend.get_document_count(backend.collection_name()))
+    except Exception:
+        existing_count = 0
+    if existing_count <= 0:
+        backend.recreate_collection(dimension=dimension)
+        return 0
+    resume_offset = min(existing_count, total_cached)
+    probe_indexes = sorted(
+        {
+            idx
+            for idx in (
+                resume_offset - 1,
+                resume_offset - 2,
+                resume_offset - 5,
+                resume_offset - 10,
+            )
+            if 0 <= idx < total_cached
+        }
+    )
+    missing: list[str] = []
+    for idx in probe_indexes:
+        doc_id = str(docs_cached[idx][0].get("doc_id", ""))
+        if doc_id and not backend.document_exists(doc_id):
+            missing.append(f"{idx}:{doc_id}")
+    if missing:
+        raise RuntimeError(
+            "Refusing Vespa resume because boundary verification failed. "
+            f"Existing_count={existing_count} missing_docs={missing}"
+        )
+    return resume_offset
+
+
 def run_index(
     cfg: AppConfig,
     engine: str,
     mode: str,
+    resume: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
     if engine in ("manticore", "columnar"):
@@ -1956,5 +2020,5 @@ def run_index(
     if engine == "weaviate":
         return _run_index_weaviate(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "vespa":
-        return _run_index_vespa(cfg, mode=mode, progress_callback=progress_callback)
+        return _run_index_vespa(cfg, mode=mode, resume=resume, progress_callback=progress_callback)
     raise ValueError(f"Unsupported engine: {engine}")
