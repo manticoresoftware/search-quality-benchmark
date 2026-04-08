@@ -30,7 +30,7 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 ## Dataset
 
 - Default source: `beir/trec-covid` via `ir_datasets`.
-- Additional ready examples: `beir/nfcorpus/test`, `beir/scifact/test`, `beir/arguana`, `beir/scidocs`, `beir/fiqa/test`, `beir/cqadupstack/webmasters`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `hf-beir:theatticusproject/acord:test`.
+- Additional ready examples: `beir/nfcorpus/test`, `beir/scifact/test`, `beir/arguana`, `beir/scidocs`, `beir/fiqa/test`, `beir/cqadupstack/webmasters`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `dl-typo`, `hf-beir:theatticusproject/acord:test`.
 - Dataset catalogs/docs:
   - [ir-datasets.com](https://ir-datasets.com/)
   - [ACORD on Hugging Face](https://huggingface.co/datasets/theatticusproject/acord)
@@ -69,6 +69,7 @@ Examples:
 - `beir/fiqa/test` -> `data/prepared/beir-fiqa-test/`
 - `beir/cqadupstack/webmasters` -> `data/prepared/beir-cqadupstack-webmasters/`
 - `msmarco-passage/dev/small` -> `data/prepared/msmarco-passage-dev-small/`
+- `dl-typo` -> `data/prepared/dl-typo/`
 - `hf-beir:theatticusproject/acord:test` -> `data/prepared/hf-beir-theatticusproject-acord-test/`
 
 Recommended smaller BEIR datasets for faster iteration:
@@ -77,6 +78,12 @@ Recommended smaller BEIR datasets for faster iteration:
 - `beir/scidocs`
 - `beir/fiqa/test`
 - `beir/cqadupstack/webmasters`
+
+DL-Typo:
+- source id: `dl-typo`
+- uses the public typo queries and qrels from `ielab/CharacterBERT-DR`
+- reuses the standard MS MARCO Passage corpus on the document side
+- prepared topics store the typo query for benchmarking and also keep the corrected query as `query_clean` for reference
 
 Hugging Face BEIR-style sources:
 - format: `hf-beir:<repo_id>:<split>`

@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from urllib.request import urlopen
 from zipfile import ZipFile
 
 from .config import AppConfig
@@ -523,9 +524,191 @@ def _prepare_hf_beir_dataset(cfg: AppConfig, *, progress_callback: callable | No
     )
 
 
+_DL_TYPO_BASE_URL = "https://raw.githubusercontent.com/ielab/CharacterBERT-DR/main/data/dl-typo"
+_DL_TYPO_CORPUS_SOURCE = "msmarco-passage/trec-dl-2019/judged"
+
+
+def _read_remote_text(url: str) -> str:
+    with urlopen(url, timeout=120) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def _load_tsv_query_map(url: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw_line in _read_remote_text(url).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        topic_id, sep, query = line.partition("\t")
+        topic_id = topic_id.strip()
+        query = query.strip()
+        if not topic_id or not sep or not query:
+            continue
+        out[topic_id] = query
+    return out
+
+
+def _load_trec_qrels_rows(url: str) -> tuple[list[tuple[str, str, int]], set[str]]:
+    rows: list[tuple[str, str, int]] = []
+    doc_ids: set[str] = set()
+    for raw_line in _read_remote_text(url).splitlines():
+        parts = raw_line.strip().split()
+        if len(parts) < 4:
+            continue
+        topic_id, _, doc_id, relevance_raw = parts[:4]
+        try:
+            relevance = int(relevance_raw)
+        except (TypeError, ValueError):
+            relevance = 0
+        if not topic_id or not doc_id:
+            continue
+        rows.append((topic_id, doc_id, relevance))
+        doc_ids.add(doc_id)
+    return rows, doc_ids
+
+
+def _prepare_dl_typo_dataset(cfg: AppConfig, *, progress_callback: callable | None = None) -> PrepareResult:
+    import ir_datasets
+
+    out_dir = ensure_dir(Path(cfg.dataset.prepared_dir))
+    started = perf_counter()
+
+    typo_queries = _load_tsv_query_map(f"{_DL_TYPO_BASE_URL}/query.typo.tsv")
+    clean_queries = _load_tsv_query_map(f"{_DL_TYPO_BASE_URL}/query.tsv")
+    qrels_all_rows, qrels_doc_ids = _load_trec_qrels_rows(f"{_DL_TYPO_BASE_URL}/qrels.txt")
+
+    topics: list[dict[str, str]] = []
+    for topic_id, typo_query in sorted(typo_queries.items(), key=lambda item: item[0]):
+        clean_query = str(clean_queries.get(topic_id) or typo_query).strip()
+        typo_query = str(typo_query or "").strip()
+        if not typo_query:
+            continue
+        topics.append(
+            {
+                "topic_id": topic_id,
+                "query_short": typo_query,
+                "query_long": typo_query,
+                "query_clean": clean_query or typo_query,
+            }
+        )
+
+    ds = ir_datasets.load(_DL_TYPO_CORPUS_SOURCE)
+    max_docs = int(cfg.dataset.max_docs or 0)
+    keep_qrels_docs = bool(cfg.dataset.keep_qrels_docs)
+
+    docs: list[dict[str, Any]] = []
+    kept_doc_ids: set[str] = set()
+    selected_qrel_docs = 0
+    selected_extra_docs = 0
+    if max_docs <= 0:
+        for doc in _docs_iter_or_raise(ds, _DL_TYPO_CORPUS_SOURCE):
+            doc_id = _doc_attr(doc, ["doc_id", "id"])
+            if not doc_id:
+                continue
+            kept_doc_ids.add(doc_id)
+            docs.append(
+                {
+                    "id": len(docs) + 1,
+                    "doc_id": doc_id,
+                    "title": _doc_attr(doc, ["title"]),
+                    "abstract": _doc_attr(doc, ["abstract", "text", "body"]),
+                    "doi": _doc_attr(doc, ["doi"]),
+                    "date": _doc_attr(doc, ["date", "publish_time"]),
+                }
+            )
+    else:
+        target_qrels = len(qrels_doc_ids) if keep_qrels_docs else 0
+        target_extra = max(max_docs - target_qrels, 0)
+        extra_heap: list[tuple[int, int, dict[str, Any]]] = []
+        seq = 0
+        for doc in _docs_iter_or_raise(ds, _DL_TYPO_CORPUS_SOURCE):
+            doc_id = _doc_attr(doc, ["doc_id", "id"])
+            if not doc_id:
+                continue
+            row = {
+                "doc_id": doc_id,
+                "title": _doc_attr(doc, ["title"]),
+                "abstract": _doc_attr(doc, ["abstract", "text", "body"]),
+                "doi": _doc_attr(doc, ["doi"]),
+                "date": _doc_attr(doc, ["date", "publish_time"]),
+            }
+            if keep_qrels_docs and doc_id in qrels_doc_ids:
+                kept_doc_ids.add(doc_id)
+                docs.append({"id": 0, **row})
+                selected_qrel_docs += 1
+            elif target_extra > 0:
+                score = _doc_hash_u64(doc_id)
+                item = (-score, seq, row)
+                seq += 1
+                if len(extra_heap) < target_extra:
+                    heapq.heappush(extra_heap, item)
+                elif item > extra_heap[0]:
+                    heapq.heapreplace(extra_heap, item)
+        extras = [item[2] for item in sorted(extra_heap, reverse=True)]
+        for row in extras:
+            kept_doc_ids.add(str(row["doc_id"]))
+            docs.append({"id": 0, **row})
+            selected_extra_docs += 1
+        docs.sort(key=lambda d: str(d.get("doc_id", "")))
+        for idx, row in enumerate(docs, start=1):
+            row["id"] = idx
+
+    qrels_rows = [(t, d, rel) for (t, d, rel) in qrels_all_rows if d in kept_doc_ids]
+
+    docs_path = out_dir / "docs.jsonl"
+    topics_path = out_dir / "topics.jsonl"
+    qrels_path = out_dir / "qrels.tsv"
+    manifest_path = out_dir / "manifest.json"
+
+    write_jsonl(docs_path, docs)
+    write_jsonl(topics_path, topics)
+    write_tsv(qrels_path, qrels_rows)
+    manifest_payload = {
+        "dataset_source": cfg.dataset.source,
+        "dataset_upstream_source": _DL_TYPO_CORPUS_SOURCE,
+        "dataset_max_docs": max_docs,
+        "dataset_keep_qrels_docs": keep_qrels_docs,
+        "doc_count": len(docs),
+        "selected_qrel_docs": selected_qrel_docs if max_docs > 0 else len(qrels_doc_ids & kept_doc_ids),
+        "selected_extra_docs": selected_extra_docs if max_docs > 0 else max(len(docs) - len(qrels_doc_ids & kept_doc_ids), 0),
+        "topic_count": len(topics),
+        "qrels_count": len(qrels_rows),
+        "elapsed_seconds": round(perf_counter() - started, 3),
+    }
+    _write_embedding_manifest(
+        manifest_path,
+        manifest_payload,
+        cfg=cfg,
+        doc_total=len(docs),
+        doc_ok=0,
+        query_total=len(topics),
+        query_ok=0,
+        input_tokens=0,
+        estimated_cost_usd=0.0,
+    )
+    stats = _populate_embeddings(
+        cfg,
+        docs,
+        topics,
+        progress_callback=progress_callback,
+        manifest_path=manifest_path,
+        manifest_payload=manifest_payload,
+    )
+    write_json(manifest_path, _manifest_with_embeddings(manifest_payload, cfg=cfg, stats=stats))
+
+    return PrepareResult(
+        docs_path=docs_path,
+        topics_path=topics_path,
+        qrels_path=qrels_path,
+        manifest_path=manifest_path,
+    )
+
+
 def prepare_dataset(cfg: AppConfig, *, progress_callback: callable | None = None) -> PrepareResult:
     if str(cfg.dataset.source).startswith("hf-beir:"):
         return _prepare_hf_beir_dataset(cfg, progress_callback=progress_callback)
+    if str(cfg.dataset.source).strip().lower() == "dl-typo":
+        return _prepare_dl_typo_dataset(cfg, progress_callback=progress_callback)
 
     import ir_datasets
 
