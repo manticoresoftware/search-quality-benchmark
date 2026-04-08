@@ -1008,170 +1008,136 @@ msmarco_trecdl_2020_vespa_hybrid:
 dl_typo_manticore_fulltext:
   base: "msmarco_passage_manticore_fulltext"
   source: "dl-typo"
-  fulltext_table: "dl_typo_manticore"
-  vector_table: "dl_typo_manticore"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_manticore_vector:
   base: "msmarco_passage_manticore_vector"
   source: "dl-typo"
-  fulltext_table: "dl_typo_manticore"
-  vector_table: "dl_typo_manticore"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_manticore_hybrid:
   base: "msmarco_passage_manticore_hybrid"
   source: "dl-typo"
-  fulltext_table: "dl_typo_manticore"
-  vector_table: "dl_typo_manticore"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_columnar_fulltext:
   base: "msmarco_passage_columnar_fulltext"
   source: "dl-typo"
-  fulltext_table: "dl_typo_columnar"
-  vector_table: "dl_typo_columnar"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_columnar_vector:
   base: "msmarco_passage_columnar_vector"
   source: "dl-typo"
-  fulltext_table: "dl_typo_columnar"
-  vector_table: "dl_typo_columnar"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_columnar_hybrid:
   base: "msmarco_passage_columnar_hybrid"
   source: "dl-typo"
-  fulltext_table: "dl_typo_columnar"
-  vector_table: "dl_typo_columnar"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_qdrant_fulltext:
   base: "msmarco_passage_qdrant_fulltext"
   source: "dl-typo"
-  bm25_collection: "dl_typo_qdrant_fulltext"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_qdrant_vector:
   base: "msmarco_passage_qdrant_vector"
   source: "dl-typo"
-  dense_collection: "dl_typo_qdrant_vector"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_qdrant_hybrid:
   base: "msmarco_passage_qdrant_hybrid"
   source: "dl-typo"
-  bm25_collection: "dl_typo_qdrant_fulltext"
-  dense_collection: "dl_typo_qdrant_vector"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_meilisearch_fulltext:
   base: "msmarco_passage_meilisearch_fulltext"
   source: "dl-typo"
-  index_name: "dl_typo_meilisearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_meilisearch_vector:
   base: "msmarco_passage_meilisearch_vector"
   source: "dl-typo"
-  index_name: "dl_typo_meilisearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_meilisearch_hybrid:
   base: "msmarco_passage_meilisearch_hybrid"
   source: "dl-typo"
-  index_name: "dl_typo_meilisearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_opensearch_fulltext:
   base: "msmarco_passage_opensearch_fulltext"
   source: "dl-typo"
-  index_name: "dl_typo_opensearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_opensearch_vector:
   base: "msmarco_passage_opensearch_vector"
   source: "dl-typo"
-  index_name: "dl_typo_opensearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_opensearch_hybrid:
   base: "msmarco_passage_opensearch_hybrid"
   source: "dl-typo"
-  index_name: "dl_typo_opensearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_elasticsearch_fulltext:
   base: "msmarco_passage_elasticsearch_fulltext"
   source: "dl-typo"
-  index_name: "dl_typo_elasticsearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_elasticsearch_vector:
   base: "msmarco_passage_elasticsearch_vector"
   source: "dl-typo"
-  index_name: "dl_typo_elasticsearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_elasticsearch_hybrid:
   base: "msmarco_passage_elasticsearch_hybrid"
   source: "dl-typo"
-  index_name: "dl_typo_elasticsearch"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
   source: "dl-typo"
-  collection_name: "dl_typo_typesense"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "dl-typo"
-  collection_name: "dl_typo_typesense"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   source: "dl-typo"
-  collection_name: "dl_typo_typesense"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_weaviate_fulltext:
   base: "msmarco_passage_weaviate_fulltext"
   source: "dl-typo"
-  collection_name: "dl_typo_weaviate"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_weaviate_vector:
   base: "msmarco_passage_weaviate_vector"
   source: "dl-typo"
-  collection_name: "dl_typo_weaviate"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_weaviate_hybrid:
   base: "msmarco_passage_weaviate_hybrid"
   source: "dl-typo"
-  collection_name: "dl_typo_weaviate"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_vespa_fulltext:
   base: "msmarco_passage_vespa_fulltext"
   source: "dl-typo"
-  collection_name: "dl_typo_vespa"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_vespa_vector:
   base: "msmarco_passage_vespa_vector"
   source: "dl-typo"
-  collection_name: "dl_typo_vespa"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 dl_typo_vespa_hybrid:
   base: "msmarco_passage_vespa_hybrid"
   source: "dl-typo"
-  collection_name: "dl_typo_vespa"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 nfcorpus_manticore_fulltext:

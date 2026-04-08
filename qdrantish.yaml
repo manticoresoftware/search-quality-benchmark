@@ -74,14 +74,10 @@ msmarco_trecdl_2020_manticore_hybrid_qdrantish:
 dl_typo_manticore_fulltext_qdrantish:
   base: "msmarco_passage_manticore_fulltext_qdrantish"
   source: "dl-typo"
-  fulltext_table: "dl_typo_manticore_qdrantish"
-  vector_table: "dl_typo_manticore_qdrantish"
 
 dl_typo_manticore_hybrid_qdrantish:
   base: "msmarco_passage_manticore_hybrid_qdrantish"
   source: "dl-typo"
-  fulltext_table: "dl_typo_manticore_qdrantish"
-  vector_table: "dl_typo_manticore_qdrantish"
 
 nfcorpus_manticore_fulltext_qdrantish:
   base: "manticore"
