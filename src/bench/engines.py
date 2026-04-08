@@ -267,8 +267,8 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def _parse_proc_status_kib(pid: int) -> dict[str, int]:
-    status_path = Path("/proc") / str(pid) / "status"
+def _parse_proc_status_kib(pid: int, *, proc_root: Path = Path("/proc")) -> dict[str, int]:
+    status_path = proc_root / str(pid) / "status"
     out: dict[str, int] = {}
     try:
         text = status_path.read_text(encoding="utf-8")
@@ -290,15 +290,58 @@ def _parse_proc_status_kib(pid: int) -> dict[str, int]:
     return out
 
 
-def _linux_mem_breakdown(pid: int) -> dict[str, str]:
+def _linux_proc_tree_pids(pid: int, *, proc_root: Path = Path("/proc")) -> list[int]:
+    if pid <= 0:
+        return []
+    if not (proc_root / str(pid)).exists():
+        return []
+    parent_to_children: dict[int, list[int]] = {}
+    try:
+        proc_entries = list(proc_root.iterdir())
+    except Exception:
+        return [pid]
+    for child_dir in proc_entries:
+        if not child_dir.is_dir():
+            continue
+        try:
+            child_pid = int(child_dir.name)
+        except Exception:
+            continue
+        status = _parse_proc_status_kib(child_pid, proc_root=proc_root)
+        if not status:
+            continue
+        ppid = int(status.get("PPid", 0))
+        parent_to_children.setdefault(ppid, []).append(child_pid)
+    seen: set[int] = set()
+    ordered: list[int] = []
+    stack = [pid]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        ordered.append(current)
+        for child_pid in reversed(sorted(parent_to_children.get(current, []))):
+            stack.append(child_pid)
+    return ordered
+
+
+def _linux_mem_breakdown(pid: int, *, proc_root: Path = Path("/proc")) -> dict[str, str]:
     if pid <= 0:
         return {"anon": "-", "mmap": "-", "locked": "-"}
-    status = _parse_proc_status_kib(pid)
-    if not status:
+    pids = _linux_proc_tree_pids(pid, proc_root=proc_root)
+    if not pids:
         return {"anon": "-", "mmap": "-", "locked": "-"}
-    anon_kib = int(status.get("RssAnon", 0))
-    mmap_kib = int(status.get("RssFile", 0)) + int(status.get("RssShmem", 0))
-    locked_kib = int(status.get("VmLck", 0))
+    anon_kib = 0
+    mmap_kib = 0
+    locked_kib = 0
+    for proc_pid in pids:
+        status = _parse_proc_status_kib(proc_pid, proc_root=proc_root)
+        if not status:
+            continue
+        anon_kib += int(status.get("RssAnon", 0))
+        mmap_kib += int(status.get("RssFile", 0)) + int(status.get("RssShmem", 0))
+        locked_kib += int(status.get("VmLck", 0))
     return {
         "anon": _human_size_kib(anon_kib),
         "mmap": _human_size_kib(mmap_kib),
