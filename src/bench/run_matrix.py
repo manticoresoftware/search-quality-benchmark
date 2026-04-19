@@ -450,6 +450,10 @@ def _draw_row(
             color_engine = curses.color_pair(1)
         elif v.engine == "manticore_avgdl":
             color_engine = curses.color_pair(6)
+        elif v.engine == "manticore_default_ranker":
+            color_engine = curses.color_pair(3)
+        elif v.engine == "manticore_all_default":
+            color_engine = curses.color_pair(4)
         elif v.engine == "columnar":
             color_engine = curses.color_pair(15)
         elif v.engine == "qdrant":

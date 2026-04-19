@@ -359,7 +359,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             )
         )
 
-    engine_order = {"manticore": 0, "manticore_avgdl": 1, "columnar": 2, "qdrant": 3, "meilisearch": 4, "opensearch": 5, "elasticsearch": 6, "typesense": 7, "weaviate": 8, "vespa": 9}
+    engine_order = {"manticore": 0, "manticore_avgdl": 1, "manticore_default_ranker": 2, "manticore_all_default": 3, "columnar": 4, "qdrant": 5, "meilisearch": 6, "opensearch": 7, "elasticsearch": 8, "typesense": 9, "weaviate": 10, "vespa": 11}
     kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
     return sorted(
         out,
@@ -461,6 +461,10 @@ def _draw_row(
             color_engine = curses.color_pair(1)
         elif v.engine == "manticore_avgdl":
             color_engine = curses.color_pair(6)
+        elif v.engine == "manticore_default_ranker":
+            color_engine = curses.color_pair(3)
+        elif v.engine == "manticore_all_default":
+            color_engine = curses.color_pair(4)
         elif v.engine == "columnar":
             color_engine = curses.color_pair(15)
         elif v.engine == "qdrant":
