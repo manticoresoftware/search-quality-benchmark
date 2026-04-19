@@ -9,7 +9,7 @@ import re
 from time import perf_counter, sleep, time
 from typing import Any, Callable
 
-from .config import AppConfig
+from .config import AppConfig, display_engine_for_profile, is_manticore_like_type
 from .elasticsearch_backend import ElasticsearchBackend
 from .embedding_client import EmbeddingClient, resolved_embedding_model, resolved_embedding_similarity
 from .io_utils import ensure_dir, generate_run_id, read_jsonl
@@ -318,7 +318,7 @@ def _manticore_search_request(
 
 
 def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
-    if engine in ("manticore", "columnar"):
+    if is_manticore_like_type(engine):
         return cfg.manticore.fulltext_table if mode == "fulltext" else cfg.manticore.vector_table
     if engine == "qdrant":
         if mode == "fulltext":
@@ -1293,7 +1293,8 @@ def _build_resolved_config_lines(cfg: AppConfig, engine: str, mode: str, profile
         f"engine: {engine}",
         f"mode: {'full-text' if mode == 'fulltext' else mode}",
     ]
-    visible_sections = {"dataset", "benchmark", "metrics", engine}
+    visible_engine = "manticore" if is_manticore_like_type(engine) else engine
+    visible_sections = {"dataset", "benchmark", "metrics", visible_engine}
     cfg_obj = asdict(cfg)
     filtered_cfg = {k: val for k, val in cfg_obj.items() if k in visible_sections}
     flattened: list[str] = []
@@ -1304,7 +1305,7 @@ def _build_resolved_config_lines(cfg: AppConfig, engine: str, mode: str, profile
 
 def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> list[str]:
     lines: list[str] = []
-    if engine in ("manticore", "columnar"):
+    if is_manticore_like_type(engine):
         client = ManticoreClient(cfg.manticore)
         try:
             for m in modes:
@@ -1418,7 +1419,7 @@ def run_benchmark(
     run_id = generate_run_id()
     run_at_unix = int(time())
 
-    if engine in ("manticore", "columnar"):
+    if is_manticore_like_type(engine):
         if mode not in ("fulltext", "vector", "hybrid", "both"):
             raise ValueError("For engine=manticore, mode must be one of: fulltext, vector, hybrid, both")
         modes = [mode] if mode in ("fulltext", "vector", "hybrid") else ["fulltext", "vector"]
@@ -1502,7 +1503,7 @@ def run_benchmark(
     for m in modes:
         for t in warmup_topics:
             qtext = query_text_for_mode(t, m, fulltext_query_variant=cfg.manticore.fulltext_query_variant)
-            if engine in ("manticore", "columnar"):
+            if is_manticore_like_type(engine):
                 _run_single_query_manticore(
                     cfg,
                     m,
@@ -1620,7 +1621,7 @@ def run_benchmark(
     last_reported_completed = 0
     last_report_at = started
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        if engine in ("manticore", "columnar"):
+        if is_manticore_like_type(engine):
             futures = [
                 pool.submit(
                     _run_single_query_manticore,
@@ -1856,7 +1857,7 @@ def run_benchmark(
         }
 
     diagnostics: dict[str, list[dict[str, Any]]]
-    if engine in ("manticore", "columnar"):
+    if is_manticore_like_type(engine):
         diagnostics = _collect_diagnostics_manticore(cfg, modes, topics)
     elif engine == "meilisearch":
         diagnostics = _collect_diagnostics_meilisearch(cfg, modes, topics, query_vectors=query_vectors)
@@ -1874,7 +1875,7 @@ def run_benchmark(
         diagnostics = {m: [] for m in modes}
 
     if mode == "vector":
-        if engine in ("manticore", "columnar"):
+        if is_manticore_like_type(engine):
             model_label = _manticore_vector_label(cfg)
         elif engine == "qdrant":
             model_label = _qdrant_vector_label(cfg)
@@ -1891,7 +1892,7 @@ def run_benchmark(
         else:
             model_label = _meilisearch_vector_label(cfg)
     elif mode == "hybrid":
-        if engine in ("manticore", "columnar"):
+        if is_manticore_like_type(engine):
             model = resolved_embedding_model(cfg)
             model_label = _manticore_vector_label(cfg).replace(model, f"{model} [fusion=rrf]", 1)
         elif engine == "qdrant":
@@ -1909,7 +1910,7 @@ def run_benchmark(
         else:
             model_label = _meilisearch_hybrid_label(cfg)
     elif mode == "fulltext":
-        if engine in ("manticore", "columnar"):
+        if is_manticore_like_type(engine):
             model_label = _manticore_fulltext_ranker_label(cfg)
         elif engine == "qdrant":
             model_label = "Qdrant/bm25"
@@ -1927,7 +1928,7 @@ def run_benchmark(
             model_label = _meilisearch_fulltext_label(cfg)
     else:
         if "vector" in modes:
-            if engine in ("manticore", "columnar"):
+            if is_manticore_like_type(engine):
                 model_label = _manticore_vector_label(cfg)
             elif engine == "qdrant":
                 model_label = _qdrant_vector_label(cfg)
@@ -1944,12 +1945,13 @@ def run_benchmark(
         else:
             model_label = "n/a"
 
+    report_engine = display_engine_for_profile(engine, profile_name)
     metrics = {
         "run_id": run_id,
         "run_at_unix": run_at_unix,
         "profile": profile_name or "",
         "dataset_source": cfg.dataset.source,
-        "engine": engine,
+        "engine": report_engine,
         "mode": mode,
         "model": model_label,
         "target": _target_name_for_run(cfg, engine=engine, mode=mode),
@@ -1963,7 +1965,7 @@ def run_benchmark(
         "performance": perf_metrics,
         "runtime_seconds": total_runtime,
     }
-    metrics["resolved_config_lines"] = _build_resolved_config_lines(cfg, engine=engine, mode=mode, profile_name=profile_name)
+    metrics["resolved_config_lines"] = _build_resolved_config_lines(cfg, engine=report_engine, mode=mode, profile_name=profile_name)
     metrics["live_state_lines"] = _build_live_state_lines(cfg, engine=engine, modes=modes)
     metrics["diagnostics"] = diagnostics
     return run_id, metrics, per_query_rows

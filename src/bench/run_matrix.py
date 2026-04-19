@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from .config import AppConfig, _raw_config, load_engine_targets
+from .config import AppConfig, _raw_config, display_engine_for_profile, is_manticore_like_type, load_engine_targets
 from .discovery import discover_config_paths
 from .elasticsearch_backend import ElasticsearchBackend
 from .embedding_client import resolved_embedding_model
@@ -265,11 +265,11 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
             if target.name not in visible_names:
                 continue
             cfg = target.cfg
-            engine = target.type
+            engine = display_engine_for_profile(target.type, target.name)
             modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
-                    if engine in ("manticore", "columnar"):
+                    if is_manticore_like_type(engine):
                         model_or_ranker = _manticore_vector_label(cfg)
                     elif engine == "qdrant":
                         model_or_ranker = _qdrant_vector_label(cfg)
@@ -286,7 +286,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     else:
                         model_or_ranker = _meilisearch_vector_label(cfg)
                 elif mode == "hybrid":
-                    if engine in ("manticore", "columnar"):
+                    if is_manticore_like_type(engine):
                         model = resolved_embedding_model(cfg)
                         model_or_ranker = _manticore_vector_label(cfg).replace(model, f"{model} [fusion=rrf]", 1)
                     elif engine == "qdrant":
@@ -301,7 +301,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _elasticsearch_hybrid_label(cfg)
                     else:
                         model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
-                elif engine in ("manticore", "columnar"):
+                elif is_manticore_like_type(engine):
                     extras: list[str] = []
                     search_opts = normalize_search_options(cfg.manticore.search_options)
                     if search_opts:
@@ -448,6 +448,8 @@ def _draw_row(
             color_entry = curses.color_pair(8)
         if v.engine == "manticore":
             color_engine = curses.color_pair(1)
+        elif v.engine == "manticore_avgdl":
+            color_engine = curses.color_pair(6)
         elif v.engine == "columnar":
             color_engine = curses.color_pair(15)
         elif v.engine == "qdrant":
@@ -490,7 +492,7 @@ def _draw_row(
 
 
 def _variant_target_name(v: RunVariant) -> str:
-    if v.engine in ("manticore", "columnar"):
+    if is_manticore_like_type(v.engine):
         return v.cfg.manticore.fulltext_table if v.mode == "fulltext" else v.cfg.manticore.vector_table
     if v.engine == "qdrant":
         if v.mode == "fulltext":
@@ -516,7 +518,7 @@ def _variant_target_name(v: RunVariant) -> str:
 def is_variant_runnable(v: RunVariant) -> bool:
     try:
         target = _variant_target_name(v)
-        if v.engine in ("manticore", "columnar"):
+        if is_manticore_like_type(v.engine):
             client = ManticoreClient(v.cfg.manticore)
             try:
                 return bool(client.table_exists(target))
@@ -576,7 +578,7 @@ def _resolve_target_status(v: RunVariant) -> RunTargetStatus:
 
 def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
     try:
-        if v.engine in ("manticore", "columnar"):
+        if is_manticore_like_type(v.engine):
             client = ManticoreClient(v.cfg.manticore)
             try:
                 table = _variant_target_name(v)

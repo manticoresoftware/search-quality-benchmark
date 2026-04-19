@@ -6,7 +6,7 @@ from threading import local
 from time import perf_counter
 from typing import Any, Callable
 
-from .config import AppConfig
+from .config import AppConfig, is_manticore_like_type
 from .elasticsearch_backend import ElasticsearchBackend
 from .embedding_client import resolved_embedding_model
 from .io_utils import read_jsonl
@@ -2005,7 +2005,7 @@ def run_index(
     resume: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ModeIndexResult]:
-    if engine in ("manticore", "columnar"):
+    if is_manticore_like_type(engine):
         return _run_index_manticore(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "qdrant":
         return _run_index_qdrant(cfg, mode=mode, progress_callback=progress_callback)

@@ -329,7 +329,19 @@ _SECTION_NAMES = {
     "dataset",
     "metrics",
 }
-_MANTICORE_LIKE_TYPES = {"manticore", "columnar"}
+_MANTICORE_LIKE_TYPES = {"manticore", "manticore_avgdl", "columnar"}
+
+
+def is_manticore_like_type(engine: str) -> bool:
+    return str(engine or "").strip().lower() in _MANTICORE_LIKE_TYPES
+
+
+def display_engine_for_profile(engine: str, profile_name: str | None = None) -> str:
+    e = str(engine or "").strip().lower()
+    profile = str(profile_name or "").strip().lower()
+    if e == "manticore" and "_manticore_" in profile and "_avgdl_" in profile:
+        return "manticore_avgdl"
+    return e
 
 
 def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -438,7 +450,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
+        if e_type in ("manticore", "manticore_avgdl", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
             return e_type
         if isinstance(ent.get("manticore"), dict) and not any(
             isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
