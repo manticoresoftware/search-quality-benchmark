@@ -2539,3 +2539,111 @@ cqadupstack_webmasters_vespa_hybrid:
   source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_vespa"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
+# Manticore BM25A avgdl override profiles.
+# These exercise bm25a(k1, b, avgdl), introduced in Manticore commit
+# adf0782b57f0161b7d8158144a83a1dc019f08a5. They inherit the existing
+# physical tables and only change the query-time ranker expression.
+trec_covid_manticore_fulltext_avgdl_256:
+  base: "trec_covid_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+trec_covid_manticore_hybrid_avgdl_256:
+  base: "trec_covid_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_passage_manticore_fulltext_avgdl_256:
+  base: "msmarco_passage_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_passage_manticore_hybrid_avgdl_256:
+  base: "msmarco_passage_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_lite_manticore_fulltext_avgdl_256:
+  base: "msmarco_lite_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_lite_manticore_hybrid_avgdl_256:
+  base: "msmarco_lite_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_trecdl_2019_manticore_fulltext_avgdl_256:
+  base: "msmarco_trecdl_2019_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_trecdl_2019_manticore_hybrid_avgdl_256:
+  base: "msmarco_trecdl_2019_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_trecdl_2020_manticore_fulltext_avgdl_256:
+  base: "msmarco_trecdl_2020_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_trecdl_2020_manticore_hybrid_avgdl_256:
+  base: "msmarco_trecdl_2020_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+dl_typo_manticore_fulltext_avgdl_256:
+  base: "dl_typo_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+dl_typo_manticore_hybrid_avgdl_256:
+  base: "dl_typo_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+nfcorpus_manticore_fulltext_avgdl_256:
+  base: "nfcorpus_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+nfcorpus_manticore_hybrid_avgdl_256:
+  base: "nfcorpus_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+acord_manticore_fulltext_avgdl_256:
+  base: "acord_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+acord_manticore_hybrid_avgdl_256:
+  base: "acord_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+scifact_manticore_fulltext_avgdl_256:
+  base: "scifact_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+scifact_manticore_hybrid_avgdl_256:
+  base: "scifact_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+arguana_manticore_fulltext_avgdl_256:
+  base: "arguana_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+arguana_manticore_hybrid_avgdl_256:
+  base: "arguana_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+scidocs_manticore_fulltext_avgdl_256:
+  base: "scidocs_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+scidocs_manticore_hybrid_avgdl_256:
+  base: "scidocs_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+fiqa_manticore_fulltext_avgdl_256:
+  base: "fiqa_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+fiqa_manticore_hybrid_avgdl_256:
+  base: "fiqa_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+cqadupstack_webmasters_manticore_fulltext_avgdl_256:
+  base: "cqadupstack_webmasters_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+cqadupstack_webmasters_manticore_hybrid_avgdl_256:
+  base: "cqadupstack_webmasters_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
