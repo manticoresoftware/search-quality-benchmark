@@ -329,7 +329,12 @@ _SECTION_NAMES = {
     "dataset",
     "metrics",
 }
-_MANTICORE_VIRTUAL_TYPES = {"manticore_avgdl", "manticore_default_ranker", "manticore_all_default"}
+_MANTICORE_VIRTUAL_TYPES = {
+    "manticore_avgdl",
+    "manticore_default_ranker",
+    "manticore_all_default",
+    "manticore_full_default",
+}
 _MANTICORE_LIKE_TYPES = {"manticore", "columnar"} | _MANTICORE_VIRTUAL_TYPES
 
 
@@ -348,6 +353,8 @@ def display_engine_for_profile(engine: str, profile_name: str | None = None) -> 
         return "manticore_default_ranker"
     if e == "manticore" and "_manticore_all_default_" in profile:
         return "manticore_all_default"
+    if e == "manticore" and "_manticore_full_default_" in profile:
+        return "manticore_full_default"
     return e
 
 
@@ -457,7 +464,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
+        if e_type in ("manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
             return e_type
         if isinstance(ent.get("manticore"), dict) and not any(
             isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")

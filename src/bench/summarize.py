@@ -102,6 +102,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "Manticore all-default vector (manticore_all_default)"
     if engine == "manticore_all_default" and mode == "hybrid":
         return "Manticore all-default hybrid (manticore_all_default)"
+    if engine == "manticore_full_default" and mode == "fulltext":
+        return "Manticore full-default full-text (manticore_full_default)"
+    if engine == "manticore_full_default" and mode == "vector":
+        return "Manticore full-default vector (manticore_full_default)"
+    if engine == "manticore_full_default" and mode == "hybrid":
+        return "Manticore full-default hybrid (manticore_full_default)"
     if engine == "columnar" and mode == "fulltext":
         return "Columnar full-text (columnar)"
     if engine == "columnar" and mode == "vector":
@@ -242,6 +248,8 @@ def discover_artifacts() -> list[ArtifactRow]:
                 engine = "manticore_default_ranker"
             if engine == "manticore" and "_manticore_all_default_" in profile.lower():
                 engine = "manticore_all_default"
+            if engine == "manticore" and "_manticore_full_default_" in profile.lower():
+                engine = "manticore_full_default"
             out.append(
                 ArtifactRow(
                     run_id=run_id_val,
@@ -320,6 +328,8 @@ def _color_pair_for_engine(engine: str) -> int:
         return 3
     if e == "manticore_all_default":
         return 4
+    if e == "manticore_full_default":
+        return 12
     if e == "columnar":
         return 15
     if e == "qdrant":
@@ -2463,6 +2473,7 @@ def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]
         "manticore_avgdl": "#84cc16",
         "manticore_default_ranker": "#f97316",
         "manticore_all_default": "#64748b",
+        "manticore_full_default": "#0ea5e9",
         "columnar": "#94a3b8",
         "opensearch": "#f59e0b",
         "elasticsearch": "#06b6d4",
@@ -2502,6 +2513,7 @@ def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
         "manticore_avgdl": "#84cc16",
         "manticore_default_ranker": "#f97316",
         "manticore_all_default": "#64748b",
+        "manticore_full_default": "#0ea5e9",
         "columnar": "#94a3b8",
         "opensearch": "#f59e0b",
         "elasticsearch": "#06b6d4",
@@ -2658,6 +2670,8 @@ def _engine_color(engine: str) -> str:
         return "#f97316"
     if e == "manticore_all_default":
         return "#64748b"
+    if e == "manticore_full_default":
+        return "#0ea5e9"
     if e == "columnar":
         return "#94a3b8"
     if e == "qdrant":
@@ -2855,6 +2869,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
         "manticore_avgdl": "#84cc16",
         "manticore_default_ranker": "#f97316",
         "manticore_all_default": "#64748b",
+        "manticore_full_default": "#0ea5e9",
         "columnar": "#94a3b8",
         "opensearch": "#f59e0b",
         "elasticsearch": "#06b6d4",

@@ -890,7 +890,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--reset-embeddings", action="store_true", help="Clear current-model embeddings for the selected prepared dataset(s)")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -905,7 +905,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)
