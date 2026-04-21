@@ -2552,6 +2552,9 @@ trec_covid_manticore_hybrid_avgdl_256:
   base: "trec_covid_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+trec_covid_manticore_vector_avgdl_256:
+  base: "trec_covid_manticore_vector"
+
 msmarco_passage_manticore_fulltext_avgdl_256:
   base: "msmarco_passage_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2559,6 +2562,9 @@ msmarco_passage_manticore_fulltext_avgdl_256:
 msmarco_passage_manticore_hybrid_avgdl_256:
   base: "msmarco_passage_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_passage_manticore_vector_avgdl_256:
+  base: "msmarco_passage_manticore_vector"
 
 msmarco_lite_manticore_fulltext_avgdl_256:
   base: "msmarco_lite_manticore_fulltext"
@@ -2568,6 +2574,9 @@ msmarco_lite_manticore_hybrid_avgdl_256:
   base: "msmarco_lite_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+msmarco_lite_manticore_vector_avgdl_256:
+  base: "msmarco_lite_manticore_vector"
+
 msmarco_trecdl_2019_manticore_fulltext_avgdl_256:
   base: "msmarco_trecdl_2019_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2575,6 +2584,9 @@ msmarco_trecdl_2019_manticore_fulltext_avgdl_256:
 msmarco_trecdl_2019_manticore_hybrid_avgdl_256:
   base: "msmarco_trecdl_2019_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+msmarco_trecdl_2019_manticore_vector_avgdl_256:
+  base: "msmarco_trecdl_2019_manticore_vector"
 
 msmarco_trecdl_2020_manticore_fulltext_avgdl_256:
   base: "msmarco_trecdl_2020_manticore_fulltext"
@@ -2584,6 +2596,9 @@ msmarco_trecdl_2020_manticore_hybrid_avgdl_256:
   base: "msmarco_trecdl_2020_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+msmarco_trecdl_2020_manticore_vector_avgdl_256:
+  base: "msmarco_trecdl_2020_manticore_vector"
+
 dl_typo_manticore_fulltext_avgdl_256:
   base: "dl_typo_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2591,6 +2606,9 @@ dl_typo_manticore_fulltext_avgdl_256:
 dl_typo_manticore_hybrid_avgdl_256:
   base: "dl_typo_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+dl_typo_manticore_vector_avgdl_256:
+  base: "dl_typo_manticore_vector"
 
 nfcorpus_manticore_fulltext_avgdl_256:
   base: "nfcorpus_manticore_fulltext"
@@ -2600,6 +2618,9 @@ nfcorpus_manticore_hybrid_avgdl_256:
   base: "nfcorpus_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+nfcorpus_manticore_vector_avgdl_256:
+  base: "nfcorpus_manticore_vector"
+
 acord_manticore_fulltext_avgdl_256:
   base: "acord_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2607,6 +2628,9 @@ acord_manticore_fulltext_avgdl_256:
 acord_manticore_hybrid_avgdl_256:
   base: "acord_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+acord_manticore_vector_avgdl_256:
+  base: "acord_manticore_vector"
 
 scifact_manticore_fulltext_avgdl_256:
   base: "scifact_manticore_fulltext"
@@ -2616,6 +2640,9 @@ scifact_manticore_hybrid_avgdl_256:
   base: "scifact_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+scifact_manticore_vector_avgdl_256:
+  base: "scifact_manticore_vector"
+
 arguana_manticore_fulltext_avgdl_256:
   base: "arguana_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2623,6 +2650,9 @@ arguana_manticore_fulltext_avgdl_256:
 arguana_manticore_hybrid_avgdl_256:
   base: "arguana_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+arguana_manticore_vector_avgdl_256:
+  base: "arguana_manticore_vector"
 
 scidocs_manticore_fulltext_avgdl_256:
   base: "scidocs_manticore_fulltext"
@@ -2632,6 +2662,9 @@ scidocs_manticore_hybrid_avgdl_256:
   base: "scidocs_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+scidocs_manticore_vector_avgdl_256:
+  base: "scidocs_manticore_vector"
+
 fiqa_manticore_fulltext_avgdl_256:
   base: "fiqa_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2640,6 +2673,9 @@ fiqa_manticore_hybrid_avgdl_256:
   base: "fiqa_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
 
+fiqa_manticore_vector_avgdl_256:
+  base: "fiqa_manticore_vector"
+
 cqadupstack_webmasters_manticore_fulltext_avgdl_256:
   base: "cqadupstack_webmasters_manticore_fulltext"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
@@ -2647,6 +2683,9 @@ cqadupstack_webmasters_manticore_fulltext_avgdl_256:
 cqadupstack_webmasters_manticore_hybrid_avgdl_256:
   base: "cqadupstack_webmasters_manticore_hybrid"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+cqadupstack_webmasters_manticore_vector_avgdl_256:
+  base: "cqadupstack_webmasters_manticore_vector"
 
 # Manticore default-ranker profiles.
 # These inherit the existing physical tables and clear query-time ranker options.
