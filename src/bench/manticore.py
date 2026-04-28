@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import re
 from time import time
 from typing import Any, Callable, Iterable
 
@@ -100,12 +101,29 @@ class ManticoreClient:
             return resp.json()
         except json.JSONDecodeError as exc:
             body = resp.text or ""
+            doc_ids = self._extract_doc_ids_from_invalid_json(body)
+            if doc_ids:
+                return {
+                    "hits": {
+                        "hits": [{"_source": {"doc_id": doc_id}} for doc_id in doc_ids],
+                    },
+                    "_warning": (
+                        "Manticore returned invalid JSON; recovered doc_ids from raw response body. "
+                        f"JSON error at char {exc.pos}: {exc.msg}"
+                    ),
+                }
             snippet = body[max(0, exc.pos - 200) : exc.pos + 200]
             snippet = snippet.replace("\r", "\\r").replace("\n", "\\n")
             raise ValueError(
                 f"Manticore returned invalid JSON at char {exc.pos}: {exc.msg}. "
                 f"Body snippet: {snippet}"
             ) from exc
+
+    @staticmethod
+    def _extract_doc_ids_from_invalid_json(body: str) -> list[str]:
+        if not body:
+            return []
+        return re.findall(r'"_source"\s*:\s*\{\s*"doc_id"\s*:\s*"([^"]+)"\s*\}', body)
 
     def show_profile(self) -> list[dict[str, Any]]:
         return self.query("SHOW PROFILE")
