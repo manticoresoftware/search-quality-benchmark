@@ -2540,6 +2540,206 @@ cqadupstack_webmasters_vespa_hybrid:
   collection_name: "cqadupstack_webmasters_vespa"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
+wands_manticore_fulltext:
+  base: "manticore"
+  type: "fulltext"
+  source: "wands"
+  fulltext_table: "wands_manticore"
+  vector_table: "wands_manticore"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_manticore_vector:
+  base: "manticore_vector_1bit"
+  source: "wands"
+  fulltext_table: "wands_manticore"
+  vector_table: "wands_manticore"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_manticore_hybrid:
+  base: "wands_manticore_fulltext"
+  source: "wands"
+  type: "hybrid"
+  fulltext_table: "wands_manticore"
+  vector_table: "wands_manticore"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+wands_columnar_fulltext:
+  base: "columnar"
+  type: "fulltext"
+  source: "wands"
+  fulltext_table: "wands_columnar"
+  vector_table: "wands_columnar"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_columnar_vector:
+  base: "columnar_vector_1bit"
+  source: "wands"
+  fulltext_table: "wands_columnar"
+  vector_table: "wands_columnar"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_columnar_hybrid:
+  base: "wands_columnar_fulltext"
+  source: "wands"
+  type: "hybrid"
+  fulltext_table: "wands_columnar"
+  vector_table: "wands_columnar"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+wands_qdrant_fulltext:
+  base: "qdrant"
+  type: "fulltext"
+  source: "wands"
+  bm25_collection: "wands_qdrant_fulltext"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_qdrant_vector:
+  base: "qdrant_vector_1bit"
+  source: "wands"
+  dense_collection: "wands_qdrant_vector"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_qdrant_hybrid:
+  base: "qdrant_hybrid_1bit"
+  source: "wands"
+  bm25_collection: "wands_qdrant_fulltext"
+  dense_collection: "wands_qdrant_vector"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_meilisearch_fulltext:
+  base: "meilisearch"
+  type: "fulltext"
+  source: "wands"
+  index_name: "wands_meilisearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_meilisearch_vector:
+  base: "meilisearch_vector_1bit"
+  source: "wands"
+  index_name: "wands_meilisearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_meilisearch_hybrid:
+  base: "meilisearch_hybrid_1bit"
+  source: "wands"
+  index_name: "wands_meilisearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_opensearch_fulltext:
+  base: "opensearch"
+  type: "fulltext"
+  source: "wands"
+  index_name: "wands_opensearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_opensearch_vector:
+  base: "opensearch"
+  type: "vector"
+  source: "wands"
+  index_name: "wands_opensearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_opensearch_hybrid:
+  base: "opensearch"
+  type: "hybrid"
+  source: "wands"
+  index_name: "wands_opensearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_elasticsearch_fulltext:
+  base: "elasticsearch"
+  type: "fulltext"
+  source: "wands"
+  index_name: "wands_elasticsearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_elasticsearch_vector:
+  base: "elasticsearch"
+  type: "vector"
+  source: "wands"
+  index_name: "wands_elasticsearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_elasticsearch_hybrid:
+  base: "elasticsearch"
+  type: "hybrid"
+  source: "wands"
+  index_name: "wands_elasticsearch"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_typesense_fulltext:
+  base: "typesense"
+  type: "fulltext"
+  source: "wands"
+  collection_name: "wands_typesense"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_typesense_vector:
+  base: "typesense"
+  type: "vector"
+  source: "wands"
+  collection_name: "wands_typesense"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_typesense_hybrid:
+  base: "typesense"
+  type: "hybrid"
+  source: "wands"
+  collection_name: "wands_typesense"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_weaviate_fulltext:
+  base: "weaviate"
+  type: "fulltext"
+  source: "wands"
+  collection_name: "wands_weaviate"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_weaviate_vector:
+  base: "weaviate"
+  type: "vector"
+  source: "wands"
+  collection_name: "wands_weaviate"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_weaviate_hybrid:
+  base: "weaviate"
+  type: "hybrid"
+  source: "wands"
+  collection_name: "wands_weaviate"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_vespa_fulltext:
+  base: "vespa"
+  type: "fulltext"
+  source: "wands"
+  collection_name: "wands_vespa"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_vespa_vector:
+  base: "vespa"
+  type: "vector"
+  source: "wands"
+  collection_name: "wands_vespa"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_vespa_hybrid:
+  base: "vespa"
+  type: "hybrid"
+  source: "wands"
+  collection_name: "wands_vespa"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
 # Manticore BM25A avgdl override profiles.
 # These exercise bm25a(k1, b, avgdl), introduced in Manticore commit
 # adf0782b57f0161b7d8158144a83a1dc019f08a5. They inherit the existing
@@ -2687,6 +2887,17 @@ cqadupstack_webmasters_manticore_hybrid_avgdl_256:
 cqadupstack_webmasters_manticore_vector_avgdl_256:
   base: "cqadupstack_webmasters_manticore_vector"
 
+wands_manticore_fulltext_avgdl_256:
+  base: "wands_manticore_fulltext"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+wands_manticore_hybrid_avgdl_256:
+  base: "wands_manticore_hybrid"
+  search_options: "ranker=expr('1000*bm25a(1.2,0.75,256)')"
+
+wands_manticore_vector_avgdl_256:
+  base: "wands_manticore_vector"
+
 # Manticore default-ranker profiles.
 # These inherit the existing physical tables and clear query-time ranker options.
 trec_covid_manticore_default_ranker_fulltext:
@@ -2793,6 +3004,14 @@ cqadupstack_webmasters_manticore_default_ranker_hybrid:
   base: "cqadupstack_webmasters_manticore_hybrid"
   search_options: ""
 
+wands_manticore_default_ranker_fulltext:
+  base: "wands_manticore_fulltext"
+  search_options: ""
+
+wands_manticore_default_ranker_hybrid:
+  base: "wands_manticore_hybrid"
+  search_options: ""
+
 # Manticore all-default query profiles.
 # These clear the explicit ranker and pass morphology=none as a query-time option.
 trec_covid_manticore_all_default_fulltext:
@@ -2897,6 +3116,14 @@ cqadupstack_webmasters_manticore_all_default_fulltext:
 
 cqadupstack_webmasters_manticore_all_default_hybrid:
   base: "cqadupstack_webmasters_manticore_hybrid"
+  search_options: "morphology=none"
+
+wands_manticore_all_default_fulltext:
+  base: "wands_manticore_fulltext"
+  search_options: "morphology=none"
+
+wands_manticore_all_default_hybrid:
+  base: "wands_manticore_hybrid"
   search_options: "morphology=none"
 
 # Manticore full-default query profiles.
@@ -3028,5 +3255,15 @@ cqadupstack_webmasters_manticore_full_default_fulltext:
 
 cqadupstack_webmasters_manticore_full_default_hybrid:
   base: "cqadupstack_webmasters_manticore_hybrid"
+  search_options: "morphology=none"
+  fulltext_query_mode: "and"
+
+wands_manticore_full_default_fulltext:
+  base: "wands_manticore_fulltext"
+  search_options: "morphology=none"
+  fulltext_query_mode: "and"
+
+wands_manticore_full_default_hybrid:
+  base: "wands_manticore_hybrid"
   search_options: "morphology=none"
   fulltext_query_mode: "and"

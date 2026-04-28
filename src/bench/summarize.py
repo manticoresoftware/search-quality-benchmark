@@ -59,6 +59,7 @@ _DATASET_URLS: dict[str, str] = {
     "msmarco-passage/trec-dl-2019/judged": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/trec-dl-2019/judged",
     "msmarco-passage/trec-dl-2020/judged": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/trec-dl-2020/judged",
     "dl-typo": "https://github.com/ielab/CharacterBERT-DR/blob/main/data/README.md",
+    "wands": "https://github.com/wayfair/WANDS",
     "hf-beir:theatticusproject/acord:test": "https://huggingface.co/datasets/theatticusproject/acord",
 }
 
@@ -897,6 +898,8 @@ def _canonical_metric_for_dataset(dataset_source: str) -> str:
     ds = str(dataset_source or "").strip().lower()
     if ds.startswith("msmarco-passage/"):
         return "mrr@10"
+    if ds == "wands":
+        return "ndcg@10"
     if ds.startswith("beir/"):
         return "ndcg@10"
     if ds.startswith("hf-beir:"):
@@ -1103,7 +1106,7 @@ def _global_variant_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
         (
             "Canonical metric",
             "Per-group raw score formula: `score = canonical_metric(dataset_source)`, where "
-            "`canonical_metric = MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*` and `hf-beir:*`. "
+            "`canonical_metric = MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*`, `hf-beir:*`, and `wands`. "
             "This follows the common practice of using the dataset family's primary metric instead of a universal weighted composite. "
             + common_notes,
             lambda row: True,
@@ -1319,7 +1322,7 @@ def _global_variant_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
         lines.append("")
         lines.append(
             "This leaderboard uses the canonical metric for each dataset family. "
-            "The per-group raw score is `MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*` and `hf-beir:*`. "
+            "The per-group raw score is `MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*`, `hf-beir:*`, and `wands`. "
             "For each `(dataset_source, doc_count)` group, the table keeps one best run per engine+mode and averages those raw canonical scores globally. "
             "Only full-coverage entries are included, so engines or modes missing any group are omitted from this table. "
             "Runs with `status != ok` or `error_rate > 0` are excluded."
@@ -1451,17 +1454,19 @@ def _leaderboard_sections_lines(rows: list[ArtifactRow]) -> list[str]:
             "This leaderboard uses the canonical metric for each dataset family. "
             "For each dataset/doc-count group in this scope, it first chooses the single best run for each engine across all modes. "
             "Then `Score`, `QPS`, and `P50` are averaged over those selected rows only. "
+            "`Relative to winner` divides that selected score by the winning selected score inside the same dataset/doc-count group, then averages those ratios; higher is better. "
+            "`Rank sum` ranks engines inside each dataset/doc-count group by the selected canonical metric, then sums those ranks across groups; lower is better, and ties share the average rank. "
             "`Mode counts` shows how many times each mode was selected for that engine across the groups in this scope, using the format `ft:x vec:y hyb:z`. "
             "All compared engines listed above have coverage for every dataset/doc-count group in this scope."
         )
         lines.append("")
         lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
         lines.append("")
-        lines.append("| Rank | Engine | Mode counts | QPS | P50 (ms) | Score ↓ |")
-        lines.append("|---:|---|---|---:|---:|---:|")
-        for idx, (engine, mode_counts, score, avg_qps, avg_p50) in enumerate(engine_board, start=1):
+        lines.append("| Rank | Engine | Mode counts | QPS | P50 (ms) | Score ↓ | Relative to winner | Rank sum (lower) |")
+        lines.append("|---:|---|---|---:|---:|---:|---:|---:|")
+        for idx, (engine, mode_counts, score, avg_qps, avg_p50, rank_sum, relative_to_winner) in enumerate(engine_board, start=1):
             lines.append(
-                f"| {idx} | {engine} | `{mode_counts}` | {avg_qps:.2f} | {avg_p50:.1f} | `{_bar_metric_text(score)}` |"
+                f"| {idx} | {engine} | `{mode_counts}` | {avg_qps:.2f} | {avg_p50:.1f} | `{_bar_metric_text(score)}` | `{_bar_metric_text(relative_to_winner)}` | {rank_sum:.1f} |"
             )
         lines.append("")
         variant_board, excluded_variants, total_variant_groups = _engine_mode_leaderboard_data_for_scope(grouped, scope.groups, scope.engines)
@@ -1563,6 +1568,8 @@ def _short_dataset_name(dataset: str, doc_count: int | None) -> str:
         return "fiqa"
     if ds == "beir/cqadupstack/webmasters":
         return "cqadupstack/webmasters"
+    if ds == "wands":
+        return "wands"
     if ds == "msmarco-passage/dev/small":
         if doc_count is not None and int(doc_count) < 1000000:
             return "msmarco-dev (250K)"
@@ -1631,7 +1638,7 @@ def _engine_leaderboard_data_for_scope(
     grouped: dict[tuple[str, int | None], list[ArtifactRow]],
     scope: frozenset[tuple[str, int | None]],
     allowed_engines: frozenset[str] | None = None,
-) -> tuple[list[tuple[str, str, float, float, float]], list[tuple[str, int]], int]:
+) -> tuple[list[tuple[str, str, float, float, float, float, float]], list[tuple[str, int]], int]:
     total_groups = len(scope)
     if total_groups <= 0:
         return [], [], 0
@@ -1639,6 +1646,8 @@ def _engine_leaderboard_data_for_scope(
     per_engine_qps: dict[str, list[float]] = {}
     per_engine_p50: dict[str, list[float]] = {}
     per_engine_best_modes: dict[str, dict[str, int]] = {}
+    per_engine_rank_sum: dict[str, float] = {}
+    per_engine_relative_to_winner: dict[str, list[float]] = {}
     for group_key in scope:
         group_rows = grouped.get(group_key, [])
         if allowed_engines is not None:
@@ -1654,7 +1663,33 @@ def _engine_leaderboard_data_for_scope(
             per_engine_p50.setdefault(engine, []).append(float(row.performance.get("latency_p50_ms", 0.0) or 0.0))
             mode_counts = per_engine_best_modes.setdefault(engine, {})
             mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
-    leaderboard: list[tuple[str, str, float, float, float]] = []
+
+        group_best = max((_row_canonical_metric_value(row) for row in best_by_engine.values()), default=0.0)
+        for engine, row in best_by_engine.items():
+            relative = (_row_canonical_metric_value(row) / group_best) if group_best > 0.0 else 0.0
+            per_engine_relative_to_winner.setdefault(engine, []).append(relative)
+
+        ranked = sorted(
+            best_by_engine.items(),
+            key=lambda item: (-_row_canonical_metric_value(item[1]), item[0].lower()),
+        )
+        rank_idx = 0
+        while rank_idx < len(ranked):
+            score = _row_canonical_metric_value(ranked[rank_idx][1])
+            end_idx = rank_idx + 1
+            while end_idx < len(ranked) and math.isclose(
+                _row_canonical_metric_value(ranked[end_idx][1]),
+                score,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            ):
+                end_idx += 1
+            avg_rank = (rank_idx + 1 + end_idx) / 2.0
+            for engine, _ in ranked[rank_idx:end_idx]:
+                per_engine_rank_sum[engine] = per_engine_rank_sum.get(engine, 0.0) + avg_rank
+            rank_idx = end_idx
+
+    leaderboard: list[tuple[str, str, float, float, float, float, float]] = []
     excluded: list[tuple[str, int]] = []
     for engine, scores in per_engine_scores.items():
         groups_played = len(scores)
@@ -1674,6 +1709,8 @@ def _engine_leaderboard_data_for_scope(
                 sum(scores) / groups_played,
                 sum(per_engine_qps.get(engine, [])) / groups_played,
                 sum(per_engine_p50.get(engine, [])) / groups_played,
+                per_engine_rank_sum.get(engine, 0.0),
+                sum(per_engine_relative_to_winner.get(engine, [])) / groups_played,
             )
         )
     leaderboard.sort(key=lambda item: (-item[2], item[0].lower()))
@@ -1727,7 +1764,7 @@ def _engine_mode_leaderboard_data_for_scope(
     return leaderboard, excluded, total_groups
 
 
-def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float, float, float]], list[tuple[str, int]], int]:
+def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float, float, float, float, float]], list[tuple[str, int]], int]:
     grouped, total_groups = _canonical_grouped_rows(rows)
     return _engine_leaderboard_data_for_scope(grouped, frozenset(grouped.keys()))
 
@@ -2364,6 +2401,8 @@ def _dataset_family_name(dataset_source: str) -> str:
     ds = str(dataset_source or "").strip().lower()
     if ds.startswith("msmarco-passage/"):
         return "MSMARCO"
+    if ds == "wands":
+        return "WANDS"
     if ds.startswith("hf-beir:"):
         return "HF-BEIR"
     if ds.startswith("beir/"):

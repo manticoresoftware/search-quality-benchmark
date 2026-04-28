@@ -30,9 +30,10 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 ## Dataset
 
 - Default source: `beir/trec-covid` via `ir_datasets`.
-- Additional ready examples: `beir/nfcorpus/test`, `beir/scifact/test`, `beir/arguana`, `beir/scidocs`, `beir/fiqa/test`, `beir/cqadupstack/webmasters`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `dl-typo`, `hf-beir:theatticusproject/acord:test`.
+- Additional ready examples: `beir/nfcorpus/test`, `beir/scifact/test`, `beir/arguana`, `beir/scidocs`, `beir/fiqa/test`, `beir/cqadupstack/webmasters`, `msmarco-passage/dev/small`, `msmarco-passage/trec-dl-2019/judged`, `msmarco-passage/trec-dl-2020/judged`, `dl-typo`, `wands`, `hf-beir:theatticusproject/acord:test`.
 - Dataset catalogs/docs:
   - [ir-datasets.com](https://ir-datasets.com/)
+  - [WANDS on GitHub](https://github.com/wayfair/WANDS)
   - [ACORD on Hugging Face](https://huggingface.co/datasets/theatticusproject/acord)
 - Corpus: COVID-19 research documents with `title` and `abstract` fields.
 - Queries: official TREC-COVID topics.
@@ -70,6 +71,7 @@ Examples:
 - `beir/cqadupstack/webmasters` -> `data/prepared/beir-cqadupstack-webmasters/`
 - `msmarco-passage/dev/small` -> `data/prepared/msmarco-passage-dev-small/`
 - `dl-typo` -> `data/prepared/dl-typo/`
+- `wands` -> `data/prepared/wands/`
 - `hf-beir:theatticusproject/acord:test` -> `data/prepared/hf-beir-theatticusproject-acord-test/`
 
 Recommended smaller BEIR datasets for faster iteration:
@@ -78,6 +80,14 @@ Recommended smaller BEIR datasets for faster iteration:
 - `beir/scidocs`
 - `beir/fiqa/test`
 - `beir/cqadupstack/webmasters`
+
+WANDS:
+- source id: `wands`
+- upstream: [Wayfair/WANDS](https://github.com/wayfair/WANDS)
+- corpus: `42,994` products
+- queries: `480`
+- qrels: `233,448`
+- labels are mapped as graded relevance: `Exact=2`, `Partial=1`, `Irrelevant=0`
 
 DL-Typo:
 - source id: `dl-typo`

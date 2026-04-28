@@ -5,6 +5,7 @@ import csv
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import hashlib
 import heapq
+import io
 import json
 from pathlib import Path
 from time import perf_counter
@@ -526,6 +527,12 @@ def _prepare_hf_beir_dataset(cfg: AppConfig, *, progress_callback: callable | No
 
 _DL_TYPO_BASE_URL = "https://raw.githubusercontent.com/ielab/CharacterBERT-DR/main/data/dl-typo"
 _DL_TYPO_CORPUS_SOURCE = "msmarco-passage/trec-dl-2019/judged"
+_WANDS_BASE_URL = "https://raw.githubusercontent.com/wayfair/WANDS/main/dataset"
+_WANDS_LABELS = {
+    "exact": 2,
+    "partial": 1,
+    "irrelevant": 0,
+}
 
 
 def _read_remote_text(url: str) -> str:
@@ -704,11 +711,126 @@ def _prepare_dl_typo_dataset(cfg: AppConfig, *, progress_callback: callable | No
     )
 
 
+def _prepare_wands_dataset(cfg: AppConfig, *, progress_callback: callable | None = None) -> PrepareResult:
+    out_dir = ensure_dir(Path(cfg.dataset.prepared_dir))
+    started = perf_counter()
+
+    products_raw = _read_remote_text(f"{_WANDS_BASE_URL}/product.csv")
+    queries_raw = _read_remote_text(f"{_WANDS_BASE_URL}/query.csv")
+    labels_raw = _read_remote_text(f"{_WANDS_BASE_URL}/label.csv")
+
+    docs: list[dict[str, Any]] = []
+    kept_doc_ids: set[str] = set()
+    for idx, row in enumerate(csv.DictReader(io.StringIO(products_raw), delimiter="\t"), start=1):
+        doc_id = str(row.get("product_id", "") or "").strip()
+        if not doc_id:
+            continue
+        title = str(row.get("product_name", "") or "").strip()
+        abstract_parts = [
+            str(row.get("product_class", "") or "").strip(),
+            str(row.get("category_hierarchy", "") or "").strip(),
+            str(row.get("product_description", "") or "").strip(),
+            str(row.get("product_features", "") or "").strip(),
+        ]
+        abstract = "\n".join(part for part in abstract_parts if part)
+        doc = {
+            "id": idx,
+            "doc_id": doc_id,
+            "title": title,
+            "abstract": abstract,
+            "doi": "",
+            "date": "",
+        }
+        docs.append(doc)
+        kept_doc_ids.add(doc_id)
+    topics: list[dict[str, str]] = []
+    for row in csv.DictReader(io.StringIO(queries_raw), delimiter="\t"):
+        topic_id = str(row.get("query_id", "") or "").strip()
+        query_text = str(row.get("query", "") or "").strip()
+        if not topic_id or not query_text:
+            continue
+        topics.append(
+            {
+                "topic_id": topic_id,
+                "query_short": query_text,
+                "query_long": query_text,
+            }
+        )
+
+    qrels_rows: list[tuple[str, str, int]] = []
+    qrels_doc_ids: set[str] = set()
+    for row in csv.DictReader(io.StringIO(labels_raw), delimiter="\t"):
+        topic_id = str(row.get("query_id", "") or "").strip()
+        doc_id = str(row.get("product_id", "") or "").strip()
+        label_raw = str(row.get("label", "") or "").strip().lower()
+        if not topic_id or not doc_id:
+            continue
+        if doc_id not in kept_doc_ids:
+            continue
+        relevance = _WANDS_LABELS.get(label_raw, 0)
+        qrels_rows.append((topic_id, doc_id, relevance))
+        qrels_doc_ids.add(doc_id)
+
+    docs_path = out_dir / "docs.jsonl"
+    topics_path = out_dir / "topics.jsonl"
+    qrels_path = out_dir / "qrels.tsv"
+    manifest_path = out_dir / "manifest.json"
+
+    write_jsonl(docs_path, docs)
+    write_jsonl(topics_path, topics)
+    write_tsv(qrels_path, qrels_rows)
+    manifest_payload = {
+        "dataset_source": cfg.dataset.source,
+        "dataset_max_docs": 0,
+        "dataset_keep_qrels_docs": True,
+        "dataset_upstream_urls": {
+            "products": f"{_WANDS_BASE_URL}/product.csv",
+            "queries": f"{_WANDS_BASE_URL}/query.csv",
+            "labels": f"{_WANDS_BASE_URL}/label.csv",
+        },
+        "doc_count": len(docs),
+        "selected_qrel_docs": len(qrels_doc_ids),
+        "selected_extra_docs": max(len(docs) - len(qrels_doc_ids), 0),
+        "topic_count": len(topics),
+        "qrels_count": len(qrels_rows),
+        "elapsed_seconds": round(perf_counter() - started, 3),
+    }
+    _write_embedding_manifest(
+        manifest_path,
+        manifest_payload,
+        cfg=cfg,
+        doc_total=len(docs),
+        doc_ok=0,
+        query_total=len(topics),
+        query_ok=0,
+        input_tokens=0,
+        estimated_cost_usd=0.0,
+    )
+    stats = _populate_embeddings(
+        cfg,
+        docs,
+        topics,
+        progress_callback=progress_callback,
+        manifest_path=manifest_path,
+        manifest_payload=manifest_payload,
+    )
+    write_json(manifest_path, _manifest_with_embeddings(manifest_payload, cfg=cfg, stats=stats))
+
+    return PrepareResult(
+        docs_path=docs_path,
+        topics_path=topics_path,
+        qrels_path=qrels_path,
+        manifest_path=manifest_path,
+    )
+
+
 def prepare_dataset(cfg: AppConfig, *, progress_callback: callable | None = None) -> PrepareResult:
     if str(cfg.dataset.source).startswith("hf-beir:"):
         return _prepare_hf_beir_dataset(cfg, progress_callback=progress_callback)
     if str(cfg.dataset.source).strip().lower() == "dl-typo":
         return _prepare_dl_typo_dataset(cfg, progress_callback=progress_callback)
+    if str(cfg.dataset.source).strip().lower() == "wands":
+        return _prepare_wands_dataset(cfg, progress_callback=progress_callback)
 
     import ir_datasets
 
