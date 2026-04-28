@@ -725,12 +725,12 @@ def _prepare_wands_dataset(cfg: AppConfig, *, progress_callback: callable | None
         doc_id = str(row.get("product_id", "") or "").strip()
         if not doc_id:
             continue
-        title = str(row.get("product_name", "") or "").strip()
+        title = normalize_text(str(row.get("product_name", "") or ""))
         abstract_parts = [
-            str(row.get("product_description", "") or "").strip(),
-            str(row.get("product_features", "") or "").strip(),
+            normalize_text(str(row.get("product_description", "") or "")),
+            normalize_text(str(row.get("product_features", "") or "")),
         ]
-        abstract = "\n".join(part for part in abstract_parts if part)
+        abstract = " ".join(part for part in abstract_parts if part).strip()
         doc = {
             "id": idx,
             "doc_id": doc_id,

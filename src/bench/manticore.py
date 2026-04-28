@@ -96,7 +96,16 @@ class ManticoreClient:
             if body:
                 raise requests.HTTPError(f"{exc} body={body}") from exc
             raise
-        return resp.json()
+        try:
+            return resp.json()
+        except json.JSONDecodeError as exc:
+            body = resp.text or ""
+            snippet = body[max(0, exc.pos - 200) : exc.pos + 200]
+            snippet = snippet.replace("\r", "\\r").replace("\n", "\\n")
+            raise ValueError(
+                f"Manticore returned invalid JSON at char {exc.pos}: {exc.msg}. "
+                f"Body snippet: {snippet}"
+            ) from exc
 
     def show_profile(self) -> list[dict[str, Any]]:
         return self.query("SHOW PROFILE")
