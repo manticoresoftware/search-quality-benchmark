@@ -727,8 +727,6 @@ def _prepare_wands_dataset(cfg: AppConfig, *, progress_callback: callable | None
             continue
         title = str(row.get("product_name", "") or "").strip()
         abstract_parts = [
-            str(row.get("product_class", "") or "").strip(),
-            str(row.get("category_hierarchy", "") or "").strip(),
             str(row.get("product_description", "") or "").strip(),
             str(row.get("product_features", "") or "").strip(),
         ]
