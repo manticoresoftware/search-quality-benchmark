@@ -39,6 +39,7 @@ class ArtifactRow:
     model: str
     dataset_source: str
     doc_count: int | None
+    qrels_count: int | None
     runtime_seconds: float
     concurrency: int | None
     relevance: dict[str, float]
@@ -205,8 +206,50 @@ def _extract_doc_count(payload: dict[str, Any]) -> int | None:
     return None
 
 
+def _prepared_manifest_group_stats() -> dict[tuple[str, int | None], dict[str, int | None]]:
+    root = Path("data/prepared")
+    if not root.exists():
+        return {}
+    out: dict[tuple[str, int | None], dict[str, int | None]] = {}
+    for manifest_path in root.glob("**/manifest.json"):
+        try:
+            payload = read_json(manifest_path)
+        except Exception:
+            continue
+        dataset_source = str(payload.get("dataset_source", "") or "").strip()
+        if not dataset_source:
+            continue
+        raw_doc_count = payload.get("doc_count")
+        doc_count: int | None
+        try:
+            doc_count = int(raw_doc_count) if raw_doc_count is not None else None
+        except Exception:
+            doc_count = None
+        raw_qrels = payload.get("qrels_count")
+        try:
+            qrels_count = int(raw_qrels) if raw_qrels is not None else None
+        except Exception:
+            qrels_count = None
+        raw_topics = payload.get("topic_count")
+        try:
+            topic_count = int(raw_topics) if raw_topics is not None else None
+        except Exception:
+            topic_count = None
+        key = (dataset_source, doc_count)
+        prev = out.get(key)
+        if prev is None:
+            out[key] = {"qrels_count": qrels_count, "topic_count": topic_count}
+            continue
+        prev_qrels = int(prev.get("qrels_count") or 0)
+        new_qrels = int(qrels_count or 0)
+        if new_qrels > prev_qrels:
+            out[key] = {"qrels_count": qrels_count, "topic_count": topic_count}
+    return out
+
+
 def discover_artifacts() -> list[ArtifactRow]:
     out: list[ArtifactRow] = []
+    prepared_group_stats = _prepared_manifest_group_stats()
     root = Path("artifacts")
     if not root.exists():
         return out
@@ -251,6 +294,9 @@ def discover_artifacts() -> list[ArtifactRow]:
                 engine = "manticore_all_default"
             if engine == "manticore" and "_manticore_full_default_" in profile.lower():
                 engine = "manticore_full_default"
+            dataset_source = str(payload.get("dataset_source", "") or "")
+            doc_count = _extract_doc_count(payload)
+            group_stats = prepared_group_stats.get((dataset_source, doc_count), {})
             out.append(
                 ArtifactRow(
                     run_id=run_id_val,
@@ -261,8 +307,13 @@ def discover_artifacts() -> list[ArtifactRow]:
                     engine=engine,
                     mode=mode,
                     model=model,
-                    dataset_source=str(payload.get("dataset_source", "") or ""),
-                    doc_count=_extract_doc_count(payload),
+                    dataset_source=dataset_source,
+                    doc_count=doc_count,
+                    qrels_count=(
+                        int(group_stats.get("qrels_count"))
+                        if group_stats.get("qrels_count") is not None
+                        else None
+                    ),
                     runtime_seconds=float(payload.get("runtime_seconds", 0.0)),
                     concurrency=(
                         int((payload.get("benchmark_settings", {}) or {}).get("concurrency"))
@@ -287,6 +338,7 @@ def discover_artifacts() -> list[ArtifactRow]:
                     model="n/a",
                     dataset_source="",
                     doc_count=None,
+                    qrels_count=None,
                     runtime_seconds=0.0,
                     concurrency=None,
                     relevance={},
@@ -878,8 +930,27 @@ def _canonical_metric_table_lines(rows: list[ArtifactRow]) -> list[str]:
     return lines
 
 
-def _bar_metric_text(val: float, width: int = 24) -> str:
-    blocks = max(1, int(round(val * width))) if val > 0 else 0
+def _bar_metric_text(
+    val: float,
+    width: int = 24,
+    *,
+    scale_min: float | None = None,
+    scale_max: float | None = None,
+    lower_is_better: bool = False,
+) -> str:
+    if scale_min is not None and scale_max is not None:
+        lo = float(scale_min)
+        hi = float(scale_max)
+        if hi > lo:
+            scaled = (float(val) - lo) / (hi - lo)
+            scaled = max(0.0, min(1.0, scaled))
+            if lower_is_better:
+                scaled = 1.0 - scaled
+            blocks = max(1, int(round(scaled * width))) if scaled > 0 else 0
+        else:
+            blocks = width
+    else:
+        blocks = max(1, int(round(val * width))) if val > 0 else 0
     bar = "█" * blocks if blocks > 0 else "·"
     return f"{bar} {val:.4f}"
 
@@ -1454,6 +1525,7 @@ def _leaderboard_sections_lines(rows: list[ArtifactRow]) -> list[str]:
             "This leaderboard uses the canonical metric for each dataset family. "
             "For each dataset/doc-count group in this scope, it first chooses the single best run for each engine across all modes. "
             "Then `Score`, `QPS`, and `P50` are averaged over those selected rows only. "
+            "`Qrels-weighted score` uses the same selected rows, but weights each dataset/doc-count group by its `qrels_count` from the prepared manifest when available; groups without known `qrels_count` fall back to weight `1`. "
             "`Relative to winner` divides that selected score by the winning selected score inside the same dataset/doc-count group, then averages those ratios; higher is better. "
             "`Rank sum` ranks engines inside each dataset/doc-count group by the selected canonical metric, then sums those ranks across groups; lower is better, and ties share the average rank. "
             "`Mode counts` shows how many times each mode was selected for that engine across the groups in this scope, using the format `ft:x vec:y hyb:z`. "
@@ -1462,11 +1534,14 @@ def _leaderboard_sections_lines(rows: list[ArtifactRow]) -> list[str]:
         lines.append("")
         lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
         lines.append("")
-        lines.append("| Rank | Engine | Mode counts | QPS | P50 (ms) | Score ↓ | Relative to winner | Rank sum (lower) |")
-        lines.append("|---:|---|---|---:|---:|---:|---:|---:|")
-        for idx, (engine, mode_counts, score, avg_qps, avg_p50, rank_sum, relative_to_winner) in enumerate(engine_board, start=1):
+        lines.append("| Rank | Engine | Mode counts | QPS | P50 (ms) | Score ↓ | Qrels-weighted score | Relative to winner | Rank sum (lower is better) |")
+        lines.append("|---:|---|---|---:|---:|---:|---:|---:|---:|")
+        rank_sums = [float(rank_sum) for _, _, _, _, _, rank_sum, _, _ in engine_board]
+        rank_sum_min = min(rank_sums) if rank_sums else 0.0
+        rank_sum_max = max(rank_sums) if rank_sums else 0.0
+        for idx, (engine, mode_counts, score, avg_qps, avg_p50, rank_sum, relative_to_winner, weighted_score) in enumerate(engine_board, start=1):
             lines.append(
-                f"| {idx} | {engine} | `{mode_counts}` | {avg_qps:.2f} | {avg_p50:.1f} | `{_bar_metric_text(score)}` | `{_bar_metric_text(relative_to_winner)}` | {rank_sum:.1f} |"
+                f"| {idx} | {engine} | `{mode_counts}` | {avg_qps:.2f} | {avg_p50:.1f} | `{_bar_metric_text(score)}` | `{_bar_metric_text(weighted_score)}` | `{_bar_metric_text(relative_to_winner)}` | `{_bar_metric_text(rank_sum, scale_min=rank_sum_min, scale_max=rank_sum_max)}` |"
             )
         lines.append("")
         variant_board, excluded_variants, total_variant_groups = _engine_mode_leaderboard_data_for_scope(grouped, scope.groups, scope.engines)
@@ -1638,7 +1713,7 @@ def _engine_leaderboard_data_for_scope(
     grouped: dict[tuple[str, int | None], list[ArtifactRow]],
     scope: frozenset[tuple[str, int | None]],
     allowed_engines: frozenset[str] | None = None,
-) -> tuple[list[tuple[str, str, float, float, float, float, float]], list[tuple[str, int]], int]:
+) -> tuple[list[tuple[str, str, float, float, float, float, float, float]], list[tuple[str, int]], int]:
     total_groups = len(scope)
     if total_groups <= 0:
         return [], [], 0
@@ -1648,6 +1723,8 @@ def _engine_leaderboard_data_for_scope(
     per_engine_best_modes: dict[str, dict[str, int]] = {}
     per_engine_rank_sum: dict[str, float] = {}
     per_engine_relative_to_winner: dict[str, list[float]] = {}
+    per_engine_weighted_score_sum: dict[str, float] = {}
+    per_engine_weight_sum: dict[str, float] = {}
     for group_key in scope:
         group_rows = grouped.get(group_key, [])
         if allowed_engines is not None:
@@ -1658,11 +1735,15 @@ def _engine_leaderboard_data_for_scope(
             if prev is None or _row_canonical_metric_value(row) > _row_canonical_metric_value(prev):
                 best_by_engine[row.engine] = row
         for engine, row in best_by_engine.items():
-            per_engine_scores.setdefault(engine, []).append(_row_canonical_metric_value(row))
+            score = _row_canonical_metric_value(row)
+            per_engine_scores.setdefault(engine, []).append(score)
             per_engine_qps.setdefault(engine, []).append(float(row.performance.get("qps", 0.0) or 0.0))
             per_engine_p50.setdefault(engine, []).append(float(row.performance.get("latency_p50_ms", 0.0) or 0.0))
             mode_counts = per_engine_best_modes.setdefault(engine, {})
             mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
+            weight = float(row.qrels_count or 1)
+            per_engine_weighted_score_sum[engine] = per_engine_weighted_score_sum.get(engine, 0.0) + (score * weight)
+            per_engine_weight_sum[engine] = per_engine_weight_sum.get(engine, 0.0) + weight
 
         group_best = max((_row_canonical_metric_value(row) for row in best_by_engine.values()), default=0.0)
         for engine, row in best_by_engine.items():
@@ -1689,7 +1770,7 @@ def _engine_leaderboard_data_for_scope(
                 per_engine_rank_sum[engine] = per_engine_rank_sum.get(engine, 0.0) + avg_rank
             rank_idx = end_idx
 
-    leaderboard: list[tuple[str, str, float, float, float, float, float]] = []
+    leaderboard: list[tuple[str, str, float, float, float, float, float, float]] = []
     excluded: list[tuple[str, int]] = []
     for engine, scores in per_engine_scores.items():
         groups_played = len(scores)
@@ -1711,6 +1792,11 @@ def _engine_leaderboard_data_for_scope(
                 sum(per_engine_p50.get(engine, [])) / groups_played,
                 per_engine_rank_sum.get(engine, 0.0),
                 sum(per_engine_relative_to_winner.get(engine, [])) / groups_played,
+                (
+                    per_engine_weighted_score_sum.get(engine, 0.0) / per_engine_weight_sum.get(engine, 1.0)
+                    if per_engine_weight_sum.get(engine, 0.0) > 0.0
+                    else 0.0
+                ),
             )
         )
     leaderboard.sort(key=lambda item: (-item[2], item[0].lower()))
@@ -1764,7 +1850,7 @@ def _engine_mode_leaderboard_data_for_scope(
     return leaderboard, excluded, total_groups
 
 
-def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float, float, float, float, float]], list[tuple[str, int]], int]:
+def _engine_leaderboard_data(rows: list[ArtifactRow]) -> tuple[list[tuple[str, str, float, float, float, float, float, float]], list[tuple[str, int]], int]:
     grouped, total_groups = _canonical_grouped_rows(rows)
     return _engine_leaderboard_data_for_scope(grouped, frozenset(grouped.keys()))
 

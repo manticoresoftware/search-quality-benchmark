@@ -53,8 +53,9 @@ class ManticoreConfig:
     vector_cache_fetch_batch_size: int = 1000
     index_layout: str = "combined"
     table_engine: str = ""
-    search_options: str = "ranker=expr('1000*bm25a(1.2,0.75)')"
-    fulltext_options: str = "morphology='stem_en' index_field_lengths='1'"
+    table_profile: str = "relevance"
+    search_options: str = ""
+    fulltext_options: str = ""
     fulltext_query_mode: str = "or"
     fulltext_query_variant: str = "short"
     fulltext_query_quorum: float = 0.5

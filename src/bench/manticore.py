@@ -142,13 +142,17 @@ class ManticoreClient:
     def create_fulltext_table(
         self,
         table_name: str,
-        fulltext_options: str = "morphology='stem_en' index_field_lengths='1'",
+        fulltext_options: str = "",
         table_engine: str = "",
+        table_profile: str = "",
     ) -> None:
         opts_parts: list[str] = []
         safe_engine = (table_engine or "").strip().lower().replace("'", "''")
         if safe_engine:
             opts_parts.append(f"engine='{safe_engine}'")
+        safe_profile = (table_profile or "").strip().lower().replace("'", "''")
+        if safe_profile:
+            opts_parts.append(f"profile='{safe_profile}'")
         opts = (fulltext_options or "").strip()
         if opts:
             opts_parts.append(opts)
@@ -177,6 +181,7 @@ class ManticoreClient:
         quantization: str = "",
         fulltext_options: str = "",
         table_engine: str = "",
+        table_profile: str = "",
         api_key: str = "",
         api_key_file: str = "",
     ) -> None:
@@ -194,6 +199,9 @@ class ManticoreClient:
         safe_engine = (table_engine or "").strip().lower().replace("'", "''")
         if safe_engine:
             opts_parts.append(f"engine='{safe_engine}'")
+        safe_profile = (table_profile or "").strip().lower().replace("'", "''")
+        if safe_profile:
+            opts_parts.append(f"profile='{safe_profile}'")
         opts = (fulltext_options or "").strip()
         if opts:
             opts_parts.append(opts)

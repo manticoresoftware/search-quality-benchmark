@@ -130,6 +130,17 @@ def _display_target_kind(kind: str) -> str:
     return kind
 
 
+def _manticore_table_options_label(cfg: AppConfig) -> str:
+    parts: list[str] = []
+    profile = str(cfg.manticore.table_profile or "").strip()
+    if profile:
+        parts.append(f"profile:{profile}")
+    opts = (cfg.manticore.fulltext_options or "").strip()
+    if opts:
+        parts.append(f"opts:{opts}")
+    return " ".join(parts)
+
+
 def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
     model = resolved_embedding_model(cfg)
     if mode == "vector":
@@ -151,7 +162,7 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         return model
     if mode == "hybrid":
         if is_manticore_like_type(engine):
-            return (cfg.manticore.fulltext_options or "").strip()
+            return _manticore_table_options_label(cfg)
         if engine == "meilisearch":
             extra = [f"embedder:{cfg.meilisearch.embedder_name}", f"semanticRatio={float(cfg.meilisearch.hybrid_semantic_ratio):.2f}"]
             if bool(cfg.meilisearch.binary_quantized):
@@ -169,7 +180,7 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [alpha:{float(cfg.vespa.hybrid_alpha):.2f}]"
         return f"{model} [fusion=rrf]"
     if is_manticore_like_type(engine):
-        return (cfg.manticore.fulltext_options or "").strip() or "(none)"
+        return _manticore_table_options_label(cfg) or "(none)"
     if engine == "meilisearch":
         extras: list[str] = []
         if cfg.meilisearch.searchable_attributes:

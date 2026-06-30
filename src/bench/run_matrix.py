@@ -157,6 +157,17 @@ def _manticore_vector_label(cfg: AppConfig) -> str:
     return model
 
 
+def _manticore_table_options_label(cfg: AppConfig) -> str:
+    parts: list[str] = []
+    profile = str(cfg.manticore.table_profile or "").strip()
+    if profile:
+        parts.append(f"profile:{profile}")
+    opts = (cfg.manticore.fulltext_options or "").strip()
+    if opts:
+        parts.append(f"opts:{opts}")
+    return " ".join(parts)
+
+
 def _qdrant_vector_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     if not bool(cfg.qdrant.dense_binary_quantization):
@@ -288,7 +299,11 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 elif mode == "hybrid":
                     if is_manticore_like_type(engine):
                         model = resolved_embedding_model(cfg)
-                        model_or_ranker = _manticore_vector_label(cfg).replace(model, f"{model} [fusion=rrf]", 1)
+                        hybrid_extra = ["fusion=rrf"]
+                        table_opts = _manticore_table_options_label(cfg)
+                        if table_opts:
+                            hybrid_extra.append(table_opts)
+                        model_or_ranker = _manticore_vector_label(cfg).replace(model, f"{model} [{' '.join(hybrid_extra)}]", 1)
                     elif engine == "qdrant":
                         model_or_ranker = _qdrant_hybrid_label(cfg)
                     elif engine == "typesense":
@@ -303,6 +318,9 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _opensearch_hybrid_label(cfg) if engine == "opensearch" else _meilisearch_hybrid_label(cfg)
                 elif is_manticore_like_type(engine):
                     extras: list[str] = []
+                    table_opts = _manticore_table_options_label(cfg)
+                    if table_opts:
+                        extras.append(table_opts)
                     search_opts = normalize_search_options(cfg.manticore.search_options)
                     if search_opts:
                         extras.append(f"search:{search_opts}")
@@ -311,9 +329,6 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         extras.append(f"query:quorum/{float(cfg.manticore.fulltext_query_quorum or 0.5)}")
                     elif qmode != "and":
                         extras.append(f"query:{qmode}")
-                    opts = (cfg.manticore.fulltext_options or "").strip()
-                    if opts:
-                        extras.append(f"opts:{opts}")
                     model_or_ranker = f"[{' '.join(extras)}]" if extras else "(manticore default)"
                 elif engine == "qdrant":
                     model_or_ranker = "Qdrant/bm25"

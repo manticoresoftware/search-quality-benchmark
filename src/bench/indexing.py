@@ -161,6 +161,7 @@ def _run_index_manticore(
                 cfg.manticore.fulltext_table,
                 fulltext_options=cfg.manticore.fulltext_options,
                 table_engine=cfg.manticore.table_engine,
+                table_profile=cfg.manticore.table_profile,
             )
             started = perf_counter()
             ingest_stats = ModeIndexResult(
@@ -288,6 +289,7 @@ def _run_index_manticore(
                 quantization=cfg.manticore.vector_quantization,
                 fulltext_options=cfg.manticore.fulltext_options if mode == "hybrid" else "",
                 table_engine=cfg.manticore.table_engine,
+                table_profile=cfg.manticore.table_profile if mode == "hybrid" else "",
             )
             started = perf_counter()
             ingest_stats_cached = ModeIndexResult(

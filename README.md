@@ -213,11 +213,14 @@ embedding:
 ```
 
 ### Manticore Full-Text Ranking Config
-- `manticore.fulltext_options`: raw Manticore RT table options appended to `CREATE TABLE ... )`.
-  - default: `morphology='stem_en' index_field_lengths='1'`
-  - example: `index_field_lengths='1' stopwords='en' morphology='lemmatize_en_all'`
+- `manticore.table_profile`: Manticore `CREATE TABLE` profile appended as `profile='<value>'`.
+  - default: `relevance`
+  - with Manticore `dev`, `profile='relevance'` expands to the recommended relevance settings, including stemming, field lengths, exact words, OR boolean mode, and the BM25A ranker with `avgdl=256`.
+- `manticore.fulltext_options`: extra raw Manticore RT table options appended after `table_profile`.
+  - default: empty
+  - example: `stopwords='en'`
 - `manticore.search_options`: raw Manticore search options list (including ranker settings).
-  - default: `ranker=expr('1000*bm25a(1.2,0.75)')`
+  - default: empty; leave it empty to use the table profile ranker
   - examples: `ranker=bm25`, `ranker=proximity_bm25`, `ranker=bm25, fuzzy=1`
   - applies to both full-text and vector query paths
 - `manticore.fulltext_query_mode`: how full-text query terms are combined before sending them to `MATCH()`.
@@ -225,7 +228,6 @@ embedding:
   - `or` (default): natural disjunction / broader recall
   - `quorum`: uses Manticore quorum syntax like `"term1 term2 term3"/0.5`
 - `manticore.fulltext_query_quorum`: quorum threshold used when `fulltext_query_mode: "quorum"` (default: `0.5`)
-- full-text queries also set: `idf='plain,tfidf_unnormalized'`
 
 ### Manticore Vector Quantization/Search Config
 - `manticore.vector_quantization`: `""` (off), `8bit`, `1bit`, or `1bitsimple`
@@ -316,7 +318,7 @@ embedding:
 Example:
 ```yaml
 manticore:
-  search_options: "ranker=expr('1000*(bm25a(1.2,0.75)+sum(lcs*user_weight))')"
+  table_profile: "relevance"
 
 manticore_bm25:
   base: "manticore"
@@ -338,7 +340,7 @@ manticore_vector_only:
 ### Configured Index/Collection Defaults
 - Manticore full-text table (`manticore.fulltext_table`):
   - columns `id, doc_id, title, abstract, doi, date`
-  - options from `manticore.fulltext_options` (default: `morphology='stem_en' index_field_lengths='1'`)
+  - `profile='relevance'` by default, plus any options from `manticore.fulltext_options`
 - Manticore vector table (`manticore.vector_table`):
   - same fields + `FLOAT_VECTOR`
   - `KNN_TYPE='hnsw'`
