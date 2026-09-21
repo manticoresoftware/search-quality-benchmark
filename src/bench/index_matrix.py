@@ -13,6 +13,7 @@ from .discovery import discover_config_paths
 from .elasticsearch_backend import ElasticsearchBackend
 from .embedding_client import resolved_embedding_model
 from .manticore import ManticoreClient
+from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
@@ -37,6 +38,7 @@ _ENGINE_TARGET_KEYS = {
     "opensearch": {"index_name"},
     "elasticsearch": {"index_name"},
     "typesense": {"collection_name"},
+    "mariadb": {"table_name"},
     "vespa": {"collection_name"},
     "weaviate": {"collection_name"},
 }
@@ -71,6 +73,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "elasticsearch" in name
             else "typesense"
             if "typesense" in name
+            else "mariadb"
+            if "mariadb" in name
             else "vespa"
             if "vespa" in name
             else "weaviate"
@@ -155,6 +159,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [field:{cfg.elasticsearch.vector_field}]"
         if engine == "typesense":
             return f"{model} [field:{cfg.typesense.vector_field}]"
+        if engine == "mariadb":
+            return f"{model} [field:{cfg.mariadb.vector_field} distance:{cfg.mariadb.vector_distance} M:{int(cfg.mariadb.vector_m)}]"
         if engine == "weaviate":
             return f"{model} [field:{cfg.weaviate.vector_field}]"
         if engine == "vespa":
@@ -174,6 +180,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [textBoost:{float(cfg.elasticsearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.elasticsearch.hybrid_vector_boost):.2f}]"
         if engine == "typesense":
             return f"{model} [alpha:{float(cfg.typesense.hybrid_alpha):.2f}]"
+        if engine == "mariadb":
+            return f"{model} [rrf:k={int(cfg.mariadb.hybrid_rrf_k)} alpha:{float(cfg.mariadb.hybrid_alpha):.2f}]"
         if engine == "weaviate":
             return f"{model} [alpha:{float(cfg.weaviate.hybrid_alpha):.2f}]"
         if engine == "vespa":
@@ -196,6 +204,8 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         return f"fields:{','.join(cfg.elasticsearch.text_fields or ['title', 'abstract'])}"
     if engine == "typesense":
         return f"fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}"
+    if engine == "mariadb":
+        return f"MATCH/AGAINST mode:{cfg.mariadb.fulltext_search_mode} fields:{','.join(cfg.mariadb.text_fields or ['title', 'abstract'])}"
     if engine == "weaviate":
         return f"fields:{','.join(cfg.weaviate.text_fields or ['title', 'abstract'])}"
     if engine == "vespa":
@@ -216,6 +226,8 @@ def _index_target_name(cfg: AppConfig, engine: str, mode: str) -> str:
         return str(cfg.elasticsearch.index_name or "").strip()
     if engine == "typesense":
         return str(cfg.typesense.collection_name or "").strip()
+    if engine == "mariadb":
+        return str(cfg.mariadb.table_name or "").strip()
     if engine == "weaviate":
         return str(cfg.weaviate.collection_name or "").strip()
     if engine == "vespa":
@@ -245,6 +257,8 @@ def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
     if engine == "elasticsearch" and str(cfg.elasticsearch.index_layout or "").strip().lower() == "combined":
         return "vector"
     if engine == "typesense" and str(cfg.typesense.index_layout or "").strip().lower() == "combined":
+        return "vector"
+    if engine == "mariadb" and str(cfg.mariadb.index_layout or "").strip().lower() == "combined":
         return "vector"
     if engine == "weaviate" and str(cfg.weaviate.index_layout or "").strip().lower() == "combined":
         return "vector"
@@ -307,7 +321,11 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                                         else (
                                             cfg.typesense.batch_size
                                             if engine == "typesense"
-                                            else (cfg.weaviate.batch_size if engine == "weaviate" else (cfg.vespa.batch_size if engine == "vespa" else cfg.qdrant.batch_size))
+                                            else (
+                                                cfg.mariadb.batch_size
+                                                if engine == "mariadb"
+                                                else (cfg.weaviate.batch_size if engine == "weaviate" else (cfg.vespa.batch_size if engine == "vespa" else cfg.qdrant.batch_size))
+                                            )
                                         )
                                     )
                                 )
@@ -370,7 +388,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
             )
         )
 
-    engine_order = {"manticore": 0, "manticore_avgdl": 1, "manticore_default_ranker": 2, "manticore_all_default": 3, "manticore_full_default": 4, "columnar": 5, "qdrant": 6, "meilisearch": 7, "opensearch": 8, "elasticsearch": 9, "typesense": 10, "weaviate": 11, "vespa": 12}
+    engine_order = {"manticore": 0, "manticore_avgdl": 1, "manticore_default_ranker": 2, "manticore_all_default": 3, "manticore_full_default": 4, "columnar": 5, "qdrant": 6, "meilisearch": 7, "opensearch": 8, "elasticsearch": 9, "typesense": 10, "mariadb": 11, "weaviate": 12, "vespa": 13}
     kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
     return sorted(
         out,
@@ -428,6 +446,19 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
             if not backend.collection_exists(v.target):
                 return TargetStatus("pending", None, expected)
             actual = int(backend.get_document_count(v.target))
+        elif v.engine == "mariadb":
+            backend = MariaDBBackend(v.cfg.mariadb)
+            try:
+                backend.ensure_accessible()
+                if not backend.table_exists(v.target):
+                    return TargetStatus("pending", None, expected)
+                if not backend.table_has_fulltext(v.target):
+                    return TargetStatus("pending", None, expected)
+                if v.target_kind in ("vector", "combined") and not backend.table_has_vector(v.target):
+                    return TargetStatus("pending", None, expected)
+                actual = int(backend.get_document_count(v.target))
+            finally:
+                backend.close()
         elif v.engine == "weaviate":
             backend = WeaviateBackend(v.cfg.weaviate)
             backend.ensure_accessible()
@@ -488,6 +519,8 @@ def _draw_row(
             color_engine = curses.color_pair(12)
         elif v.engine == "typesense":
             color_engine = curses.color_pair(11)
+        elif v.engine == "mariadb":
+            color_engine = curses.color_pair(10)
         elif v.engine == "weaviate":
             color_engine = curses.color_pair(13)
         elif v.engine == "vespa":
@@ -682,6 +715,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(9, curses.COLOR_MAGENTA, -1) # opensearch
             curses.init_pair(12, curses.COLOR_BLUE, -1)   # elasticsearch
             curses.init_pair(11, curses.COLOR_RED, -1)    # typesense
+            curses.init_pair(10, curses.COLOR_YELLOW, -1) # mariadb
             curses.init_pair(13, curses.COLOR_CYAN, -1)   # weaviate
             curses.init_pair(14, curses.COLOR_GREEN, -1)  # vespa
             curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending

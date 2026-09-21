@@ -1,4 +1,4 @@
-# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense + Weaviate + Vespa)
+# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense + MariaDB Vector + Weaviate + Vespa)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text
@@ -18,6 +18,9 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Typesense lexical search
 - Typesense vector search (user-provided vectors from the shared cache)
 - Typesense hybrid search (query text + cached query vector)
+- MariaDB full-text search (`MATCH ... AGAINST`)
+- MariaDB vector search (`VECTOR INDEX` + `VEC_DISTANCE`)
+- MariaDB hybrid search (weighted reciprocal-rank fusion of full-text and vector rankings)
 - Weaviate lexical search
 - Weaviate vector search (user-provided vectors from the shared cache)
 - Weaviate hybrid search (query text + cached query vector)
@@ -422,6 +425,7 @@ The services currently managed there are:
 - `opensearch`
 - `elasticsearch`
 - `typesense`
+- `mariadb`
 - `weaviate`
 - `vespa`
 
@@ -440,6 +444,7 @@ Notes:
   ```
   The bundled service maps Elasticsearch to `http://127.0.0.1:9201`.
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
+- MariaDB uses `127.0.0.1:3307`, database `search_bench`, and local development credentials `bench`/`bench` by default.
 - Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
 - Vespa is exposed at `http://127.0.0.1:8081`, with deploy API at `http://127.0.0.1:19071`.
 - Before starting Vespa for the first time, prepare the host bind-mount directories:
@@ -491,6 +496,12 @@ Behavior:
 - Typesense vector indexing:
   - uses cache only,
   - fails on cache misses.
+- MariaDB vector indexing:
+  - requires MariaDB 11.7 or newer (the bundled service uses MariaDB 11.8 LTS),
+  - uses `index_timeout_seconds` (one hour by default) for ingestion and index building; `query_timeout_seconds` continues to govern benchmark searches,
+  - creates a combined InnoDB table with FULLTEXT and VECTOR indexes,
+  - uses cache only and fails on cache misses,
+  - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).
 
 ## Metrics
 

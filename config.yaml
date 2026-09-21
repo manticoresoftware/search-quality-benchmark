@@ -17,7 +17,7 @@ embedding:
   provider: "openrouter"
   model: "qwen/qwen3-embedding-8b"
   api_key: ""
-  api_key_file: "/Users/sn/openrouter_key.txt"
+  api_key_file: "/root/openrouter_key.txt"
   base_url: "https://openrouter.ai/api/v1"
   site_url: ""
   app_name: "trec-covid-bench"
@@ -126,7 +126,7 @@ qdrant_vector_1bit:
   dense_binary_always_ram: true
   dense_search_quantization_rescore: true
   dense_search_quantization_oversampling: 3.0
-  batch_size: 500
+  batch_size: 300
 
 qdrant_hybrid_1bit:
   base: "qdrant_vector_1bit"
@@ -215,6 +215,29 @@ typesense:
   vector_field: "embedding"
   vector_distance: "cosine"
   hybrid_alpha: 0.5
+
+mariadb:
+  type: "mariadb"
+  host: "127.0.0.1"
+  port: 3307
+  user: "bench"
+  password: "bench"
+  database: "search_bench"
+  table_name: "trec_covid_mariadb"
+  index_layout: "combined"
+  text_fields: ["title", "abstract"]
+  vector_field: "embedding"
+  vector_distance: "cosine"
+  vector_m: 8
+  fulltext_search_mode: "natural"
+  hybrid_alpha: 0.5
+  hybrid_rrf_k: 60
+  hybrid_candidates: 400
+  batch_size: 100
+  index_concurrency: 8
+  connect_timeout_seconds: 10
+  query_timeout_seconds: 60
+  index_timeout_seconds: 3600
 
 weaviate:
   type: "weaviate"
@@ -373,6 +396,23 @@ trec_covid_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   collection_name: "trec_covid_typesense"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  table_name: "trec_covid_mariadb"
+
+trec_covid_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  table_name: "trec_covid_mariadb"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  table_name: "trec_covid_mariadb"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 trec_covid_weaviate_fulltext:
@@ -559,6 +599,13 @@ msmarco_passage_typesense_fulltext:
   collection_name: "msmarco_passage_typesense"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  table_name: "msmarco_passage_mariadb"
+  text_fields: ["abstract", "title"]
+
 msmarco_passage_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -567,11 +614,27 @@ msmarco_passage_typesense_vector:
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  table_name: "msmarco_passage_mariadb"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
 msmarco_passage_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "msmarco-passage/dev/small"
   collection_name: "msmarco_passage_typesense"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  table_name: "msmarco_passage_mariadb"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
@@ -742,17 +805,35 @@ msmarco_lite_typesense_fulltext:
   keep_qrels_docs: true
   collection_name: "msmarco_lite_typesense"
 
+msmarco_lite_mariadb_fulltext:
+  base: "msmarco_passage_mariadb_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  table_name: "msmarco_lite_mariadb"
+
 msmarco_lite_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   max_docs: 250000
   keep_qrels_docs: true
   collection_name: "msmarco_lite_typesense"
 
+msmarco_lite_mariadb_vector:
+  base: "msmarco_passage_mariadb_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  table_name: "msmarco_lite_mariadb"
+
 msmarco_lite_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   max_docs: 250000
   keep_qrels_docs: true
   collection_name: "msmarco_lite_typesense"
+
+msmarco_lite_mariadb_hybrid:
+  base: "msmarco_passage_mariadb_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  table_name: "msmarco_lite_mariadb"
 
 msmarco_lite_weaviate_fulltext:
   base: "msmarco_passage_weaviate_fulltext"
@@ -866,12 +947,24 @@ msmarco_trecdl_2019_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_mariadb_fulltext:
+  base: "msmarco_passage_mariadb_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_mariadb_vector:
+  base: "msmarco_passage_mariadb_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_mariadb_hybrid:
+  base: "msmarco_passage_mariadb_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
 msmarco_trecdl_2019_weaviate_fulltext:
@@ -974,12 +1067,24 @@ msmarco_trecdl_2020_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
   source: "msmarco-passage/trec-dl-2020/judged"
 
+msmarco_trecdl_2020_mariadb_fulltext:
+  base: "msmarco_passage_mariadb_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
 msmarco_trecdl_2020_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "msmarco-passage/trec-dl-2020/judged"
 
+msmarco_trecdl_2020_mariadb_vector:
+  base: "msmarco_passage_mariadb_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
 msmarco_trecdl_2020_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_mariadb_hybrid:
+  base: "msmarco_passage_mariadb_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_weaviate_fulltext:
@@ -1101,13 +1206,28 @@ dl_typo_typesense_fulltext:
   source: "dl-typo"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
+dl_typo_mariadb_fulltext:
+  base: "msmarco_passage_mariadb_fulltext"
+  source: "dl-typo"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
 dl_typo_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "dl-typo"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
+dl_typo_mariadb_vector:
+  base: "msmarco_passage_mariadb_vector"
+  source: "dl-typo"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
 dl_typo_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
+  source: "dl-typo"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
+dl_typo_mariadb_hybrid:
+  base: "msmarco_passage_mariadb_hybrid"
   source: "dl-typo"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
@@ -1285,6 +1405,13 @@ nfcorpus_typesense_fulltext:
   collection_name: "nfcorpus_typesense"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
+nfcorpus_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  table_name: "nfcorpus_mariadb"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
 nfcorpus_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -1292,11 +1419,25 @@ nfcorpus_typesense_vector:
   collection_name: "nfcorpus_typesense"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
+nfcorpus_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  table_name: "nfcorpus_mariadb"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
 nfcorpus_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "beir/nfcorpus/test"
   collection_name: "nfcorpus_typesense"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  table_name: "nfcorpus_mariadb"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_weaviate_fulltext:
@@ -1485,6 +1626,13 @@ acord_typesense_fulltext:
   collection_name: "acord_typesense"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
+acord_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  table_name: "acord_mariadb"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
 acord_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -1492,11 +1640,25 @@ acord_typesense_vector:
   collection_name: "acord_typesense"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
+acord_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  table_name: "acord_mariadb"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
 acord_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "hf-beir:theatticusproject/acord:test"
   collection_name: "acord_typesense"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  table_name: "acord_mariadb"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_weaviate_fulltext:
@@ -1685,6 +1847,13 @@ scifact_typesense_fulltext:
   collection_name: "scifact_typesense"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
+scifact_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "beir/scifact/test"
+  table_name: "scifact_mariadb"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+
 scifact_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -1692,11 +1861,25 @@ scifact_typesense_vector:
   collection_name: "scifact_typesense"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
+scifact_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "beir/scifact/test"
+  table_name: "scifact_mariadb"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+
 scifact_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "beir/scifact/test"
   collection_name: "scifact_typesense"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+
+scifact_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "beir/scifact/test"
+  table_name: "scifact_mariadb"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
 scifact_weaviate_fulltext:
@@ -1885,6 +2068,13 @@ arguana_typesense_fulltext:
   collection_name: "arguana_typesense"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
+arguana_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "beir/arguana"
+  table_name: "arguana_mariadb"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+
 arguana_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -1892,11 +2082,25 @@ arguana_typesense_vector:
   collection_name: "arguana_typesense"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
+arguana_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "beir/arguana"
+  table_name: "arguana_mariadb"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+
 arguana_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "beir/arguana"
   collection_name: "arguana_typesense"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+
+arguana_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "beir/arguana"
+  table_name: "arguana_mariadb"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_weaviate_fulltext:
@@ -2085,6 +2289,13 @@ scidocs_typesense_fulltext:
   collection_name: "scidocs_typesense"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
+scidocs_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "beir/scidocs"
+  table_name: "scidocs_mariadb"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+
 scidocs_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2092,11 +2303,25 @@ scidocs_typesense_vector:
   collection_name: "scidocs_typesense"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
+scidocs_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "beir/scidocs"
+  table_name: "scidocs_mariadb"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+
 scidocs_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "beir/scidocs"
   collection_name: "scidocs_typesense"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+
+scidocs_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "beir/scidocs"
+  table_name: "scidocs_mariadb"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_weaviate_fulltext:
@@ -2285,6 +2510,13 @@ fiqa_typesense_fulltext:
   collection_name: "fiqa_typesense"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
+fiqa_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "beir/fiqa/test"
+  table_name: "fiqa_mariadb"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+
 fiqa_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2292,11 +2524,25 @@ fiqa_typesense_vector:
   collection_name: "fiqa_typesense"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
+fiqa_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "beir/fiqa/test"
+  table_name: "fiqa_mariadb"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+
 fiqa_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "beir/fiqa/test"
   collection_name: "fiqa_typesense"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+
+fiqa_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "beir/fiqa/test"
+  table_name: "fiqa_mariadb"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
 fiqa_weaviate_fulltext:
@@ -2485,6 +2731,13 @@ cqadupstack_webmasters_typesense_fulltext:
   collection_name: "cqadupstack_webmasters_typesense"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
+cqadupstack_webmasters_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "beir/cqadupstack/webmasters"
+  table_name: "cqadupstack_webmasters_mariadb"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
 cqadupstack_webmasters_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2492,11 +2745,25 @@ cqadupstack_webmasters_typesense_vector:
   collection_name: "cqadupstack_webmasters_typesense"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
+cqadupstack_webmasters_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "beir/cqadupstack/webmasters"
+  table_name: "cqadupstack_webmasters_mariadb"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
 cqadupstack_webmasters_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "beir/cqadupstack/webmasters"
   collection_name: "cqadupstack_webmasters_typesense"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
+cqadupstack_webmasters_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "beir/cqadupstack/webmasters"
+  table_name: "cqadupstack_webmasters_mariadb"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_weaviate_fulltext:
@@ -2685,6 +2952,13 @@ wands_typesense_fulltext:
   collection_name: "wands_typesense"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
+wands_mariadb_fulltext:
+  base: "mariadb"
+  type: "fulltext"
+  source: "wands"
+  table_name: "wands_mariadb"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
 wands_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2692,11 +2966,25 @@ wands_typesense_vector:
   collection_name: "wands_typesense"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
+wands_mariadb_vector:
+  base: "mariadb"
+  type: "vector"
+  source: "wands"
+  table_name: "wands_mariadb"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
 wands_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   source: "wands"
   collection_name: "wands_typesense"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_mariadb_hybrid:
+  base: "mariadb"
+  type: "hybrid"
+  source: "wands"
+  table_name: "wands_mariadb"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
 wands_weaviate_fulltext:

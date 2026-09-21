@@ -66,6 +66,19 @@ services:
     volumes:
       - ./data/typesense_data:/data
 
+  mariadb:
+    container_name: mariadb-vector
+    image: mariadb:11.8.9
+    ports:
+      - "3307:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: "root"
+      MARIADB_DATABASE: "search_bench"
+      MARIADB_USER: "bench"
+      MARIADB_PASSWORD: "bench"
+    volumes:
+      - ./data/mariadb_data:/var/lib/mysql
+
   weaviate:
     container_name: weaviate
     image: cr.weaviate.io/semitechnologies/weaviate:1.31.2

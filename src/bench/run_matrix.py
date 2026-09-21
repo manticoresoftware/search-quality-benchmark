@@ -13,6 +13,7 @@ from .discovery import discover_config_paths
 from .elasticsearch_backend import ElasticsearchBackend
 from .embedding_client import resolved_embedding_model
 from .manticore import ManticoreClient
+from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
@@ -39,6 +40,7 @@ _ENGINE_TARGET_KEYS = {
     "opensearch": {"index_name"},
     "elasticsearch": {"index_name"},
     "typesense": {"collection_name"},
+    "mariadb": {"table_name"},
     "vespa": {"collection_name"},
     "weaviate": {"collection_name"},
 }
@@ -73,6 +75,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "elasticsearch" in name
             else "typesense"
             if "typesense" in name
+            else "mariadb"
+            if "mariadb" in name
             else "vespa"
             if "vespa" in name
             else "weaviate"
@@ -246,6 +250,22 @@ def _typesense_hybrid_label(cfg: AppConfig) -> str:
     return f"{model} [alpha={float(cfg.typesense.hybrid_alpha):.2f}]"
 
 
+def _mariadb_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return (
+        f"{model} [field:{cfg.mariadb.vector_field} "
+        f"distance:{cfg.mariadb.vector_distance} M:{int(cfg.mariadb.vector_m)}]"
+    )
+
+
+def _mariadb_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return (
+        f"{model} [fusion=rrf k={int(cfg.mariadb.hybrid_rrf_k)} "
+        f"alpha={float(cfg.mariadb.hybrid_alpha):.2f}]"
+    )
+
+
 def _weaviate_vector_label(cfg: AppConfig) -> str:
     return f"{resolved_embedding_model(cfg)} [field:{cfg.weaviate.vector_field}]"
 
@@ -277,7 +297,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 continue
             cfg = target.cfg
             engine = display_engine_for_profile(target.type, target.name)
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "weaviate", "vespa") else ["fulltext", "vector"])
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "mariadb", "weaviate", "vespa") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
                     if is_manticore_like_type(engine):
@@ -290,6 +310,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _elasticsearch_vector_label(cfg)
                     elif engine == "typesense":
                         model_or_ranker = _typesense_vector_label(cfg)
+                    elif engine == "mariadb":
+                        model_or_ranker = _mariadb_vector_label(cfg)
                     elif engine == "weaviate":
                         model_or_ranker = _weaviate_vector_label(cfg)
                     elif engine == "vespa":
@@ -308,6 +330,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _qdrant_hybrid_label(cfg)
                     elif engine == "typesense":
                         model_or_ranker = _typesense_hybrid_label(cfg)
+                    elif engine == "mariadb":
+                        model_or_ranker = _mariadb_hybrid_label(cfg)
                     elif engine == "weaviate":
                         model_or_ranker = _weaviate_hybrid_label(cfg)
                     elif engine == "vespa":
@@ -338,6 +362,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = f"[fields:{','.join(cfg.elasticsearch.text_fields or ['title', 'abstract'])}]"
                 elif engine == "typesense":
                     model_or_ranker = f"[fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}]"
+                elif engine == "mariadb":
+                    model_or_ranker = f"[MATCH/AGAINST mode:{cfg.mariadb.fulltext_search_mode} fields:{','.join(cfg.mariadb.text_fields or ['title', 'abstract'])}]"
                 elif engine == "weaviate":
                     model_or_ranker = f"[fields:{','.join(cfg.weaviate.text_fields or ['title', 'abstract'])}]"
                 elif engine == "vespa":
@@ -481,6 +507,8 @@ def _draw_row(
             color_engine = curses.color_pair(12)
         elif v.engine == "typesense":
             color_engine = curses.color_pair(11)
+        elif v.engine == "mariadb":
+            color_engine = curses.color_pair(7)
         elif v.engine == "weaviate":
             color_engine = curses.color_pair(13)
         elif v.engine == "vespa":
@@ -528,6 +556,8 @@ def _variant_target_name(v: RunVariant) -> str:
         return str(v.cfg.elasticsearch.index_name or "").strip()
     if v.engine == "typesense":
         return str(v.cfg.typesense.collection_name or "").strip()
+    if v.engine == "mariadb":
+        return str(v.cfg.mariadb.table_name or "").strip()
     if v.engine == "weaviate":
         return str(v.cfg.weaviate.collection_name or "").strip()
     if v.engine == "vespa":
@@ -571,6 +601,17 @@ def is_variant_runnable(v: RunVariant) -> bool:
             backend = TypesenseBackend(v.cfg.typesense)
             backend.ensure_accessible()
             return backend.collection_exists(target)
+        if v.engine == "mariadb":
+            backend = MariaDBBackend(v.cfg.mariadb)
+            try:
+                backend.ensure_accessible()
+                if not backend.table_exists(target):
+                    return False
+                if v.mode in ("fulltext", "hybrid") and not backend.table_has_fulltext(target):
+                    return False
+                return v.mode == "fulltext" or backend.table_has_vector(target)
+            finally:
+                backend.close()
         if v.engine == "weaviate":
             backend = WeaviateBackend(v.cfg.weaviate)
             backend.ensure_accessible()
@@ -623,6 +664,12 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
         if v.engine == "typesense":
             backend = TypesenseBackend(v.cfg.typesense)
             return int(backend.get_document_count(_variant_target_name(v))), None
+        if v.engine == "mariadb":
+            backend = MariaDBBackend(v.cfg.mariadb)
+            try:
+                return int(backend.get_document_count(_variant_target_name(v))), None
+            finally:
+                backend.close()
         if v.engine == "weaviate":
             backend = WeaviateBackend(v.cfg.weaviate)
             return int(backend.get_document_count(_variant_target_name(v))), None
@@ -810,6 +857,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.init_pair(12, curses.COLOR_BLUE, -1)     # engine: elasticsearch
             curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_RED)    # target: missing
             curses.init_pair(11, curses.COLOR_RED, -1)      # engine: typesense
+            curses.init_pair(7, curses.COLOR_YELLOW, -1)   # engine: mariadb
             curses.init_pair(13, curses.COLOR_CYAN, -1)     # engine: weaviate
             curses.init_pair(14, curses.COLOR_GREEN, -1)    # engine: vespa
         widths = {

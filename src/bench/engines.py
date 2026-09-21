@@ -17,6 +17,7 @@ from typing import Any
 from .config import AppConfig
 from .elasticsearch_backend import ElasticsearchBackend
 from .manticore import ManticoreClient
+from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
@@ -73,6 +74,7 @@ _SERVICES: list[tuple[str, str]] = [
     ("opensearch", "OpenSearch"),
     ("elasticsearch", "Elasticsearch"),
     ("typesense", "Typesense"),
+    ("mariadb", "MariaDB Vector"),
     ("weaviate", "Weaviate"),
     ("vespa", "Vespa"),
 ]
@@ -133,6 +135,7 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
         "opensearch": [project_root / "data" / "opensearch_data"],
         "elasticsearch": [project_root / "data" / "elasticsearch_data"],
         "typesense": [project_root / "data" / "typesense_data"],
+        "mariadb": [project_root / "data" / "mariadb_data"],
         "weaviate": [project_root / "data" / "weaviate_data"],
         "vespa": [
             project_root / "data" / "vespa_data",
@@ -164,6 +167,7 @@ def _engine_data_dir(project_root: Path, service: str) -> Path | None:
         "opensearch": project_root / "data" / "opensearch_data",
         "elasticsearch": project_root / "data" / "elasticsearch_data",
         "typesense": project_root / "data" / "typesense_data",
+        "mariadb": project_root / "data" / "mariadb_data",
         "weaviate": project_root / "data" / "weaviate_data",
         "vespa": project_root / "data" / "vespa_data",
     }
@@ -425,6 +429,13 @@ def _engine_ready(cfg: AppConfig, service: str) -> tuple[bool, str]:
             return True, ""
         if service == "typesense":
             TypesenseBackend(cfg.typesense).ensure_accessible()
+            return True, ""
+        if service == "mariadb":
+            backend = MariaDBBackend(cfg.mariadb)
+            try:
+                backend.ensure_accessible()
+            finally:
+                backend.close()
             return True, ""
         if service == "weaviate":
             WeaviateBackend(cfg.weaviate).ensure_accessible()

@@ -183,6 +183,30 @@ class TypesenseConfig:
 
 
 @dataclass
+class MariaDBConfig:
+    host: str = "127.0.0.1"
+    port: int = 3307
+    user: str = "bench"
+    password: str = "bench"
+    database: str = "search_bench"
+    table_name: str = "trec_covid_mariadb"
+    index_layout: str = "combined"
+    text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
+    vector_field: str = "embedding"
+    vector_distance: str = "cosine"
+    vector_m: int = 8
+    fulltext_search_mode: str = "natural"
+    hybrid_alpha: float = 0.5
+    hybrid_rrf_k: int = 60
+    hybrid_candidates: int = 400
+    batch_size: int = 100
+    index_concurrency: int = 4
+    connect_timeout_seconds: int = 10
+    query_timeout_seconds: int = 60
+    index_timeout_seconds: int = 3600
+
+
+@dataclass
 class BenchmarkConfig:
     limit: int = 100
     warmup_queries: int = 5
@@ -250,6 +274,7 @@ class AppConfig:
     weaviate: WeaviateConfig = field(default_factory=WeaviateConfig)
     vespa: VespaConfig = field(default_factory=VespaConfig)
     typesense: TypesenseConfig = field(default_factory=TypesenseConfig)
+    mariadb: MariaDBConfig = field(default_factory=MariaDBConfig)
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -312,6 +337,7 @@ _ELASTICSEARCH_FIELDS = set(vars(ElasticsearchConfig()).keys())
 _WEAVIATE_FIELDS = set(vars(WeaviateConfig()).keys())
 _VESPA_FIELDS = set(vars(VespaConfig()).keys())
 _TYPESENSE_FIELDS = set(vars(TypesenseConfig()).keys())
+_MARIADB_FIELDS = set(vars(MariaDBConfig()).keys())
 _QDRANT_FIELDS = set(vars(QdrantConfig()).keys())
 _BENCHMARK_FIELDS = set(vars(BenchmarkConfig()).keys())
 _DATASET_FIELDS = set(vars(DatasetConfig()).keys())
@@ -325,6 +351,7 @@ _SECTION_NAMES = {
     "weaviate",
     "vespa",
     "typesense",
+    "mariadb",
     "qdrant",
     "benchmark",
     "dataset",
@@ -381,6 +408,7 @@ def _defaults_dict() -> dict[str, Any]:
         "weaviate": vars(defaults.weaviate),
         "vespa": vars(defaults.vespa),
         "typesense": vars(defaults.typesense),
+        "mariadb": vars(defaults.mariadb),
         "qdrant": vars(defaults.qdrant),
         "benchmark": vars(defaults.benchmark),
         "metrics": vars(defaults.metrics),
@@ -399,6 +427,7 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
         weaviate=WeaviateConfig(**merged["weaviate"]),
         vespa=VespaConfig(**merged["vespa"]),
         typesense=TypesenseConfig(**merged["typesense"]),
+        mariadb=MariaDBConfig(**merged["mariadb"]),
         qdrant=QdrantConfig(**merged["qdrant"]),
         benchmark=BenchmarkConfig(**merged["benchmark"]),
         metrics=MetricsConfig(**merged["metrics"]),
@@ -465,36 +494,40 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant"):
+        if e_type in ("manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "mariadb", "qdrant"):
             return e_type
         if isinstance(ent.get("manticore"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "mariadb")
         ):
             return "manticore"
         if isinstance(ent.get("opensearch"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "elasticsearch", "weaviate", "vespa", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "elasticsearch", "weaviate", "vespa", "typesense", "mariadb")
         ):
             return "opensearch"
         if isinstance(ent.get("elasticsearch"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "weaviate", "vespa", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "weaviate", "vespa", "typesense", "mariadb")
         ):
             return "elasticsearch"
         if isinstance(ent.get("weaviate"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "vespa", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "vespa", "typesense", "mariadb")
         ):
             return "weaviate"
         if isinstance(ent.get("vespa"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "weaviate", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "meilisearch", "qdrant", "opensearch", "elasticsearch", "weaviate", "typesense", "mariadb")
         ):
             return "vespa"
         if isinstance(ent.get("meilisearch"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "mariadb")
         ):
             return "meilisearch"
         if isinstance(ent.get("typesense"), dict) and not any(
-            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa")
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "mariadb")
         ):
             return "typesense"
+        if isinstance(ent.get("mariadb"), dict) and not any(
+            isinstance(ent.get(sec), dict) for sec in ("manticore", "qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense")
+        ):
+            return "mariadb"
         if isinstance(ent.get("qdrant"), dict) and not isinstance(ent.get("manticore"), dict):
             return "qdrant"
         lowered = name.lower()
@@ -510,6 +543,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "meilisearch"
         if "typesense" in lowered:
             return "typesense"
+        if "mariadb" in lowered:
+            return "mariadb"
         if "columnar" in lowered:
             return "columnar"
         if "qdrant" in lowered:
@@ -521,6 +556,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
         w_hits = 0
         v_hits = 0
         ts_hits = 0
+        mariadb_hits = 0
         q_hits = 0
         for k in ent.keys():
             if k in ("type", "base") or k in _SECTION_NAMES:
@@ -541,23 +577,27 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 v_hits += 1
             if k in _TYPESENSE_FIELDS:
                 ts_hits += 1
+            if k in _MARIADB_FIELDS:
+                mariadb_hits += 1
             if k in _QDRANT_FIELDS:
                 q_hits += 1
-        if meili_hits > max(m_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, q_hits):
+        if meili_hits > max(m_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, mariadb_hits, q_hits):
             return "meilisearch"
-        if os_hits > max(m_hits, es_hits, w_hits, v_hits, ts_hits, q_hits):
+        if os_hits > max(m_hits, es_hits, w_hits, v_hits, ts_hits, mariadb_hits, q_hits):
             return "opensearch"
-        if es_hits > max(m_hits, w_hits, v_hits, ts_hits, q_hits):
+        if es_hits > max(m_hits, w_hits, v_hits, ts_hits, mariadb_hits, q_hits):
             return "elasticsearch"
-        if w_hits > max(m_hits, v_hits, ts_hits, q_hits):
+        if w_hits > max(m_hits, v_hits, ts_hits, mariadb_hits, q_hits):
             return "weaviate"
-        if v_hits > max(m_hits, ts_hits, q_hits):
+        if v_hits > max(m_hits, ts_hits, mariadb_hits, q_hits):
             return "vespa"
-        if ts_hits > max(m_hits, es_hits, w_hits, v_hits, q_hits):
+        if ts_hits > max(m_hits, es_hits, w_hits, v_hits, mariadb_hits, q_hits):
             return "typesense"
-        if q_hits > m_hits:
+        if mariadb_hits > max(m_hits, meili_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, q_hits):
+            return "mariadb"
+        if q_hits > max(m_hits, mariadb_hits):
             return "qdrant"
-        if m_hits > q_hits:
+        if m_hits > max(q_hits, mariadb_hits):
             return "manticore"
         if name.lower().startswith("meili"):
             return "meilisearch"
@@ -571,6 +611,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "vespa"
         if name.lower().startswith("typesense"):
             return "typesense"
+        if name.lower().startswith("mariadb"):
+            return "mariadb"
         if name.lower().startswith("qdrant"):
             return "qdrant"
         return "manticore"
@@ -612,6 +654,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 candidates.append("vespa")
             if k in _TYPESENSE_FIELDS:
                 candidates.append("typesense")
+            if k in _MARIADB_FIELDS:
+                candidates.append("mariadb")
             if k in _QDRANT_FIELDS:
                 candidates.append("qdrant")
             if k in _BENCHMARK_FIELDS:
@@ -624,7 +668,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 continue
 
             preferred = "manticore" if e_type in _MANTICORE_LIKE_TYPES else (
-                e_type if e_type in ("meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "qdrant") else "manticore"
+                e_type if e_type in ("meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "mariadb", "qdrant") else "manticore"
             )
             if preferred in candidates:
                 sec = preferred
