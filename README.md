@@ -498,7 +498,10 @@ Behavior:
   - fails on cache misses.
 - MariaDB vector indexing:
   - requires MariaDB 11.7 or newer (the bundled service uses MariaDB 11.8 LTS),
-  - uses `index_timeout_seconds` (one hour by default) for ingestion and index building; `query_timeout_seconds` continues to govern benchmark searches,
+  - uses `index_timeout_seconds` for ingestion; index DDL uses an unbounded socket and is actively monitored every `index_progress_interval_seconds`, so a healthy long-running build is not disconnected,
+  - reports the server's `PROCESSLIST` stage, stage progress, state, and connection ID while FULLTEXT and VECTOR indexes are built,
+  - sends cached vectors as packed `float32` values instead of server-side JSON parsing,
+  - the bundled container defaults to a 32 GiB InnoDB buffer pool and an 8 GiB per-index HNSW cache; override these with `MARIADB_INNODB_BUFFER_POOL_SIZE` and `MARIADB_MHNSW_MAX_CACHE_SIZE`,
   - creates a combined InnoDB table with FULLTEXT and VECTOR indexes,
   - uses cache only and fails on cache misses,
   - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).

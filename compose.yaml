@@ -69,6 +69,9 @@ services:
   mariadb:
     container_name: mariadb-vector
     image: mariadb:11.8.9
+    command:
+      - --innodb-buffer-pool-size=${MARIADB_INNODB_BUFFER_POOL_SIZE:-32G}
+      - --mhnsw-max-cache-size=${MARIADB_MHNSW_MAX_CACHE_SIZE:-8G}
     ports:
       - "3307:3306"
     environment:

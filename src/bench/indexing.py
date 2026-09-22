@@ -1546,6 +1546,41 @@ def _run_index_mariadb(
     processed = 0
     prepare_seconds = 0.0
     send_seconds = 0.0
+
+    def _create_search_indexes(*, with_vector: bool) -> None:
+        # ALTER TABLE does not stream result rows, so a socket read timeout is
+        # indistinguishable from a stalled build. Use an unbounded DDL socket
+        # and monitor the server operation through a separate connection.
+        build_backend = MariaDBBackend(cfg.mariadb, timeout_seconds=0)
+
+        def _on_index_progress(status: dict[str, Any]) -> None:
+            if progress_callback is None:
+                return
+            progress_callback(
+                {
+                    "engine": "mariadb",
+                    "mode": mode,
+                    "stage": f"build_{status.get('index_name', 'index')}",
+                    "processed": 0,
+                    "total": 0,
+                    "inserted": inserted,
+                    "failed_batches": 0,
+                    "retried_batches": 0,
+                    **status,
+                }
+            )
+
+        try:
+            build_backend.create_search_indexes(
+                with_vector=with_vector,
+                progress_callback=_on_index_progress if progress_callback is not None else None,
+                progress_interval_seconds=max(
+                    0.1, float(cfg.mariadb.index_progress_interval_seconds)
+                ),
+            )
+        finally:
+            build_backend.close()
+
     try:
         if mode == "fulltext":
             backend.recreate_table()
@@ -1582,7 +1617,8 @@ def _run_index_mariadb(
                 worker=_worker,
                 on_result=_on_result,
             )
-            backend.create_search_indexes(with_vector=False)
+            backend.close()
+            _create_search_indexes(with_vector=False)
         else:
             docs_cached, missing_total, missing_keys = _collect_cached_docs(
                 docs=docs,
@@ -1626,7 +1662,7 @@ def _run_index_mariadb(
                             if not vector:
                                 continue
                             row = dict(doc)
-                            row[cfg.mariadb.vector_field] = [float(x) for x in vector]
+                            row[cfg.mariadb.vector_field] = vector
                             batch.append(row)
                         prepared_batches.append([batch, len(chunk)])
                     prepare_seconds += perf_counter() - prep_started
@@ -1683,7 +1719,8 @@ def _run_index_mariadb(
                     send_seconds += perf_counter() - send_started
             finally:
                 cache.close()
-            backend.create_search_indexes(with_vector=True)
+            backend.close()
+            _create_search_indexes(with_vector=True)
 
         elapsed = perf_counter() - started
         return [

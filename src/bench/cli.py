@@ -593,6 +593,10 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         send_seconds_obj = update.get("send_seconds")
         prepare_seconds = float(prepare_seconds_obj) if prepare_seconds_obj is not None else None
         send_seconds = float(send_seconds_obj) if send_seconds_obj is not None else None
+        progress_percent_obj = update.get("progress_percent")
+        progress_percent = (
+            float(progress_percent_obj) if progress_percent_obj is not None else None
+        )
         last_error = str(update.get("last_error", "") or "").strip().replace("\n", " ")
         if len(last_error) > 140:
             last_error = last_error[:139] + "…"
@@ -604,20 +608,32 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                     error_reasons[str(reason)] = int(count)
                 except Exception:
                     continue
-        is_final = total > 0 and processed >= total
+        is_final = (
+            progress_percent >= 100.0
+            if progress_percent is not None
+            else total > 0 and processed >= total
+        )
         if (now - last) < 0.5 and not is_final:
             return
-        pct = (processed / total * 100.0) if total > 0 else 0.0
+        pct = (
+            progress_percent
+            if progress_percent is not None
+            else (processed / total * 100.0) if total > 0 else 0.0
+        )
         eta = ""
-        if total > 0 and processed > 0 and processed < total:
+        if progress_percent is None and total > 0 and processed > 0 and processed < total:
             rate = processed / elapsed if elapsed > 0 else 0.0
             if rate > 0:
                 remaining = (total - processed) / rate
                 eta = f" eta={remaining:6.1f}s"
         stage_part = f":{stage}" if stage else ""
+        if progress_percent is not None:
+            progress_text = f"{pct:5.1f}%"
+        else:
+            progress_text = f"{processed}/{total if total > 0 else '?'} ({pct:5.1f}%)"
         line = (
-            f"Index progress [{engine}:{mode}{stage_part}] {processed}/{total if total > 0 else '?'} "
-            f"({pct:5.1f}%) inserted={inserted} retries={retries} failed={failed} elapsed={elapsed:6.1f}s{eta}"
+            f"Index progress [{engine}:{mode}{stage_part}] {progress_text} "
+            f"inserted={inserted} retries={retries} failed={failed} elapsed={elapsed:6.1f}s{eta}"
         )
         if prepare_seconds is not None or send_seconds is not None:
             parts: list[str] = []
@@ -637,9 +653,22 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             line += f" errors={'; '.join(rendered)}"
         elif last_error and (retries > 0 or failed > 0):
             line += f" reason={last_error}"
+        database_state = str(update.get("database_state", "") or "").strip()
+        database_stage = int(update.get("database_stage", 0) or 0)
+        database_max_stage = int(update.get("database_max_stage", 0) or 0)
+        stage_progress_obj = update.get("stage_progress_percent")
+        if database_stage > 0 and database_max_stage > 0:
+            line += f" db_stage={database_stage}/{database_max_stage}"
+        if stage_progress_obj is not None and database_stage > 0:
+            line += f" stage_progress={float(stage_progress_obj):.1f}%"
+        if database_state:
+            line += f" state={database_state!r}"
+        connection_id = int(update.get("connection_id", 0) or 0)
+        if connection_id > 0:
+            line += f" connection={connection_id}"
         if is_tty:
             end = "\n" if is_final else ""
-            print(f"\r{line}", end=end, flush=True)
+            print(f"\r\033[K{line}", end=end, flush=True)
         else:
             print(line, flush=True)
         last_by_key[key] = now

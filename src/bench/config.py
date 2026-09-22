@@ -204,6 +204,7 @@ class MariaDBConfig:
     connect_timeout_seconds: int = 10
     query_timeout_seconds: int = 60
     index_timeout_seconds: int = 3600
+    index_progress_interval_seconds: float = 5.0
 
 
 @dataclass

@@ -219,6 +219,7 @@ mariadb:
   connect_timeout_seconds: 10
   query_timeout_seconds: 60
   index_timeout_seconds: 3600
+  index_progress_interval_seconds: 5
 
 weaviate:
   type: "weaviate"

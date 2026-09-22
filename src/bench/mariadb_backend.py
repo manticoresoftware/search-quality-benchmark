@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+import struct
+from threading import Event, Thread
+from time import perf_counter
+from typing import Any, Callable
 
 import pymysql
 from pymysql.cursors import DictCursor
@@ -32,7 +35,8 @@ class MariaDBBackend:
             configured_timeout = (
                 self.cfg.query_timeout_seconds if self._timeout_seconds is None else self._timeout_seconds
             )
-            timeout = max(1, int(configured_timeout))
+            timeout_value = int(configured_timeout)
+            timeout = None if timeout_value <= 0 else max(1, timeout_value)
             self._conn = pymysql.connect(
                 host=str(self.cfg.host or "127.0.0.1"),
                 port=int(self.cfg.port),
@@ -144,21 +148,145 @@ class MariaDBBackend:
             )
         self._connection().commit()
 
-    def create_search_indexes(self, *, with_vector: bool) -> None:
-        table = self._table_sql()
+    def _connection_id(self) -> int:
         with self._connection().cursor() as cur:
-            cur.execute(f"ALTER TABLE {table} ADD FULLTEXT INDEX `bench_fulltext` ({self._text_fields_sql()})")
-            if with_vector:
-                distance = str(self.cfg.vector_distance or "cosine").strip().lower()
-                if distance not in {"cosine", "euclidean"}:
-                    raise ValueError("MariaDB vector_distance must be cosine or euclidean")
-                vector_m = int(self.cfg.vector_m)
-                if vector_m < 3 or vector_m > 200:
-                    raise ValueError("MariaDB vector_m must be between 3 and 200")
-                cur.execute(
-                    f"ALTER TABLE {table} ADD VECTOR INDEX `bench_vector` ({self._vector_field_sql()}) "
-                    f"M={vector_m} DISTANCE={distance}"
-                )
+            cur.execute("SELECT CONNECTION_ID() AS connection_id")
+            row = cur.fetchone() or {}
+        return int(row.get("connection_id", 0))
+
+    def _process_status(self, connection_id: int) -> dict[str, Any] | None:
+        with self._connection().cursor() as cur:
+            cur.execute(
+                "SELECT ID AS connection_id, TIME AS server_elapsed_seconds, STATE AS database_state, "
+                "STAGE AS database_stage, MAX_STAGE AS database_max_stage, "
+                "PROGRESS AS stage_progress_percent "
+                "FROM information_schema.PROCESSLIST WHERE ID = %s",
+                (int(connection_id),),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        status = dict(row)
+        stage = int(status.get("database_stage") or 0)
+        max_stage = int(status.get("database_max_stage") or 0)
+        stage_progress = float(status.get("stage_progress_percent") or 0.0)
+        if stage > 0 and max_stage > 0:
+            progress = ((stage - 1) + stage_progress / 100.0) / max_stage * 100.0
+        else:
+            progress = stage_progress
+        status["progress_percent"] = min(100.0, max(0.0, progress))
+        return status
+
+    def _execute_monitored_ddl(
+        self,
+        sql: str,
+        *,
+        index_name: str,
+        progress_callback: Callable[[dict[str, Any]], None] | None,
+        progress_interval_seconds: float,
+    ) -> None:
+        if progress_callback is None:
+            with self._connection().cursor() as cur:
+                cur.execute(sql)
+            return
+
+        connection_id = self._connection_id()
+        started = perf_counter()
+        stop = Event()
+
+        progress_callback(
+            {
+                "index_name": index_name,
+                "connection_id": connection_id,
+                "progress_percent": 0.0,
+                "database_state": "starting",
+                "database_stage": 0,
+                "database_max_stage": 0,
+                "stage_progress_percent": 0.0,
+                "server_elapsed_seconds": 0,
+                "elapsed_seconds": 0.0,
+            }
+        )
+
+        def _monitor() -> None:
+            monitor = MariaDBBackend(self.cfg)
+            interval = max(0.1, float(progress_interval_seconds))
+            try:
+                while not stop.wait(interval):
+                    try:
+                        status = monitor._process_status(connection_id)
+                        if status is None:
+                            continue
+                        status["index_name"] = index_name
+                        status["elapsed_seconds"] = perf_counter() - started
+                        progress_callback(status)
+                    except Exception as exc:
+                        progress_callback(
+                            {
+                                "index_name": index_name,
+                                "connection_id": connection_id,
+                                "progress_percent": 0.0,
+                                "database_state": f"progress probe failed: {exc}",
+                                "database_stage": 0,
+                                "database_max_stage": 0,
+                                "stage_progress_percent": 0.0,
+                                "server_elapsed_seconds": 0,
+                                "elapsed_seconds": perf_counter() - started,
+                            }
+                        )
+            finally:
+                monitor.close()
+
+        monitor_thread = Thread(target=_monitor, name=f"mariadb-{index_name}-progress", daemon=True)
+        monitor_thread.start()
+        try:
+            with self._connection().cursor() as cur:
+                cur.execute(sql)
+        finally:
+            stop.set()
+            monitor_thread.join()
+        progress_callback(
+            {
+                "index_name": index_name,
+                "connection_id": connection_id,
+                "progress_percent": 100.0,
+                "database_state": "complete",
+                "database_stage": 0,
+                "database_max_stage": 0,
+                "stage_progress_percent": 100.0,
+                "server_elapsed_seconds": 0,
+                "elapsed_seconds": perf_counter() - started,
+            }
+        )
+
+    def create_search_indexes(
+        self,
+        *,
+        with_vector: bool,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        progress_interval_seconds: float = 5.0,
+    ) -> None:
+        table = self._table_sql()
+        self._execute_monitored_ddl(
+            f"ALTER TABLE {table} ADD FULLTEXT INDEX `bench_fulltext` ({self._text_fields_sql()})",
+            index_name="fulltext",
+            progress_callback=progress_callback,
+            progress_interval_seconds=progress_interval_seconds,
+        )
+        if with_vector:
+            distance = str(self.cfg.vector_distance or "cosine").strip().lower()
+            if distance not in {"cosine", "euclidean"}:
+                raise ValueError("MariaDB vector_distance must be cosine or euclidean")
+            vector_m = int(self.cfg.vector_m)
+            if vector_m < 3 or vector_m > 200:
+                raise ValueError("MariaDB vector_m must be between 3 and 200")
+            self._execute_monitored_ddl(
+                f"ALTER TABLE {table} ADD VECTOR INDEX `bench_vector` ({self._vector_field_sql()}) "
+                f"M={vector_m} DISTANCE={distance}",
+                index_name="vector",
+                progress_callback=progress_callback,
+                progress_interval_seconds=progress_interval_seconds,
+            )
         self._connection().commit()
 
     def bulk_index(self, docs: list[dict[str, Any]], *, with_vector: bool) -> int:
@@ -170,8 +298,11 @@ class MariaDBBackend:
         rows: list[tuple[Any, ...]] = []
         if with_vector:
             columns += f", {self._vector_field_sql()}"
-            placeholders += ", VEC_FromText(%s)"
+            # PyMySQL escapes bytes as a string literal without a binary
+            # introducer. The explicit cast preserves the packed VECTOR value.
+            placeholders += ", CAST(%s AS BINARY)"
             for doc in docs:
+                vector = [float(x) for x in doc[self.cfg.vector_field]]
                 rows.append(
                     (
                         int(doc["id"]),
@@ -180,7 +311,7 @@ class MariaDBBackend:
                         str(doc.get("abstract", "")),
                         str(doc.get("doi", "")),
                         str(doc.get("date", "")),
-                        json.dumps([float(x) for x in doc[self.cfg.vector_field]], separators=(",", ":")),
+                        struct.pack(f"<{len(vector)}f", *vector),
                     )
                 )
         else:
