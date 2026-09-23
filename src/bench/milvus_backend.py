@@ -182,10 +182,6 @@ class MilvusBackend:
             self.cfg.doc_id_max_length,
             field="doc_id",
         )
-        content_max_length = self._varchar_max_length(
-            self.cfg.content_max_length,
-            field=content_field,
-        )
         self.delete_collection_if_exists(name)
 
         schema = self.client.create_schema(auto_id=False, enable_dynamic_field=False)
@@ -201,8 +197,7 @@ class MilvusBackend:
         )
         schema.add_field(
             field_name=content_field,
-            datatype=self.DataType.VARCHAR,
-            max_length=content_max_length,
+            datatype=self.DataType.TEXT,
             enable_analyzer=True,
         )
         schema.add_field(
@@ -280,10 +275,6 @@ class MilvusBackend:
             self.cfg.doc_id_max_length,
             field="doc_id",
         )
-        content_max_length = self._varchar_max_length(
-            self.cfg.content_max_length,
-            field=content_field,
-        )
         rows: list[dict[str, Any]] = []
         for doc in docs:
             doc_id = str(doc.get("doc_id", "") or "")
@@ -292,12 +283,6 @@ class MilvusBackend:
                 doc_id,
                 max_bytes=doc_id_max_length,
                 field="doc_id",
-                doc_id=doc_id,
-            )
-            self._validate_varchar(
-                content,
-                max_bytes=content_max_length,
-                field=content_field,
                 doc_id=doc_id,
             )
             row: dict[str, Any] = {

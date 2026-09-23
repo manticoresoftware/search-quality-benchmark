@@ -195,6 +195,7 @@ class MilvusConfig:
     index_layout: str = "combined"
     text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
     content_field: str = "content"
+    # Deprecated compatibility option. Milvus 3 TEXT fields have no max_length.
     content_max_length: int = 65535
     doc_id_max_length: int = 2048
     dense_vector_field: str = "embedding"

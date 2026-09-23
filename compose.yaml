@@ -68,11 +68,12 @@ services:
 
   milvus:
     container_name: milvus
-    image: milvusdb/milvus:v3.0.1
+    image: milvusdb/milvus:v3.0.2
     security_opt:
       - seccomp:unconfined
     command: ["milvus", "run", "standalone"]
     environment:
+      COMMON_STORAGE_USELOONFFI: "true"
       ETCD_USE_EMBED: "true"
       ETCD_DATA_DIR: /var/lib/milvus/etcd
       ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml

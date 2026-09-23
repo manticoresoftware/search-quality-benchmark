@@ -90,6 +90,7 @@ def fake_pymilvus(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     module.DataType = SimpleNamespace(
         INT64="INT64",
         VARCHAR="VARCHAR",
+        TEXT="TEXT",
         SPARSE_FLOAT_VECTOR="SPARSE_FLOAT_VECTOR",
         FLOAT_VECTOR="FLOAT_VECTOR",
     )
@@ -102,11 +103,10 @@ def fake_pymilvus(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return module
 
 
-def test_milvus_schema_uses_varchar_bm25_and_dense_vector(fake_pymilvus: ModuleType) -> None:
+def test_milvus_schema_uses_text_bm25_and_dense_vector(fake_pymilvus: ModuleType) -> None:
     backend = MilvusBackend(
         MilvusConfig(
             collection_name="docs",
-            content_max_length=1234,
             text_fields=["title", "abstract"],
         )
     )
@@ -115,8 +115,8 @@ def test_milvus_schema_uses_varchar_bm25_and_dense_vector(fake_pymilvus: ModuleT
 
     fields = {field["field_name"]: field for field in backend.client.schema.fields}
     assert fields["doc_id"]["datatype"] == "VARCHAR"
-    assert fields["content"]["datatype"] == "VARCHAR"
-    assert fields["content"]["max_length"] == 1234
+    assert fields["content"]["datatype"] == "TEXT"
+    assert "max_length" not in fields["content"]
     assert fields["content"]["enable_analyzer"] is True
     assert fields["sparse"]["datatype"] == "SPARSE_FLOAT_VECTOR"
     assert fields["embedding"]["datatype"] == "FLOAT_VECTOR"
@@ -133,10 +133,16 @@ def test_milvus_schema_uses_varchar_bm25_and_dense_vector(fake_pymilvus: ModuleT
     assert indexes["embedding"]["metric_type"] == "COSINE"
 
 
-def test_milvus_insert_concatenates_text_fields_and_validates_utf8_bytes(
+def test_milvus_insert_accepts_long_text_and_validates_doc_id_utf8_bytes(
     fake_pymilvus: ModuleType,
 ) -> None:
-    backend = MilvusBackend(MilvusConfig(collection_name="docs", content_max_length=8))
+    backend = MilvusBackend(
+        MilvusConfig(
+            collection_name="docs",
+            content_max_length=1,  # Legacy option is ignored for TEXT fields.
+            doc_id_max_length=8,
+        )
+    )
     count = backend.import_documents(
         [
             {
@@ -152,13 +158,20 @@ def test_milvus_insert_concatenates_text_fields_and_validates_utf8_bytes(
     assert count == 1
     assert backend.client.inserted == [{"id": 7, "doc_id": "d1", "content": "one two"}]
 
+    long_text = "€" * 22_000
+    assert backend.import_documents(
+        [{"id": 8, "doc_id": "d2", "title": long_text, "abstract": ""}],
+        with_vector=False,
+    ) == 1
+    assert backend.client.inserted[-1]["content"] == long_text
+
     with pytest.raises(ValueError, match="9 bytes > 8 bytes"):
         backend.import_documents(
-            [{"id": 8, "doc_id": "d2", "title": "€€€", "abstract": ""}],
+            [{"id": 9, "doc_id": "€€€", "title": "text", "abstract": ""}],
             with_vector=False,
         )
 
-    backend.cfg.content_max_length = 65_536
+    backend.cfg.doc_id_max_length = 65_536
     with pytest.raises(ValueError, match="between 1 and 65535"):
         backend.recreate_collection()
 

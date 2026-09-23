@@ -298,8 +298,8 @@ embedding:
 - `milvus.uri` / `milvus.database`: Milvus endpoint and database (defaults: `http://127.0.0.1:19530`, `default`)
 - `milvus.token` / `milvus.token_file`: optional authentication token
 - `milvus.collection_name`: combined collection used for BM25, vector, and hybrid search
-- `milvus.text_fields`: source fields concatenated into the analyzed `VARCHAR` configured by `content_field`
-- `milvus.content_max_length` / `milvus.doc_id_max_length`: UTF-8 byte limits enforced before insert
+- `milvus.text_fields`: source fields concatenated into the analyzed, unbounded `TEXT` configured by `content_field`
+- `milvus.doc_id_max_length`: UTF-8 byte limit enforced on document IDs before insert
 - `milvus.dense_vector_field`, `dense_index_type`, and `dense_metric_type`: dense-vector schema and index settings
 - `milvus.sparse_vector_field`, `sparse_index_algorithm`, `bm25_k1`, and `bm25_b`: native BM25 function/index settings
 - `milvus.hybrid_rrf_k` / `milvus.hybrid_candidates`: native RRF ranker and per-branch candidate count
@@ -398,7 +398,7 @@ manticore_vector_only:
   - vector and hybrid load document vectors from the local SQLite vector cache
 - Milvus collections:
   - combined collection name: `milvus.collection_name`
-  - configured `text_fields` are concatenated into one analyzed `VARCHAR`; a native BM25 function writes its sparse representation
+  - configured `text_fields` are concatenated into one analyzed `TEXT`; a native BM25 function writes its sparse representation
   - vector mode builds the same collection with both sparse BM25 and cached dense-vector fields, enabling native RRF hybrid search
 - Weaviate collections:
   - combined collection name: `weaviate.collection_name`

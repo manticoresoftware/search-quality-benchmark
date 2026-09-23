@@ -229,7 +229,6 @@ milvus:
   index_layout: "combined"
   text_fields: ["title", "abstract"]
   content_field: "content"
-  content_max_length: 65535
   doc_id_max_length: 2048
   dense_vector_field: "embedding"
   sparse_vector_field: "sparse"
