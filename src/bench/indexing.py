@@ -13,6 +13,7 @@ from .io_utils import read_jsonl
 from .manticore import ManticoreClient
 from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
+from .milvus_backend import MilvusBackend
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .typesense_backend import TypesenseBackend
@@ -1514,6 +1515,198 @@ def _run_index_typesense(
     return out
 
 
+def _run_index_milvus(
+    cfg: AppConfig,
+    mode: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> list[ModeIndexResult]:
+    docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "engine": "milvus",
+                "mode": mode,
+                "stage": "load_docs",
+                "processed": 0,
+                "total": 0,
+                "inserted": 0,
+                "failed_batches": 0,
+                "retried_batches": 0,
+            }
+        )
+    docs = read_jsonl(docs_path)
+    backend = MilvusBackend(cfg.milvus)
+    try:
+        backend.ensure_accessible()
+        if mode not in ("fulltext", "vector"):
+            raise ValueError("For engine=milvus, mode must be one of: fulltext, vector")
+
+        started = perf_counter()
+        inserted = 0
+        processed = 0
+        prepare_seconds = 0.0
+        send_seconds = 0.0
+
+        if mode == "fulltext":
+            backend.recreate_collection()
+            batches = _iter_batches(docs, max(1, int(cfg.milvus.batch_size)))
+
+            def _worker_fulltext(batch: list[Any]) -> int:
+                return backend.import_documents(batch, with_vector=False)
+
+            def _on_result_fulltext(batch: list[Any], count: int) -> None:
+                nonlocal inserted, processed
+                inserted += count
+                processed += len(batch)
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "engine": "milvus",
+                            "mode": "fulltext",
+                            "stage": "ingest",
+                            "processed": processed,
+                            "total": len(docs),
+                            "inserted": inserted,
+                            "failed_batches": 0,
+                            "retried_batches": 0,
+                        }
+                    )
+
+            _run_parallel_batches(
+                batches,
+                max_workers=max(1, int(cfg.milvus.index_concurrency)),
+                worker=_worker_fulltext,
+                on_result=_on_result_fulltext,
+            )
+        else:
+            docs_cached, missing_total, missing_keys = _collect_cached_docs(
+                docs=docs,
+                cfg=cfg,
+                engine="milvus",
+                mode="vector",
+                progress_callback=progress_callback,
+            )
+            if missing_keys:
+                raise RuntimeError(
+                    "Vector cache miss during Milvus vector indexing. "
+                    f"Missing keys={missing_total} sample={missing_keys}. "
+                    "Build the corresponding embeddings in `bench prepare` first."
+                )
+            if not docs_cached:
+                raise RuntimeError("No vector documents available in cache (all missing/null).")
+
+            cache = VectorCache(cfg.manticore.vector_cache_path)
+            try:
+                first_key = docs_cached[0][1]
+                dimension = len(cache.get_vectors_many([first_key]).get(first_key) or [])
+            finally:
+                cache.close()
+            if dimension <= 0:
+                raise RuntimeError("Cached vectors have invalid dimension.")
+
+            backend.recreate_collection(dimension=dimension)
+            cache = VectorCache(cfg.manticore.vector_cache_path)
+            try:
+                total_cached = len(docs_cached)
+                fetch_batch_size = max(1, int(cfg.manticore.vector_cache_fetch_batch_size))
+                insert_batch_size = max(1, int(cfg.milvus.batch_size))
+                for fetch_start in range(0, total_cached, fetch_batch_size):
+                    prep_started = perf_counter()
+                    fetch_chunk = docs_cached[fetch_start : fetch_start + fetch_batch_size]
+                    vectors = cache.get_vectors_many([key for _, key in fetch_chunk])
+                    prepared_batches: list[list[Any]] = []
+                    for insert_start in range(0, len(fetch_chunk), insert_batch_size):
+                        chunk = fetch_chunk[insert_start : insert_start + insert_batch_size]
+                        batch: list[dict[str, Any]] = []
+                        for doc, key in chunk:
+                            vector = vectors.get(key, [])
+                            if not vector:
+                                continue
+                            row = dict(doc)
+                            row["bench_id"] = int(doc["id"])
+                            row[cfg.milvus.dense_vector_field] = [float(x) for x in vector]
+                            batch.append(row)
+                        prepared_batches.append([batch, len(chunk)])
+                    prepare_seconds += perf_counter() - prep_started
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "engine": "milvus",
+                                "mode": "vector",
+                                "stage": "prepare_cached",
+                                "processed": min(fetch_start + len(fetch_chunk), total_cached),
+                                "total": total_cached,
+                                "inserted": inserted,
+                                "failed_batches": 0,
+                                "retried_batches": 0,
+                                "prepare_seconds": prepare_seconds,
+                                "send_seconds": send_seconds,
+                            }
+                        )
+
+                    def _worker_vector(item: list[Any]) -> int:
+                        return backend.import_documents(item[0], with_vector=True)
+
+                    def _on_result_vector(item: list[Any], count: int) -> None:
+                        nonlocal inserted, processed
+                        inserted += count
+                        processed += int(item[1])
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "engine": "milvus",
+                                    "mode": "vector",
+                                    "stage": "send_cached",
+                                    "processed": processed,
+                                    "total": total_cached,
+                                    "inserted": inserted,
+                                    "failed_batches": 0,
+                                    "retried_batches": 0,
+                                    "prepare_seconds": prepare_seconds,
+                                    "send_seconds": send_seconds,
+                                }
+                            )
+
+                    send_started = perf_counter()
+                    _run_parallel_batches(
+                        prepared_batches,
+                        max_workers=max(1, int(cfg.milvus.index_concurrency)),
+                        worker=_worker_vector,
+                        on_result=_on_result_vector,
+                    )
+                    send_seconds += perf_counter() - send_started
+            finally:
+                cache.close()
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "engine": "milvus",
+                    "mode": mode,
+                    "stage": "finalize",
+                    "processed": processed,
+                    "total": len(docs),
+                    "inserted": inserted,
+                    "failed_batches": 0,
+                    "retried_batches": 0,
+                }
+            )
+        backend.finalize_collection()
+        elapsed = perf_counter() - started
+        return [
+            ModeIndexResult(
+                mode=mode,
+                duration_seconds=elapsed,
+                rows_inserted=inserted,
+                docs_per_second=(inserted / elapsed) if elapsed > 0 else 0.0,
+                failed_batches=0,
+                retried_batches=0,
+            )
+        ]
+    finally:
+        backend.close()
+
+
 def _run_index_mariadb(
     cfg: AppConfig,
     mode: str,
@@ -2243,6 +2436,8 @@ def run_index(
         return _run_index_elasticsearch(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "typesense":
         return _run_index_typesense(cfg, mode=mode, progress_callback=progress_callback)
+    if engine == "milvus":
+        return _run_index_milvus(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "mariadb":
         return _run_index_mariadb(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "weaviate":

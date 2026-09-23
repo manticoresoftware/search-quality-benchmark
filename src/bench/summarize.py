@@ -146,6 +146,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "Typesense vector (typesense)"
     if engine == "typesense" and mode == "hybrid":
         return "Typesense hybrid (typesense)"
+    if engine == "milvus" and mode == "fulltext":
+        return "Milvus full-text (milvus)"
+    if engine == "milvus" and mode == "vector":
+        return "Milvus vector (milvus)"
+    if engine == "milvus" and mode == "hybrid":
+        return "Milvus hybrid (milvus)"
     if engine == "mariadb" and mode == "fulltext":
         return "MariaDB full-text (mariadb)"
     if engine == "mariadb" and mode == "vector":
@@ -399,6 +405,8 @@ def _color_pair_for_engine(engine: str) -> int:
         return 9
     if e == "elasticsearch":
         return 12
+    if e == "milvus":
+        return 6
     if e == "mariadb":
         return 7
     if e == "weaviate":
@@ -2360,6 +2368,7 @@ def _engine_consistency_radar_lines(rows: list[ArtifactRow]) -> list[str]:
         ("elasticsearch", "#06b6d4"),
         ("meilisearch", "#ef4444"),
         ("typesense", "#8b5cf6"),
+        ("milvus", "#00a1ea"),
         ("mariadb", "#f97316"),
         ("weaviate", "#14b8a6"),
         ("vespa", "#22c55e"),
@@ -2403,6 +2412,7 @@ def _engine_consistency_series(rows: list[ArtifactRow]) -> tuple[list[str], list
         ("elasticsearch", "#06b6d4"),
         ("meilisearch", "#ef4444"),
         ("typesense", "#8b5cf6"),
+        ("milvus", "#00a1ea"),
         ("mariadb", "#f97316"),
         ("weaviate", "#14b8a6"),
         ("vespa", "#22c55e"),
@@ -2615,6 +2625,7 @@ def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]
         "elasticsearch": "#06b6d4",
         "meilisearch": "#ef4444",
         "typesense": "#8b5cf6",
+        "milvus": "#00a1ea",
         "mariadb": "#f97316",
         "weaviate": "#14b8a6",
         "vespa": "#22c55e",
@@ -2656,6 +2667,7 @@ def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
         "elasticsearch": "#06b6d4",
         "meilisearch": "#ef4444",
         "typesense": "#8b5cf6",
+        "milvus": "#00a1ea",
         "mariadb": "#f97316",
         "weaviate": "#14b8a6",
         "vespa": "#22c55e",
@@ -2822,6 +2834,8 @@ def _engine_color(engine: str) -> str:
         return "#2563eb"
     if e == "typesense":
         return "#ef4444"
+    if e == "milvus":
+        return "#00a1ea"
     if e == "mariadb":
         return "#f97316"
     if e == "weaviate":
@@ -3015,6 +3029,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
         "elasticsearch": "#06b6d4",
         "meilisearch": "#ef4444",
         "typesense": "#8b5cf6",
+        "milvus": "#00a1ea",
         "mariadb": "#f97316",
         "weaviate": "#14b8a6",
         "vespa": "#22c55e",

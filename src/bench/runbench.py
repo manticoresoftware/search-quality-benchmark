@@ -16,6 +16,7 @@ from .io_utils import ensure_dir, generate_run_id, read_jsonl
 from .manticore import ManticoreClient
 from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
+from .milvus_backend import MilvusBackend
 from .opensearch_backend import OpenSearchBackend
 from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k, reciprocal_rank_at_k
 from .qdrant_backend import QdrantBackend
@@ -363,6 +364,8 @@ def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
         return str(cfg.elasticsearch.index_name or "").strip()
     if engine == "typesense":
         return str(cfg.typesense.collection_name or "").strip()
+    if engine == "milvus":
+        return str(cfg.milvus.collection_name or "").strip()
     if engine == "mariadb":
         return str(cfg.mariadb.table_name or "").strip()
     if engine == "weaviate":
@@ -590,6 +593,31 @@ def _typesense_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     extras = [f"alpha={float(cfg.typesense.hybrid_alpha):.2f}"]
     return f"{model} [{' '.join(extras)}]"
+
+
+def _milvus_fulltext_label(cfg: AppConfig) -> str:
+    fields = ",".join(cfg.milvus.text_fields or ["title", "abstract"])
+    return (
+        f"[BM25 algo:{cfg.milvus.sparse_index_algorithm} "
+        f"k1:{float(cfg.milvus.bm25_k1):.2f} b:{float(cfg.milvus.bm25_b):.2f} "
+        f"fields:{fields}]"
+    )
+
+
+def _milvus_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return (
+        f"{model} [field:{cfg.milvus.dense_vector_field} "
+        f"index:{cfg.milvus.dense_index_type} metric:{cfg.milvus.dense_metric_type}]"
+    )
+
+
+def _milvus_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return (
+        f"{model} [fusion=rrf k={int(cfg.milvus.hybrid_rrf_k)} "
+        f"candidates={int(cfg.milvus.hybrid_candidates)} sparse=BM25]"
+    )
 
 
 def _mariadb_fulltext_label(cfg: AppConfig) -> str:
@@ -868,6 +896,64 @@ def _collect_diagnostics_typesense(
             except Exception as exc:
                 entry["error"] = str(exc)
             diagnostics[mode].append(entry)
+    return diagnostics
+
+
+def _collect_diagnostics_milvus(
+    cfg: AppConfig,
+    modes: list[str],
+    topics: list[dict[str, str]],
+    *,
+    query_vectors: dict[str, list[float]],
+) -> dict[str, list[dict[str, Any]]]:
+    diagnostics: dict[str, list[dict[str, Any]]] = {}
+    backend = MilvusBackend(cfg.milvus)
+    diagnostics_topics = topics[: cfg.benchmark.diagnostics_queries]
+    try:
+        for mode in modes:
+            diagnostics[mode] = []
+            for topic in diagnostics_topics:
+                qtext = query_text_for_mode(
+                    topic,
+                    mode,
+                    fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+                )
+                entry: dict[str, Any] = {"topic_id": topic["topic_id"], "query": qtext}
+                try:
+                    if mode == "fulltext":
+                        rows = backend.search_lexical(qtext, limit=min(cfg.benchmark.limit, 5))
+                    else:
+                        vector_text = query_text_for_mode(
+                            topic,
+                            "vector",
+                            fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+                        )
+                        query_vector = query_vectors.get(vector_text, [])
+                        if not query_vector:
+                            raise RuntimeError("Missing query vector for Milvus diagnostics.")
+                        if mode == "vector":
+                            rows = backend.search_vector(
+                                query_vector,
+                                limit=min(cfg.benchmark.limit, 5),
+                            )
+                        else:
+                            rows = backend.search_hybrid(
+                                qtext,
+                                query_vector,
+                                limit=min(cfg.benchmark.limit, 5),
+                            )
+                    entry["request"] = {
+                        "collection": backend.collection_name(),
+                        "mode": mode,
+                        "query": qtext,
+                        "vector_dim": len(query_vector) if mode != "fulltext" else 0,
+                    }
+                    entry["top_hits"] = rows[:5]
+                except Exception as exc:
+                    entry["error"] = str(exc)
+                diagnostics[mode].append(entry)
+    finally:
+        backend.close()
     return diagnostics
 
 
@@ -1272,6 +1358,54 @@ def _run_single_query_typesense(
         )
 
 
+def _run_single_query_milvus(
+    cfg: AppConfig,
+    backend: MilvusBackend,
+    mode: str,
+    topic_id: str,
+    query_text: str,
+    repeat_idx: int,
+    query_vector: list[float] | None = None,
+) -> QueryResult:
+    try:
+        started = perf_counter()
+        if mode == "fulltext":
+            rows = backend.search_lexical(query_text, limit=cfg.benchmark.limit)
+        elif mode == "vector":
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Milvus vector search.")
+            rows = backend.search_vector(query_vector, limit=cfg.benchmark.limit)
+        else:
+            if not query_vector:
+                raise RuntimeError("Missing query vector for Milvus hybrid search.")
+            rows = backend.search_hybrid(query_text, query_vector, limit=cfg.benchmark.limit)
+        latency_ms = (perf_counter() - started) * 1000.0
+        doc_ids = [str(row["doc_id"]) for row in rows if row.get("doc_id")]
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=latency_ms,
+            success=True,
+            error="",
+            hit_count=len(doc_ids),
+            doc_ids=doc_ids,
+        )
+    except Exception as exc:
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=0.0,
+            success=False,
+            error=str(exc),
+            hit_count=0,
+            doc_ids=[],
+        )
+
+
 def _run_single_query_mariadb(
     cfg: AppConfig,
     mode: str,
@@ -1468,7 +1602,7 @@ def _run_single_query_vespa(
 
 def _mask_value(path: str, value: Any) -> Any:
     p = path.lower()
-    if any(k in p for k in ("password", "api_key")) and str(value or "").strip():
+    if any(k in p for k in ("password", "api_key", "token")) and str(value or "").strip():
         return "***"
     return value
 
@@ -1568,6 +1702,19 @@ def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> li
                 lines.append(f"rows ({collection_name}): n/a ({exc})")
         return lines
 
+    if engine == "milvus":
+        backend = MilvusBackend(cfg.milvus)
+        try:
+            collection_name = backend.collection_name()
+            try:
+                count = backend.get_document_count(collection_name)
+                lines.append(f"rows ({collection_name}): {int(count):,}")
+            except Exception as exc:
+                lines.append(f"rows ({collection_name}): n/a ({exc})")
+        finally:
+            backend.close()
+        return lines
+
     if engine == "mariadb":
         backend = MariaDBBackend(cfg.mariadb)
         try:
@@ -1661,6 +1808,10 @@ def run_benchmark(
         if mode not in ("fulltext", "vector", "hybrid"):
             raise ValueError("For engine=typesense, mode must be one of: fulltext, vector, hybrid")
         modes = [mode]
+    elif engine == "milvus":
+        if mode not in ("fulltext", "vector", "hybrid"):
+            raise ValueError("For engine=milvus, mode must be one of: fulltext, vector, hybrid")
+        modes = [mode]
     elif engine == "mariadb":
         if mode not in ("fulltext", "vector", "hybrid"):
             raise ValueError("For engine=mariadb, mode must be one of: fulltext, vector, hybrid")
@@ -1700,6 +1851,7 @@ def run_benchmark(
     opensearch_backend: OpenSearchBackend | None = None
     elasticsearch_backend: ElasticsearchBackend | None = None
     typesense_backend: TypesenseBackend | None = None
+    milvus_backend: MilvusBackend | None = None
     weaviate_backend: WeaviateBackend | None = None
     vespa_backend: VespaBackend | None = None
     if "vector" in modes or "hybrid" in modes:
@@ -1717,6 +1869,8 @@ def run_benchmark(
         elasticsearch_backend = ElasticsearchBackend(cfg.elasticsearch)
     elif engine == "typesense":
         typesense_backend = TypesenseBackend(cfg.typesense)
+    elif engine == "milvus":
+        milvus_backend = MilvusBackend(cfg.milvus)
     elif engine == "weaviate":
         weaviate_backend = WeaviateBackend(cfg.weaviate)
     elif engine == "vespa":
@@ -1773,6 +1927,19 @@ def run_benchmark(
                     _run_single_query_typesense(
                         cfg,
                         typesense_backend,  # type: ignore[arg-type]
+                        m,
+                        t["topic_id"],
+                        qtext,
+                        repeat_idx=-1,
+                        query_vector=query_vectors.get(
+                            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                        ),
+                    )
+                    continue
+                if engine == "milvus":
+                    _run_single_query_milvus(
+                        cfg,
+                        milvus_backend,  # type: ignore[arg-type]
                         m,
                         t["topic_id"],
                         qtext,
@@ -1896,6 +2063,20 @@ def run_benchmark(
                     _run_single_query_typesense,
                     cfg,
                     typesense_backend,  # type: ignore[arg-type]
+                    m,
+                    tid,
+                    q,
+                    r,
+                    query_vectors.get(q, []) if m in ("vector", "hybrid") else None,
+                )
+                for (m, tid, q, r) in tasks
+            ]
+        elif engine == "milvus":
+            futures = [
+                pool.submit(
+                    _run_single_query_milvus,
+                    cfg,
+                    milvus_backend,  # type: ignore[arg-type]
                     m,
                     tid,
                     q,
@@ -2114,6 +2295,8 @@ def run_benchmark(
         diagnostics = _collect_diagnostics_elasticsearch(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "typesense":
         diagnostics = _collect_diagnostics_typesense(cfg, modes, topics, query_vectors=query_vectors)
+    elif engine == "milvus":
+        diagnostics = _collect_diagnostics_milvus(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "mariadb":
         diagnostics = _collect_diagnostics_mariadb(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "weaviate":
@@ -2134,6 +2317,8 @@ def run_benchmark(
             model_label = _elasticsearch_vector_label(cfg)
         elif engine == "typesense":
             model_label = _typesense_vector_label(cfg)
+        elif engine == "milvus":
+            model_label = _milvus_vector_label(cfg)
         elif engine == "mariadb":
             model_label = _mariadb_vector_label(cfg)
         elif engine == "weaviate":
@@ -2158,6 +2343,8 @@ def run_benchmark(
             model_label = _elasticsearch_hybrid_label(cfg)
         elif engine == "typesense":
             model_label = _typesense_hybrid_label(cfg)
+        elif engine == "milvus":
+            model_label = _milvus_hybrid_label(cfg)
         elif engine == "mariadb":
             model_label = _mariadb_hybrid_label(cfg)
         elif engine == "weaviate":
@@ -2177,6 +2364,8 @@ def run_benchmark(
             model_label = _elasticsearch_fulltext_label(cfg)
         elif engine == "typesense":
             model_label = _typesense_fulltext_label(cfg)
+        elif engine == "milvus":
+            model_label = _milvus_fulltext_label(cfg)
         elif engine == "mariadb":
             model_label = _mariadb_fulltext_label(cfg)
         elif engine == "weaviate":
@@ -2193,6 +2382,8 @@ def run_benchmark(
                 model_label = _qdrant_vector_label(cfg)
             elif engine == "typesense":
                 model_label = _typesense_vector_label(cfg)
+            elif engine == "milvus":
+                model_label = _milvus_vector_label(cfg)
             elif engine == "mariadb":
                 model_label = _mariadb_vector_label(cfg)
             elif engine == "weaviate":
@@ -2229,6 +2420,8 @@ def run_benchmark(
     metrics["resolved_config_lines"] = _build_resolved_config_lines(cfg, engine=report_engine, mode=mode, profile_name=profile_name)
     metrics["live_state_lines"] = _build_live_state_lines(cfg, engine=engine, modes=modes)
     metrics["diagnostics"] = diagnostics
+    if milvus_backend is not None:
+        milvus_backend.close()
     return run_id, metrics, per_query_rows
 
 

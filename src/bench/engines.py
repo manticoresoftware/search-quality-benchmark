@@ -19,6 +19,7 @@ from .elasticsearch_backend import ElasticsearchBackend
 from .manticore import ManticoreClient
 from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
+from .milvus_backend import MilvusBackend, suppress_pymilvus_probe_logs
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .table_layout import wrap_text_lines
@@ -74,6 +75,7 @@ _SERVICES: list[tuple[str, str]] = [
     ("opensearch", "OpenSearch"),
     ("elasticsearch", "Elasticsearch"),
     ("typesense", "Typesense"),
+    ("milvus", "Milvus"),
     ("mariadb", "MariaDB Vector"),
     ("weaviate", "Weaviate"),
     ("vespa", "Vespa"),
@@ -135,6 +137,7 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
         "opensearch": [project_root / "data" / "opensearch_data"],
         "elasticsearch": [project_root / "data" / "elasticsearch_data"],
         "typesense": [project_root / "data" / "typesense_data"],
+        "milvus": [project_root / "data" / "milvus_data"],
         "mariadb": [project_root / "data" / "mariadb_data"],
         "weaviate": [project_root / "data" / "weaviate_data"],
         "vespa": [
@@ -167,6 +170,7 @@ def _engine_data_dir(project_root: Path, service: str) -> Path | None:
         "opensearch": project_root / "data" / "opensearch_data",
         "elasticsearch": project_root / "data" / "elasticsearch_data",
         "typesense": project_root / "data" / "typesense_data",
+        "milvus": project_root / "data" / "milvus_data",
         "mariadb": project_root / "data" / "mariadb_data",
         "weaviate": project_root / "data" / "weaviate_data",
         "vespa": project_root / "data" / "vespa_data",
@@ -429,6 +433,17 @@ def _engine_ready(cfg: AppConfig, service: str) -> tuple[bool, str]:
             return True, ""
         if service == "typesense":
             TypesenseBackend(cfg.typesense).ensure_accessible()
+            return True, ""
+        if service == "milvus":
+            # pymilvus logs caught RPC failures, including full tracebacks, directly
+            # to stderr.  During the periodic curses refresh that output corrupts
+            # the screen, so keep the failure in the returned status text instead.
+            with suppress_pymilvus_probe_logs():
+                backend = MilvusBackend(cfg.milvus)
+                try:
+                    backend.ensure_accessible()
+                finally:
+                    backend.close()
             return True, ""
         if service == "mariadb":
             backend = MariaDBBackend(cfg.mariadb)

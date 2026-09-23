@@ -1,4 +1,4 @@
-# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense + MariaDB Vector + Weaviate + Vespa)
+# Search Benchmark (Manticore + Qdrant + Meilisearch + OpenSearch + Elasticsearch + Typesense + Milvus + MariaDB Vector + Weaviate + Vespa)
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore full-text
@@ -18,6 +18,9 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Typesense lexical search
 - Typesense vector search (user-provided vectors from the shared cache)
 - Typesense hybrid search (query text + cached query vector)
+- Milvus native BM25 search over concatenated text fields
+- Milvus dense vector search (user-provided vectors from the shared cache)
+- Milvus hybrid search (native reciprocal-rank fusion of BM25 and dense rankings)
 - MariaDB full-text search (`MATCH ... AGAINST`)
 - MariaDB vector search (`VECTOR INDEX` + `VEC_DISTANCE`)
 - MariaDB hybrid search (weighted reciprocal-rank fusion of full-text and vector rankings)
@@ -42,8 +45,8 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
   - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`) use the shorter query variant.
-    - vector/hybrid modes (`manticore vector`, `qdrant vector`, `meilisearch vector`, `meilisearch hybrid`, `opensearch vector`, `opensearch hybrid`, `elasticsearch vector`, `elasticsearch hybrid`) use the longer query variant.
+    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`, `typesense fulltext`, `milvus fulltext`) use the shorter query variant.
+    - vector/hybrid modes use the longer query variant, including Milvus vector and hybrid searches.
   - Prepared topic fields are explicit: `query_short` and `query_long`.
   - Example topics from TREC-COVID:
     - Topic `1`
@@ -290,6 +293,17 @@ embedding:
 - `typesense.vector_distance`: vector distance metric for the collection schema
 - `typesense.hybrid_alpha`: hybrid blend parameter passed to `vector_query`
 
+### Milvus Config
+
+- `milvus.uri` / `milvus.database`: Milvus endpoint and database (defaults: `http://127.0.0.1:19530`, `default`)
+- `milvus.token` / `milvus.token_file`: optional authentication token
+- `milvus.collection_name`: combined collection used for BM25, vector, and hybrid search
+- `milvus.text_fields`: source fields concatenated into the analyzed `VARCHAR` configured by `content_field`
+- `milvus.content_max_length` / `milvus.doc_id_max_length`: UTF-8 byte limits enforced before insert
+- `milvus.dense_vector_field`, `dense_index_type`, and `dense_metric_type`: dense-vector schema and index settings
+- `milvus.sparse_vector_field`, `sparse_index_algorithm`, `bm25_k1`, and `bm25_b`: native BM25 function/index settings
+- `milvus.hybrid_rrf_k` / `milvus.hybrid_candidates`: native RRF ranker and per-branch candidate count
+
 ### Weaviate Config
 - `weaviate.url`: server URL (default: `http://127.0.0.1:8080`)
 - `weaviate.api_key` / `weaviate.api_key_file`: optional API key
@@ -382,6 +396,10 @@ manticore_vector_only:
   - combined collection name: `typesense.collection_name`
   - lexical, vector, and hybrid all use the same physical collection
   - vector and hybrid load document vectors from the local SQLite vector cache
+- Milvus collections:
+  - combined collection name: `milvus.collection_name`
+  - configured `text_fields` are concatenated into one analyzed `VARCHAR`; a native BM25 function writes its sparse representation
+  - vector mode builds the same collection with both sparse BM25 and cached dense-vector fields, enabling native RRF hybrid search
 - Weaviate collections:
   - combined collection name: `weaviate.collection_name`
   - lexical, vector, and hybrid all use the same physical collection/class
@@ -425,6 +443,7 @@ The services currently managed there are:
 - `opensearch`
 - `elasticsearch`
 - `typesense`
+- `milvus`
 - `mariadb`
 - `weaviate`
 - `vespa`
@@ -444,6 +463,14 @@ Notes:
   ```
   The bundled service maps Elasticsearch to `http://127.0.0.1:9201`.
 - Typesense uses the local development API key `xyz` by default in both `compose.yaml` and `config.yaml`.
+- Milvus runs in standalone mode at `http://127.0.0.1:19530`, with embedded etcd and local storage under `data/milvus_data`.
+- Before starting Milvus for the first time, prepare the host data directory:
+  ```bash
+  mkdir -p data/milvus_data
+  sudo chown -R 999:999 data/milvus_data
+  chmod -R 755 data/milvus_data
+  ```
+  The Milvus container runs as user `milvus` (`999:999`), so the bind-mounted host directory must be writable by that uid/gid.
 - MariaDB uses `127.0.0.1:3307`, database `search_bench`, and local development credentials `bench`/`bench` by default.
 - Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
 - Vespa is exposed at `http://127.0.0.1:8081`, with deploy API at `http://127.0.0.1:19071`.
@@ -496,6 +523,9 @@ Behavior:
 - Typesense vector indexing:
   - uses cache only,
   - fails on cache misses.
+- Milvus vector indexing:
+  - uses cache only and fails on cache misses,
+  - creates a combined collection with native BM25 and dense indexes so the same target supports lexical, vector, and hybrid runs.
 - MariaDB vector indexing:
   - requires MariaDB 11.7 or newer (the bundled service uses MariaDB 11.8 LTS),
   - uses `index_timeout_seconds` for ingestion; index DDL uses an unbounded socket and is actively monitored every `index_progress_interval_seconds`, so a healthy long-running build is not disconnected,

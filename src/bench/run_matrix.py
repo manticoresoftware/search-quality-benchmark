@@ -15,6 +15,7 @@ from .embedding_client import resolved_embedding_model
 from .manticore import ManticoreClient
 from .mariadb_backend import MariaDBBackend
 from .meilisearch_backend import MeilisearchBackend
+from .milvus_backend import MilvusBackend, suppress_pymilvus_probe_logs
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
@@ -40,6 +41,7 @@ _ENGINE_TARGET_KEYS = {
     "opensearch": {"index_name"},
     "elasticsearch": {"index_name"},
     "typesense": {"collection_name"},
+    "milvus": {"collection_name"},
     "mariadb": {"table_name"},
     "vespa": {"collection_name"},
     "weaviate": {"collection_name"},
@@ -75,6 +77,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "elasticsearch" in name
             else "typesense"
             if "typesense" in name
+            else "milvus"
+            if "milvus" in name
             else "mariadb"
             if "mariadb" in name
             else "vespa"
@@ -250,6 +254,21 @@ def _typesense_hybrid_label(cfg: AppConfig) -> str:
     return f"{model} [alpha={float(cfg.typesense.hybrid_alpha):.2f}]"
 
 
+def _milvus_vector_label(cfg: AppConfig) -> str:
+    return (
+        f"{resolved_embedding_model(cfg)} [field:{cfg.milvus.dense_vector_field} "
+        f"index:{cfg.milvus.dense_index_type} metric:{cfg.milvus.dense_metric_type}]"
+    )
+
+
+def _milvus_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    return (
+        f"{model} [fusion=rrf k={int(cfg.milvus.hybrid_rrf_k)} "
+        f"candidates={int(cfg.milvus.hybrid_candidates)} sparse=BM25]"
+    )
+
+
 def _mariadb_vector_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     return (
@@ -297,7 +316,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 continue
             cfg = target.cfg
             engine = display_engine_for_profile(target.type, target.name)
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "mariadb", "weaviate", "vespa") else ["fulltext", "vector"])
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "milvus", "mariadb", "weaviate", "vespa") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
                     if is_manticore_like_type(engine):
@@ -310,6 +329,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _elasticsearch_vector_label(cfg)
                     elif engine == "typesense":
                         model_or_ranker = _typesense_vector_label(cfg)
+                    elif engine == "milvus":
+                        model_or_ranker = _milvus_vector_label(cfg)
                     elif engine == "mariadb":
                         model_or_ranker = _mariadb_vector_label(cfg)
                     elif engine == "weaviate":
@@ -330,6 +351,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _qdrant_hybrid_label(cfg)
                     elif engine == "typesense":
                         model_or_ranker = _typesense_hybrid_label(cfg)
+                    elif engine == "milvus":
+                        model_or_ranker = _milvus_hybrid_label(cfg)
                     elif engine == "mariadb":
                         model_or_ranker = _mariadb_hybrid_label(cfg)
                     elif engine == "weaviate":
@@ -362,6 +385,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = f"[fields:{','.join(cfg.elasticsearch.text_fields or ['title', 'abstract'])}]"
                 elif engine == "typesense":
                     model_or_ranker = f"[fields:{','.join(cfg.typesense.text_fields or ['title', 'abstract'])}]"
+                elif engine == "milvus":
+                    model_or_ranker = f"[BM25 field:{cfg.milvus.content_field} source:{'+'.join(cfg.milvus.text_fields or ['title', 'abstract'])}]"
                 elif engine == "mariadb":
                     model_or_ranker = f"[MATCH/AGAINST mode:{cfg.mariadb.fulltext_search_mode} fields:{','.join(cfg.mariadb.text_fields or ['title', 'abstract'])}]"
                 elif engine == "weaviate":
@@ -507,6 +532,8 @@ def _draw_row(
             color_engine = curses.color_pair(12)
         elif v.engine == "typesense":
             color_engine = curses.color_pair(11)
+        elif v.engine == "milvus":
+            color_engine = curses.color_pair(6)
         elif v.engine == "mariadb":
             color_engine = curses.color_pair(7)
         elif v.engine == "weaviate":
@@ -556,6 +583,8 @@ def _variant_target_name(v: RunVariant) -> str:
         return str(v.cfg.elasticsearch.index_name or "").strip()
     if v.engine == "typesense":
         return str(v.cfg.typesense.collection_name or "").strip()
+    if v.engine == "milvus":
+        return str(v.cfg.milvus.collection_name or "").strip()
     if v.engine == "mariadb":
         return str(v.cfg.mariadb.table_name or "").strip()
     if v.engine == "weaviate":
@@ -601,6 +630,13 @@ def is_variant_runnable(v: RunVariant) -> bool:
             backend = TypesenseBackend(v.cfg.typesense)
             backend.ensure_accessible()
             return backend.collection_exists(target)
+        if v.engine == "milvus":
+            backend = MilvusBackend(v.cfg.milvus)
+            try:
+                backend.ensure_accessible()
+                return backend.collection_supports(v.mode)
+            finally:
+                backend.close()
         if v.engine == "mariadb":
             backend = MariaDBBackend(v.cfg.mariadb)
             try:
@@ -664,6 +700,12 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
         if v.engine == "typesense":
             backend = TypesenseBackend(v.cfg.typesense)
             return int(backend.get_document_count(_variant_target_name(v))), None
+        if v.engine == "milvus":
+            backend = MilvusBackend(v.cfg.milvus)
+            try:
+                return int(backend.get_document_count(_variant_target_name(v))), None
+            finally:
+                backend.close()
         if v.engine == "mariadb":
             backend = MariaDBBackend(v.cfg.mariadb)
             try:
@@ -684,7 +726,7 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
 
 def _mask_detail_value(path: str, value: Any) -> Any:
     p = path.lower()
-    if any(k in p for k in ("password", "api_key")) and str(value or "").strip():
+    if any(k in p for k in ("password", "api_key", "token")) and str(value or "").strip():
         return "***"
     return value
 
@@ -1038,7 +1080,11 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             elif ch == 27 or ch in (ord("q"),):
                 return []
 
-    picked = curses.wrapper(_inner)
+    # PyMilvus logs handled RPC failures, including full tracebacks, to stderr.
+    # Keep all live target probes quiet while curses owns the terminal; their
+    # failures are already represented by the target status and details panel.
+    with suppress_pymilvus_probe_logs():
+        picked = curses.wrapper(_inner)
     return [variants[i] for i in picked]
 
 

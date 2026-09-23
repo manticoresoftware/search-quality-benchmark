@@ -197,6 +197,35 @@ typesense:
   vector_distance: "cosine"
   hybrid_alpha: 0.5
 
+milvus:
+  type: "milvus"
+  uri: "http://127.0.0.1:19530"
+  token: ""
+  token_file: ""
+  database: "default"
+  timeout_seconds: 60
+  batch_size: 500
+  index_concurrency: 1
+  collection_name: "trec_covid_milvus"
+  index_layout: "combined"
+  text_fields: ["title", "abstract"]
+  content_field: "content"
+  content_max_length: 65535
+  doc_id_max_length: 2048
+  dense_vector_field: "embedding"
+  sparse_vector_field: "sparse"
+  dense_index_type: "AUTOINDEX"
+  dense_metric_type: "COSINE"
+  dense_index_params: {}
+  dense_search_params: {}
+  sparse_index_algorithm: "DAAT_MAXSCORE"
+  sparse_drop_ratio_search: 0.0
+  bm25_k1: 1.2
+  bm25_b: 0.75
+  hybrid_rrf_k: 60
+  hybrid_candidates: 400
+  consistency_level: "Strong"
+
 mariadb:
   type: "mariadb"
   host: "127.0.0.1"
@@ -355,6 +384,23 @@ trec_covid_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
   collection_name: "trec_covid_typesense"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_milvus_fulltext:
+  base: "milvus"
+  type: "fulltext"
+  collection_name: "trec_covid_milvus"
+
+trec_covid_milvus_vector:
+  base: "milvus"
+  type: "vector"
+  collection_name: "trec_covid_milvus"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_milvus_hybrid:
+  base: "milvus"
+  type: "hybrid"
+  collection_name: "trec_covid_milvus"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 trec_covid_mariadb_fulltext:
@@ -531,6 +577,29 @@ msmarco_passage_typesense_fulltext:
   type: "fulltext"
   source: "msmarco-passage/dev/small"
   collection_name: "msmarco_passage_typesense"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_milvus_fulltext:
+  base: "milvus"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_milvus"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_milvus_vector:
+  base: "milvus"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_milvus"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_milvus_hybrid:
+  base: "milvus"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  collection_name: "msmarco_passage_milvus"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
 msmarco_passage_mariadb_fulltext:
@@ -718,6 +787,24 @@ msmarco_lite_typesense_fulltext:
   keep_qrels_docs: true
   collection_name: "msmarco_lite_typesense"
 
+msmarco_lite_milvus_fulltext:
+  base: "msmarco_passage_milvus_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_milvus"
+
+msmarco_lite_milvus_vector:
+  base: "msmarco_passage_milvus_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_milvus"
+
+msmarco_lite_milvus_hybrid:
+  base: "msmarco_passage_milvus_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  collection_name: "msmarco_lite_milvus"
+
 msmarco_lite_mariadb_fulltext:
   base: "msmarco_passage_mariadb_fulltext"
   max_docs: 250000
@@ -848,6 +935,18 @@ msmarco_trecdl_2019_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_milvus_fulltext:
+  base: "msmarco_passage_milvus_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_milvus_vector:
+  base: "msmarco_passage_milvus_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_milvus_hybrid:
+  base: "msmarco_passage_milvus_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_mariadb_fulltext:
   base: "msmarco_passage_mariadb_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -954,6 +1053,18 @@ msmarco_trecdl_2020_elasticsearch_hybrid:
 
 msmarco_trecdl_2020_typesense_fulltext:
   base: "msmarco_passage_typesense_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_milvus_fulltext:
+  base: "msmarco_passage_milvus_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_milvus_vector:
+  base: "msmarco_passage_milvus_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_milvus_hybrid:
+  base: "msmarco_passage_milvus_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_mariadb_fulltext:
@@ -1114,6 +1225,27 @@ nfcorpus_typesense_fulltext:
   type: "fulltext"
   source: "beir/nfcorpus/test"
   collection_name: "nfcorpus_typesense"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_milvus_fulltext:
+  base: "milvus"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_milvus"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_milvus_vector:
+  base: "milvus"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_milvus"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_milvus_hybrid:
+  base: "milvus"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  collection_name: "nfcorpus_milvus"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_mariadb_fulltext:
@@ -1307,6 +1439,27 @@ acord_typesense_fulltext:
   type: "fulltext"
   source: "hf-beir:theatticusproject/acord:test"
   collection_name: "acord_typesense"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_milvus_fulltext:
+  base: "milvus"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_milvus"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_milvus_vector:
+  base: "milvus"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_milvus"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_milvus_hybrid:
+  base: "milvus"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  collection_name: "acord_milvus"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_mariadb_fulltext:

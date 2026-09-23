@@ -15,6 +15,7 @@ dependencies = [
   "elasticsearch>=8.19.0,<9",
   "meilisearch>=0.40.0",
   "opensearch-py>=2.6.0",
+  "pymilvus==3.0.1",
   "pymysql>=1.1.0",
   "qdrant-client>=1.17.1",
 ]

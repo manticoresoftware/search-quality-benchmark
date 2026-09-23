@@ -389,6 +389,8 @@ def _confirm_vector_cache_coverage(
         engine_note = "Elasticsearch vector indexing is likely to fail if cache misses remain."
     elif engine == "typesense":
         engine_note = "Typesense vector indexing is likely to fail if cache misses remain."
+    elif engine == "milvus":
+        engine_note = "Milvus vector indexing is likely to fail if cache misses remain."
     elif engine == "mariadb":
         engine_note = "MariaDB vector indexing is likely to fail if cache misses remain."
     elif engine == "weaviate":
@@ -921,7 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--reset-embeddings", action="store_true", help="Clear current-model embeddings for the selected prepared dataset(s)")
 
     p_index = sub.add_parser("index", add_help=False)
-    p_index.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "mariadb", "weaviate", "vespa"])
+    p_index.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "milvus", "mariadb", "weaviate", "vespa"])
     p_index.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid"])
     p_index.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_index.add_argument(
@@ -936,7 +938,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_run = sub.add_parser("run", add_help=False)
-    p_run.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "mariadb", "weaviate", "vespa"])
+    p_run.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "milvus", "mariadb", "weaviate", "vespa"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
     p_run.add_argument("--concurrency", type=int, default=None)
