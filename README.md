@@ -159,7 +159,7 @@ Main actions:
 2. `prepare`: choose one or more dataset sources and download/prepare corpus/topics/qrels.
 3. `index`: build search indexes/tables for selected engine+mode (opens interactive index matrix when selected from `bench`; prints live indexing progress with `processed/total`, percent, inserted rows, retries/failures, elapsed seconds).
 4. `run`: execute topic queries with fixed benchmark settings and compute metrics (opens interactive run matrix; variants come from named config profiles and include `PROFILE`, `ENGINE`, `MODE`, `MODEL/OPTS`).
-5. `report`: render a combined report from selected artifacts.
+5. `report`: render combined Markdown and standalone interactive HTML reports from selected artifacts.
 
 Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-select is available).
 
@@ -536,6 +536,47 @@ Behavior:
   - uses cache only and fails on cache misses,
   - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).
 
+## Benchmark Report Methodology
+
+The interactive report compares completed runs across selected engines and
+datasets. Its filters affect the leaderboard, matrix, dataset explorer, raw-run
+table, and exports.
+
+### Search modes
+
+`Best available` selects the highest-quality completed mode separately for each
+engine and dataset. Select `Full text`, `Vector`, or `Hybrid` when every result
+must use the same search mode.
+
+### Quality Index
+
+The report first calculates a relative score for each selected dataset:
+
+```text
+relative[dataset, engine] = engine_score / best_observed_score
+quality_index[engine] = 100 × geometric_mean(relative scores)
+```
+
+Every selected dataset receives equal weight. An engine is ranked only when it
+has a completed result for every selected dataset; incomplete engines remain
+visible with their coverage. The reference winner comes from the full report
+engine set and is not recalculated when an engine is hidden.
+
+The recommended-metric view uses `NDCG@10` for most datasets and `MRR@10` for
+MS MARCO. The Quality Index combines their relative scores, not their raw metric
+values.
+
+### Performance and statistical limits
+
+These runs use concurrency `1` and one repeat. QPS therefore represents the
+observed single-client query rate rather than maximum throughput. One repeat
+cannot estimate run-to-run variance, so small quality or latency differences
+should be treated cautiously.
+
+A missing matrix cell means that the report has no completed run for that
+engine, dataset, and selected search mode. It does not distinguish an
+unsupported operation from an aborted or unattempted run.
+
 ## Metrics
 
 This benchmark reports two metric groups:
@@ -773,11 +814,18 @@ Note:
 ## Output Paths
 
 Per benchmark run:
-- `artifacts/<run_id>/metrics.json`: aggregated run-level metrics (quality + latency/QPS/error).
+- `artifacts/<run_id>/metrics.json`: aggregated run-level metrics (quality + latency/QPS/error), plus the engine version, configured image, image creation timestamp, and—when Docker exposes them—the immutable image ID and registry digest captured for that run.
 - `artifacts/<run_id>/per_query.csv`: one row per evaluated query with per-query quality and timing fields.
 - `artifacts/<run_id>/summary.md`: human-readable single-run report.
 - `artifacts/<run_id>/diagnostics.json`: sampled query diagnostics (query plans/profiles or backend debug details).
 
+The September 2026 artifacts were backfilled with the then-current Compose
+image tags and local Docker image creation timestamps, and use
+`engine_version_source: "compose_backfill"`. Older artifacts remain without
+version metadata because their engine versions are unknown.
+
 Combined report (`bench report`):
 - default output path: `artifacts/report-YYYYMMDD-HHMMSS.md`
+- interactive output path: `artifacts/report-YYYYMMDD-HHMMSS/index.html`
 - custom output path: use `bench report --output <path>`
+- use `--markdown-only` to skip HTML generation
