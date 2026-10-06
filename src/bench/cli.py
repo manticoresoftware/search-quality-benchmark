@@ -32,7 +32,7 @@ from .run_matrix import (
     select_variants_interactive,
 )
 from .runbench import run_benchmark, write_run_artifacts
-from .summarize import generate_combined_report
+from .summarize import combined_html_report_path, generate_combined_report
 from .vector_cache import VectorCache, cache_key_from_doc, parse_vector_from_fields
 
 
@@ -95,7 +95,7 @@ def _select_top_command_interactive() -> str | None:
         ("prepare", "Prepare", "Download dataset files and build embeddings"),
         ("index", "Index", "Create/recreate benchmark indexes in supported engines"),
         ("run", "Run", "Execute benchmark queries and collect metrics"),
-        ("report", "Report", "Pick artifacts and generate combined markdown report"),
+        ("report", "Report", "Pick artifacts and generate combined Markdown and HTML reports"),
         ("configmap", "Draw configmap", "Generate a Mermaid graph of profile dependencies"),
     ]
     if sys.stdin.isatty() and sys.stdout.isatty():
@@ -889,6 +889,7 @@ def cmd_report(_: AppConfig, args: argparse.Namespace) -> int:
             interactive=interactive,
             output_path=args.output,
             title=args.title,
+            generate_html=not bool(args.markdown_only),
         )
     except RuntimeError as exc:
         if str(exc) == "No artifacts selected.":
@@ -896,6 +897,8 @@ def cmd_report(_: AppConfig, args: argparse.Namespace) -> int:
             return 0
         raise
     print(f"Report generated: {out}")
+    if not args.markdown_only:
+        print(f"Interactive report generated: {combined_html_report_path(out)}")
     return 0
 
 
@@ -948,6 +951,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--no-interactive", action="store_true", help="Disable interactive artifact selection")
     p_report.add_argument("--output", default=None, help="Output markdown path")
     p_report.add_argument("--title", default="Benchmark Report")
+    p_report.add_argument("--markdown-only", action="store_true", help="Skip standalone HTML generation")
 
     p_configmap = sub.add_parser("configmap", add_help=False)
     p_configmap.add_argument("--output", default=None, help="Output markdown path")

@@ -12,6 +12,7 @@ from typing import Any, Callable
 from .config import AppConfig, display_engine_for_profile, is_manticore_like_type
 from .elasticsearch_backend import ElasticsearchBackend
 from .embedding_client import EmbeddingClient, resolved_embedding_model, resolved_embedding_similarity
+from .engine_metadata import resolve_engine_artifact_metadata
 from .io_utils import ensure_dir, generate_run_id, read_jsonl
 from .manticore import ManticoreClient
 from .mariadb_backend import MariaDBBackend
@@ -2428,6 +2429,10 @@ def run_benchmark(
 def write_run_artifacts(run_id: str, metrics: dict[str, Any], per_query_rows: list[dict[str, Any]]) -> Path:
     from .io_utils import write_csv, write_json
     from .reporting import build_summary_markdown
+
+    engine_metadata = resolve_engine_artifact_metadata(str(metrics.get("engine") or ""))
+    for key, value in engine_metadata.items():
+        metrics.setdefault(key, value)
 
     out_dir = ensure_dir(Path("artifacts") / run_id)
     write_json(out_dir / "metrics.json", metrics)

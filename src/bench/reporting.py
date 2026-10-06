@@ -38,6 +38,21 @@ def build_summary_markdown(metrics: dict[str, Any]) -> str:
     profile = str(metrics.get("profile", "") or "").strip()
     if profile:
         lines.append(f"- Profile: `{profile}`")
+    engine = str(metrics.get("engine", "") or "").strip()
+    if engine:
+        lines.append(f"- Engine: `{engine}`")
+    engine_version = str(metrics.get("engine_version", "") or "").strip()
+    if engine_version:
+        lines.append(f"- Engine version: `{engine_version}`")
+    engine_image = str(metrics.get("engine_image", "") or "").strip()
+    if engine_image:
+        lines.append(f"- Engine image: `{engine_image}`")
+    engine_image_digest = str(metrics.get("engine_image_digest", "") or "").strip()
+    if engine_image_digest:
+        lines.append(f"- Engine image digest: `{engine_image_digest}`")
+    engine_image_created_at = str(metrics.get("engine_image_created_at", "") or "").strip()
+    if engine_image_created_at:
+        lines.append(f"- Engine image created: `{engine_image_created_at}`")
     dataset_source = str(metrics.get("dataset_source", "") or "").strip()
     if dataset_source:
         lines.append(f"- Dataset source: `{dataset_source}`")

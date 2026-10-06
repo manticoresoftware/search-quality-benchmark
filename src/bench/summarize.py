@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 from typing import Any
 from urllib.parse import quote
@@ -3329,11 +3330,50 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     return "\n".join(lines)
 
 
+def combined_html_report_path(markdown_path: str | Path) -> Path:
+    markdown_path = Path(markdown_path)
+    directory_name = markdown_path.stem if markdown_path.suffix else f"{markdown_path.name}-html"
+    return markdown_path.parent / directory_name / "index.html"
+
+
+def _default_combined_report_path() -> Path:
+    root = Path("artifacts")
+    stem = f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    candidate = root / f"{stem}.md"
+    suffix = 2
+    while candidate.exists() or combined_html_report_path(candidate).parent.exists():
+        candidate = root / f"{stem}-{suffix}.md"
+        suffix += 1
+    return candidate
+
+
+def _generate_interactive_report(selected: list[ArtifactRow], markdown_path: Path) -> Path:
+    project_root = Path(__file__).resolve().parents[2]
+    generator = Path(__file__).resolve().with_name("interactive_report.py")
+    if not generator.is_file():
+        raise RuntimeError(f"Interactive report generator not found: {generator}")
+    html_path = combined_html_report_path(markdown_path)
+    subprocess.run(
+        [
+            sys.executable,
+            str(generator),
+            "--output",
+            str(html_path),
+            "--default-run-ids",
+            ",".join(row.run_id for row in selected),
+        ],
+        cwd=str(project_root),
+        check=True,
+    )
+    return html_path
+
+
 def generate_combined_report(
     run_ids: list[str] | None = None,
     interactive: bool = False,
     output_path: str | None = None,
     title: str = "Benchmark Report",
+    generate_html: bool = False,
 ) -> Path:
     all_rows = discover_artifacts()
     selected: list[ArtifactRow]
@@ -3350,8 +3390,10 @@ def generate_combined_report(
     out = (
         Path(output_path)
         if output_path
-        else Path("artifacts") / f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+        else _default_combined_report_path()
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_combined_report(selected, title=title), encoding="utf-8")
+    if generate_html:
+        _generate_interactive_report(selected, out)
     return out
