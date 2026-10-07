@@ -268,6 +268,33 @@ mariadb:
   index_timeout_seconds: 3600
   index_progress_interval_seconds: 5
 
+serenedb:
+  type: "serenedb"
+  host: "127.0.0.1"
+  port: 7890
+  user: "postgres"
+  password: "bench"
+  database: "postgres"
+  table_name: "trec_covid_serenedb"
+  index_layout: "combined"
+  text_fields: ["title", "abstract"]
+  vector_field: "embedding"
+  vector_metric: "cosine"
+  vector_index_type: "ivf"
+  vector_quantization: "sq8"
+  # SereneDB 26.10.1 can crash in the 4096-dimensional ANN query path.
+  # Exact base-table scans are stable and keep the benchmark reproducible.
+  vector_query_mode: "exact"
+  vector_search_nprobe: 8
+  vector_rerank_factor: 4
+  hybrid_alpha: 0.5
+  hybrid_rrf_k: 60
+  hybrid_candidates: 400
+  batch_size: 500
+  index_concurrency: 1
+  connect_timeout_seconds: 10
+  query_timeout_seconds: 60
+
 weaviate:
   type: "weaviate"
   url: "http://127.0.0.1:8080"
@@ -449,16 +476,33 @@ trec_covid_mariadb_fulltext:
   type: "fulltext"
   table_name: "trec_covid_mariadb"
 
+trec_covid_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  table_name: "trec_covid_serenedb"
+
 trec_covid_mariadb_vector:
   base: "mariadb"
   type: "vector"
   table_name: "trec_covid_mariadb"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
+trec_covid_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  table_name: "trec_covid_serenedb"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
 trec_covid_mariadb_hybrid:
   base: "mariadb"
   type: "hybrid"
   table_name: "trec_covid_mariadb"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  table_name: "trec_covid_serenedb"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 trec_covid_weaviate_fulltext:
@@ -675,6 +719,13 @@ msmarco_passage_mariadb_fulltext:
   table_name: "msmarco_passage_mariadb"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  table_name: "msmarco_passage_serenedb"
+  text_fields: ["abstract", "title"]
+
 msmarco_passage_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -691,6 +742,14 @@ msmarco_passage_mariadb_vector:
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
+msmarco_passage_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "msmarco-passage/dev/small"
+  table_name: "msmarco_passage_serenedb"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
 msmarco_passage_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -704,6 +763,14 @@ msmarco_passage_mariadb_hybrid:
   type: "hybrid"
   source: "msmarco-passage/dev/small"
   table_name: "msmarco_passage_mariadb"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  text_fields: ["abstract", "title"]
+
+msmarco_passage_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "msmarco-passage/dev/small"
+  table_name: "msmarco_passage_serenedb"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
   text_fields: ["abstract", "title"]
 
@@ -898,6 +965,12 @@ msmarco_lite_mariadb_fulltext:
   keep_qrels_docs: true
   table_name: "msmarco_lite_mariadb"
 
+msmarco_lite_serenedb_fulltext:
+  base: "msmarco_passage_serenedb_fulltext"
+  max_docs: 250000
+  keep_qrels_docs: true
+  table_name: "msmarco_lite_serenedb"
+
 msmarco_lite_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   max_docs: 250000
@@ -910,6 +983,12 @@ msmarco_lite_mariadb_vector:
   keep_qrels_docs: true
   table_name: "msmarco_lite_mariadb"
 
+msmarco_lite_serenedb_vector:
+  base: "msmarco_passage_serenedb_vector"
+  max_docs: 250000
+  keep_qrels_docs: true
+  table_name: "msmarco_lite_serenedb"
+
 msmarco_lite_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   max_docs: 250000
@@ -921,6 +1000,12 @@ msmarco_lite_mariadb_hybrid:
   max_docs: 250000
   keep_qrels_docs: true
   table_name: "msmarco_lite_mariadb"
+
+msmarco_lite_serenedb_hybrid:
+  base: "msmarco_passage_serenedb_hybrid"
+  max_docs: 250000
+  keep_qrels_docs: true
+  table_name: "msmarco_lite_serenedb"
 
 msmarco_lite_weaviate_fulltext:
   base: "msmarco_passage_weaviate_fulltext"
@@ -1050,6 +1135,10 @@ msmarco_trecdl_2019_mariadb_fulltext:
   base: "msmarco_passage_mariadb_fulltext"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_serenedb_fulltext:
+  base: "msmarco_passage_serenedb_fulltext"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "msmarco-passage/trec-dl-2019/judged"
@@ -1058,12 +1147,20 @@ msmarco_trecdl_2019_mariadb_vector:
   base: "msmarco_passage_mariadb_vector"
   source: "msmarco-passage/trec-dl-2019/judged"
 
+msmarco_trecdl_2019_serenedb_vector:
+  base: "msmarco_passage_serenedb_vector"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
 msmarco_trecdl_2019_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
 msmarco_trecdl_2019_mariadb_hybrid:
   base: "msmarco_passage_mariadb_hybrid"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_serenedb_hybrid:
+  base: "msmarco_passage_serenedb_hybrid"
   source: "msmarco-passage/trec-dl-2019/judged"
 
 msmarco_trecdl_2019_weaviate_fulltext:
@@ -1182,6 +1279,10 @@ msmarco_trecdl_2020_mariadb_fulltext:
   base: "msmarco_passage_mariadb_fulltext"
   source: "msmarco-passage/trec-dl-2020/judged"
 
+msmarco_trecdl_2020_serenedb_fulltext:
+  base: "msmarco_passage_serenedb_fulltext"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
 msmarco_trecdl_2020_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "msmarco-passage/trec-dl-2020/judged"
@@ -1190,12 +1291,20 @@ msmarco_trecdl_2020_mariadb_vector:
   base: "msmarco_passage_mariadb_vector"
   source: "msmarco-passage/trec-dl-2020/judged"
 
+msmarco_trecdl_2020_serenedb_vector:
+  base: "msmarco_passage_serenedb_vector"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
 msmarco_trecdl_2020_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_mariadb_hybrid:
   base: "msmarco_passage_mariadb_hybrid"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_serenedb_hybrid:
+  base: "msmarco_passage_serenedb_hybrid"
   source: "msmarco-passage/trec-dl-2020/judged"
 
 msmarco_trecdl_2020_weaviate_fulltext:
@@ -1337,6 +1446,11 @@ dl_typo_mariadb_fulltext:
   source: "dl-typo"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
+dl_typo_serenedb_fulltext:
+  base: "msmarco_passage_serenedb_fulltext"
+  source: "dl-typo"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
 dl_typo_typesense_vector:
   base: "msmarco_passage_typesense_vector"
   source: "dl-typo"
@@ -1347,6 +1461,11 @@ dl_typo_mariadb_vector:
   source: "dl-typo"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
+dl_typo_serenedb_vector:
+  base: "msmarco_passage_serenedb_vector"
+  source: "dl-typo"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
 dl_typo_typesense_hybrid:
   base: "msmarco_passage_typesense_hybrid"
   source: "dl-typo"
@@ -1354,6 +1473,11 @@ dl_typo_typesense_hybrid:
 
 dl_typo_mariadb_hybrid:
   base: "msmarco_passage_mariadb_hybrid"
+  source: "dl-typo"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+
+dl_typo_serenedb_hybrid:
+  base: "msmarco_passage_serenedb_hybrid"
   source: "dl-typo"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
@@ -1559,6 +1683,13 @@ nfcorpus_mariadb_fulltext:
   table_name: "nfcorpus_mariadb"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
+nfcorpus_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  table_name: "nfcorpus_serenedb"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
 nfcorpus_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -1573,6 +1704,13 @@ nfcorpus_mariadb_vector:
   table_name: "nfcorpus_mariadb"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
+nfcorpus_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "beir/nfcorpus/test"
+  table_name: "nfcorpus_serenedb"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
 nfcorpus_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -1585,6 +1723,13 @@ nfcorpus_mariadb_hybrid:
   type: "hybrid"
   source: "beir/nfcorpus/test"
   table_name: "nfcorpus_mariadb"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+
+nfcorpus_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "beir/nfcorpus/test"
+  table_name: "nfcorpus_serenedb"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_weaviate_fulltext:
@@ -1801,6 +1946,13 @@ acord_mariadb_fulltext:
   table_name: "acord_mariadb"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
+acord_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  table_name: "acord_serenedb"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
 acord_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -1815,6 +1967,13 @@ acord_mariadb_vector:
   table_name: "acord_mariadb"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
+acord_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "hf-beir:theatticusproject/acord:test"
+  table_name: "acord_serenedb"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
 acord_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -1827,6 +1986,13 @@ acord_mariadb_hybrid:
   type: "hybrid"
   source: "hf-beir:theatticusproject/acord:test"
   table_name: "acord_mariadb"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+
+acord_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "hf-beir:theatticusproject/acord:test"
+  table_name: "acord_serenedb"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_weaviate_fulltext:
@@ -2043,6 +2209,13 @@ scifact_mariadb_fulltext:
   table_name: "scifact_mariadb"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
+scifact_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "beir/scifact/test"
+  table_name: "scifact_serenedb"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+
 scifact_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2057,6 +2230,13 @@ scifact_mariadb_vector:
   table_name: "scifact_mariadb"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
+scifact_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "beir/scifact/test"
+  table_name: "scifact_serenedb"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+
 scifact_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -2069,6 +2249,13 @@ scifact_mariadb_hybrid:
   type: "hybrid"
   source: "beir/scifact/test"
   table_name: "scifact_mariadb"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+
+scifact_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "beir/scifact/test"
+  table_name: "scifact_serenedb"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
 scifact_weaviate_fulltext:
@@ -2285,6 +2472,13 @@ arguana_mariadb_fulltext:
   table_name: "arguana_mariadb"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
+arguana_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "beir/arguana"
+  table_name: "arguana_serenedb"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+
 arguana_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2299,6 +2493,13 @@ arguana_mariadb_vector:
   table_name: "arguana_mariadb"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
+arguana_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "beir/arguana"
+  table_name: "arguana_serenedb"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+
 arguana_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -2311,6 +2512,13 @@ arguana_mariadb_hybrid:
   type: "hybrid"
   source: "beir/arguana"
   table_name: "arguana_mariadb"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+
+arguana_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "beir/arguana"
+  table_name: "arguana_serenedb"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_weaviate_fulltext:
@@ -2527,6 +2735,13 @@ scidocs_mariadb_fulltext:
   table_name: "scidocs_mariadb"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
+scidocs_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "beir/scidocs"
+  table_name: "scidocs_serenedb"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+
 scidocs_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2541,6 +2756,13 @@ scidocs_mariadb_vector:
   table_name: "scidocs_mariadb"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
+scidocs_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "beir/scidocs"
+  table_name: "scidocs_serenedb"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+
 scidocs_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -2553,6 +2775,13 @@ scidocs_mariadb_hybrid:
   type: "hybrid"
   source: "beir/scidocs"
   table_name: "scidocs_mariadb"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+
+scidocs_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "beir/scidocs"
+  table_name: "scidocs_serenedb"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_weaviate_fulltext:
@@ -2769,6 +2998,13 @@ fiqa_mariadb_fulltext:
   table_name: "fiqa_mariadb"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
+fiqa_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "beir/fiqa/test"
+  table_name: "fiqa_serenedb"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+
 fiqa_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -2783,6 +3019,13 @@ fiqa_mariadb_vector:
   table_name: "fiqa_mariadb"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
+fiqa_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "beir/fiqa/test"
+  table_name: "fiqa_serenedb"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+
 fiqa_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -2795,6 +3038,13 @@ fiqa_mariadb_hybrid:
   type: "hybrid"
   source: "beir/fiqa/test"
   table_name: "fiqa_mariadb"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+
+fiqa_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "beir/fiqa/test"
+  table_name: "fiqa_serenedb"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
 fiqa_weaviate_fulltext:
@@ -3011,6 +3261,13 @@ cqadupstack_webmasters_mariadb_fulltext:
   table_name: "cqadupstack_webmasters_mariadb"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
+cqadupstack_webmasters_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "beir/cqadupstack/webmasters"
+  table_name: "cqadupstack_webmasters_serenedb"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
 cqadupstack_webmasters_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -3025,6 +3282,13 @@ cqadupstack_webmasters_mariadb_vector:
   table_name: "cqadupstack_webmasters_mariadb"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
+cqadupstack_webmasters_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "beir/cqadupstack/webmasters"
+  table_name: "cqadupstack_webmasters_serenedb"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
 cqadupstack_webmasters_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -3037,6 +3301,13 @@ cqadupstack_webmasters_mariadb_hybrid:
   type: "hybrid"
   source: "beir/cqadupstack/webmasters"
   table_name: "cqadupstack_webmasters_mariadb"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+
+cqadupstack_webmasters_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "beir/cqadupstack/webmasters"
+  table_name: "cqadupstack_webmasters_serenedb"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_weaviate_fulltext:
@@ -3253,6 +3524,13 @@ wands_mariadb_fulltext:
   table_name: "wands_mariadb"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
+wands_serenedb_fulltext:
+  base: "serenedb"
+  type: "fulltext"
+  source: "wands"
+  table_name: "wands_serenedb"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
 wands_typesense_vector:
   base: "typesense"
   type: "vector"
@@ -3267,6 +3545,13 @@ wands_mariadb_vector:
   table_name: "wands_mariadb"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
+wands_serenedb_vector:
+  base: "serenedb"
+  type: "vector"
+  source: "wands"
+  table_name: "wands_serenedb"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
 wands_typesense_hybrid:
   base: "typesense"
   type: "hybrid"
@@ -3279,6 +3564,13 @@ wands_mariadb_hybrid:
   type: "hybrid"
   source: "wands"
   table_name: "wands_mariadb"
+  vector_cache_path: "vector_cache/wands-openai.sqlite"
+
+wands_serenedb_hybrid:
+  base: "serenedb"
+  type: "hybrid"
+  source: "wands"
+  table_name: "wands_serenedb"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
 wands_weaviate_fulltext:

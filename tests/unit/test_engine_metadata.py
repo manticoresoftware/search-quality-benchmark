@@ -23,6 +23,8 @@ services:
     image: manticoresearch/manticore:29.9.0
   qdrant:
     image: qdrant/qdrant:v1.19.1
+  serenedb:
+    image: serenedb/serenedb:26.10.1
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -32,6 +34,7 @@ services:
         "columnar", start=tmp_path, inspect_runtime=False
     )
     qdrant = resolve_engine_artifact_metadata("qdrant", start=tmp_path, inspect_runtime=False)
+    serenedb = resolve_engine_artifact_metadata("serenedb", start=tmp_path, inspect_runtime=False)
 
     assert columnar == {
         "engine_version": "29.9.0",
@@ -43,6 +46,8 @@ services:
     }
     assert qdrant["engine_version"] == "1.19.1"
     assert qdrant["engine_image"] == "qdrant/qdrant:v1.19.1"
+    assert serenedb["engine_version"] == "26.10.1"
+    assert serenedb["engine_image"] == "serenedb/serenedb:26.10.1"
 
 
 def test_resolve_metadata_prefers_running_container_and_records_immutable_image(

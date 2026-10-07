@@ -239,6 +239,32 @@ class MariaDBConfig:
 
 
 @dataclass
+class SereneDBConfig:
+    host: str = "127.0.0.1"
+    port: int = 7890
+    user: str = "postgres"
+    password: str = "bench"
+    database: str = "postgres"
+    table_name: str = "trec_covid_serenedb"
+    index_layout: str = "combined"
+    text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
+    vector_field: str = "embedding"
+    vector_metric: str = "cosine"
+    vector_index_type: str = "ivf"
+    vector_quantization: str = "sq8"
+    vector_query_mode: str = "exact"
+    vector_search_nprobe: int = 8
+    vector_rerank_factor: int = 4
+    hybrid_alpha: float = 0.5
+    hybrid_rrf_k: int = 60
+    hybrid_candidates: int = 400
+    batch_size: int = 500
+    index_concurrency: int = 1
+    connect_timeout_seconds: int = 10
+    query_timeout_seconds: int = 60
+
+
+@dataclass
 class BenchmarkConfig:
     limit: int = 100
     warmup_queries: int = 5
@@ -308,6 +334,7 @@ class AppConfig:
     typesense: TypesenseConfig = field(default_factory=TypesenseConfig)
     milvus: MilvusConfig = field(default_factory=MilvusConfig)
     mariadb: MariaDBConfig = field(default_factory=MariaDBConfig)
+    serenedb: SereneDBConfig = field(default_factory=SereneDBConfig)
     qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -372,6 +399,7 @@ _VESPA_FIELDS = set(vars(VespaConfig()).keys())
 _TYPESENSE_FIELDS = set(vars(TypesenseConfig()).keys())
 _MILVUS_FIELDS = set(vars(MilvusConfig()).keys())
 _MARIADB_FIELDS = set(vars(MariaDBConfig()).keys())
+_SERENEDB_FIELDS = set(vars(SereneDBConfig()).keys())
 _QDRANT_FIELDS = set(vars(QdrantConfig()).keys())
 _BENCHMARK_FIELDS = set(vars(BenchmarkConfig()).keys())
 _DATASET_FIELDS = set(vars(DatasetConfig()).keys())
@@ -387,6 +415,7 @@ _SECTION_NAMES = {
     "typesense",
     "milvus",
     "mariadb",
+    "serenedb",
     "qdrant",
     "benchmark",
     "dataset",
@@ -445,6 +474,7 @@ def _defaults_dict() -> dict[str, Any]:
         "typesense": vars(defaults.typesense),
         "milvus": vars(defaults.milvus),
         "mariadb": vars(defaults.mariadb),
+        "serenedb": vars(defaults.serenedb),
         "qdrant": vars(defaults.qdrant),
         "benchmark": vars(defaults.benchmark),
         "metrics": vars(defaults.metrics),
@@ -465,6 +495,7 @@ def _to_app_config(raw: dict[str, Any]) -> AppConfig:
         typesense=TypesenseConfig(**merged["typesense"]),
         milvus=MilvusConfig(**merged["milvus"]),
         mariadb=MariaDBConfig(**merged["mariadb"]),
+        serenedb=SereneDBConfig(**merged["serenedb"]),
         qdrant=QdrantConfig(**merged["qdrant"]),
         benchmark=BenchmarkConfig(**merged["benchmark"]),
         metrics=MetricsConfig(**merged["metrics"]),
@@ -531,8 +562,10 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
 
     def _infer_type(name: str, ent: dict[str, Any]) -> str:
         e_type = str(ent.get("type", "")).strip().lower()
-        if e_type in ("manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "milvus", "mariadb", "qdrant"):
+        if e_type in ("manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "milvus", "mariadb", "serenedb", "qdrant"):
             return e_type
+        if isinstance(ent.get("serenedb"), dict):
+            return "serenedb"
         if isinstance(ent.get("manticore"), dict) and not any(
             isinstance(ent.get(sec), dict) for sec in ("qdrant", "meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "milvus", "mariadb")
         ):
@@ -588,6 +621,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "milvus"
         if "mariadb" in lowered:
             return "mariadb"
+        if "serenedb" in lowered:
+            return "serenedb"
         if "columnar" in lowered:
             return "columnar"
         if "qdrant" in lowered:
@@ -601,6 +636,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
         ts_hits = 0
         milvus_hits = 0
         mariadb_hits = 0
+        serenedb_hits = 0
         q_hits = 0
         for k in ent.keys():
             if k in ("type", "base") or k in _SECTION_NAMES:
@@ -625,9 +661,13 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 milvus_hits += 1
             if k in _MARIADB_FIELDS:
                 mariadb_hits += 1
+            if k in _SERENEDB_FIELDS:
+                serenedb_hits += 1
             if k in _QDRANT_FIELDS:
                 q_hits += 1
-        if meili_hits > max(m_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, milvus_hits, mariadb_hits, q_hits):
+        if serenedb_hits > max(m_hits, meili_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, milvus_hits, mariadb_hits, q_hits):
+            return "serenedb"
+        if meili_hits > max(m_hits, os_hits, es_hits, w_hits, v_hits, ts_hits, milvus_hits, mariadb_hits, serenedb_hits, q_hits):
             return "meilisearch"
         if os_hits > max(m_hits, es_hits, w_hits, v_hits, ts_hits, milvus_hits, mariadb_hits, q_hits):
             return "opensearch"
@@ -663,6 +703,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
             return "milvus"
         if name.lower().startswith("mariadb"):
             return "mariadb"
+        if name.lower().startswith("serenedb"):
+            return "serenedb"
         if name.lower().startswith("qdrant"):
             return "qdrant"
         return "manticore"
@@ -708,6 +750,8 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 candidates.append("milvus")
             if k in _MARIADB_FIELDS:
                 candidates.append("mariadb")
+            if k in _SERENEDB_FIELDS:
+                candidates.append("serenedb")
             if k in _QDRANT_FIELDS:
                 candidates.append("qdrant")
             if k in _BENCHMARK_FIELDS:
@@ -720,7 +764,7 @@ def load_engine_targets(path: str | Path) -> list[EngineTarget]:
                 continue
 
             preferred = "manticore" if e_type in _MANTICORE_LIKE_TYPES else (
-                e_type if e_type in ("meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "milvus", "mariadb", "qdrant") else "manticore"
+                e_type if e_type in ("meilisearch", "opensearch", "elasticsearch", "weaviate", "vespa", "typesense", "milvus", "mariadb", "serenedb", "qdrant") else "manticore"
             )
             if preferred in candidates:
                 sec = preferred

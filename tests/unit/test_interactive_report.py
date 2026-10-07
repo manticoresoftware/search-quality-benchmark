@@ -16,13 +16,20 @@ def _load_report_generator():
     return module
 
 
-def _write_metrics(root: Path, run_id: str, run_date: datetime, version: str | None) -> None:
+def _write_metrics(
+    root: Path,
+    run_id: str,
+    run_date: datetime,
+    version: str | None,
+    *,
+    engine: str = "qdrant",
+) -> None:
     run_dir = root / run_id
     run_dir.mkdir()
     payload = {
         "run_id": run_id,
         "run_at_unix": int(run_date.timestamp()),
-        "engine": "qdrant",
+        "engine": engine,
         "mode": "vector",
         "dataset_source": "beir/scifact/test",
         "relevance": {"vector": {"ndcg@10": 0.5}},
@@ -83,3 +90,29 @@ def test_report_cohort_uses_known_versions_instead_of_a_date_window(
 
     assert [run["runId"] for run in data["runs"]] == ["before", "after"]
     assert [run["version"] for run in data["runs"]] == ["1.2.3", "1.2.4"]
+
+
+def test_report_includes_serenedb_only_when_it_has_a_versioned_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    generator = _load_report_generator()
+    _write_metrics(
+        tmp_path,
+        "serene",
+        datetime(2026, 10, 1, tzinfo=UTC),
+        "26.10.1",
+        engine="serenedb",
+    )
+    monkeypatch.setattr(generator, "ARTIFACTS_DIR", tmp_path)
+
+    data = generator.collect_data()
+
+    assert data["systems"] == {
+        "serenedb": {
+            "name": "SereneDB",
+            "version": "26.10.1",
+            "image": "unknown",
+            "imageCreatedAt": "",
+        }
+    }
+    assert data["runs"][0]["engine"] == "serenedb"

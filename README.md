@@ -11,7 +11,7 @@ supporting context, not as authoritative load-test results.
 ## Supported engines and search modes
 
 The benchmark currently supports Manticore, Elasticsearch, OpenSearch,
-Meilisearch, Typesense, Milvus, Qdrant, MariaDB, Weaviate, and Vespa.
+Meilisearch, Typesense, Milvus, Qdrant, MariaDB, SereneDB, Weaviate, and Vespa.
 
 Depending on the engine, it can compare:
 
@@ -133,6 +133,10 @@ is hidden with a filter.
 When several search modes are selected, each matrix cell uses the best result
 among those modes and labels the winning mode. Select exactly one mode for a
 fixed-mode comparison.
+
+Bundled SereneDB vector and hybrid profiles use exact vector scans. SereneDB
+26.10.1's ANN path was excluded after reproducible server crashes on repeated
+4096-dimensional queries; run artifacts identify the exact-search setting.
 
 The benchmark currently uses concurrency 1 and one repeat. QPS is therefore the
 observed single-client query rate, and one run cannot estimate run-to-run

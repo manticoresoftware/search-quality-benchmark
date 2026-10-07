@@ -45,6 +45,7 @@ DISPLAY_NAMES = {
     "milvus": "Milvus",
     "opensearch": "OpenSearch",
     "qdrant": "Qdrant",
+    "serenedb": "SereneDB",
     "typesense": "Typesense",
     "vespa": "Vespa",
     "weaviate": "Weaviate",
@@ -132,9 +133,7 @@ def slow_queries(csv_path: Path, run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
-    systems: dict[str, dict[str, str]] = {
-        engine: {"name": name} for engine, name in DISPLAY_NAMES.items()
-    }
+    systems: dict[str, dict[str, str]] = {}
 
     runs: list[dict[str, Any]] = []
     artifact_dirs: dict[str, Path] = {}
@@ -155,8 +154,9 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         if engine == "manticore":
             excluded_manticore += 1
             continue
-        if engine not in systems:
+        if engine not in DISPLAY_NAMES:
             continue
+        systems.setdefault(engine, {"name": DISPLAY_NAMES[engine]})
         mode = str(payload.get("mode", "")).strip().lower()
         dataset = str(payload.get("dataset_source", "")).strip()
         docs = extract_doc_count(payload)
@@ -205,6 +205,7 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         artifact_dirs[run_id] = metrics_path.parent
 
     runs.sort(key=lambda item: (item["runAt"], item["runId"]))
+    systems = {engine: systems[engine] for engine in DISPLAY_NAMES if engine in systems}
     for engine, system in systems.items():
         engine_runs = [run for run in runs if run["engine"] == engine]
         versions = sorted({run["version"] for run in engine_runs if run["version"] != "unknown"})
@@ -1156,7 +1157,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     const COLORS = {
       columnar: '#895af8', elasticsearch: '#ffb454', mariadb: '#e06c9f', meilisearch: '#b48ead',
       milvus: '#5ed29a', opensearch: '#7fd7e0', qdrant: '#3386ff', typesense: '#d0c05a',
-      vespa: '#9aa7ff', weaviate: '#ff7b6b'
+      serenedb: '#f97316', vespa: '#9aa7ff', weaviate: '#ff7b6b'
     };
     const ALL_DATASET_KEYS = DATA.datasets.map(d => d.key);
     const ALL_ENGINE_KEYS = Object.keys(DATA.systems);

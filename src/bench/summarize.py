@@ -159,6 +159,12 @@ def _system_label(engine: str, mode: str) -> str:
         return "MariaDB vector (mariadb)"
     if engine == "mariadb" and mode == "hybrid":
         return "MariaDB hybrid (mariadb)"
+    if engine == "serenedb" and mode == "fulltext":
+        return "SereneDB full-text (serenedb)"
+    if engine == "serenedb" and mode == "vector":
+        return "SereneDB vector (serenedb)"
+    if engine == "serenedb" and mode == "hybrid":
+        return "SereneDB hybrid (serenedb)"
     if engine == "weaviate" and mode == "fulltext":
         return "Weaviate full-text (weaviate)"
     if engine == "weaviate" and mode == "vector":
@@ -409,6 +415,8 @@ def _color_pair_for_engine(engine: str) -> int:
     if e == "milvus":
         return 6
     if e == "mariadb":
+        return 7
+    if e == "serenedb":
         return 7
     if e == "weaviate":
         return 13
@@ -2371,6 +2379,7 @@ def _engine_consistency_radar_lines(rows: list[ArtifactRow]) -> list[str]:
         ("typesense", "#8b5cf6"),
         ("milvus", "#00a1ea"),
         ("mariadb", "#f97316"),
+        ("serenedb", "#fb7185"),
         ("weaviate", "#14b8a6"),
         ("vespa", "#22c55e"),
     ]
@@ -2415,6 +2424,7 @@ def _engine_consistency_series(rows: list[ArtifactRow]) -> tuple[list[str], list
         ("typesense", "#8b5cf6"),
         ("milvus", "#00a1ea"),
         ("mariadb", "#f97316"),
+        ("serenedb", "#fb7185"),
         ("weaviate", "#14b8a6"),
         ("vespa", "#22c55e"),
     ]
@@ -2628,6 +2638,7 @@ def _dataset_family_preference_chart_lines(rows: list[ArtifactRow]) -> list[str]
         "typesense": "#8b5cf6",
         "milvus": "#00a1ea",
         "mariadb": "#f97316",
+        "serenedb": "#fb7185",
         "weaviate": "#14b8a6",
         "vespa": "#22c55e",
     }
@@ -2670,6 +2681,7 @@ def _quality_vs_simplicity_chart_lines(rows: list[ArtifactRow]) -> list[str]:
         "typesense": "#8b5cf6",
         "milvus": "#00a1ea",
         "mariadb": "#f97316",
+        "serenedb": "#fb7185",
         "weaviate": "#14b8a6",
         "vespa": "#22c55e",
     }
@@ -2839,6 +2851,8 @@ def _engine_color(engine: str) -> str:
         return "#00a1ea"
     if e == "mariadb":
         return "#f97316"
+    if e == "serenedb":
+        return "#fb7185"
     if e == "weaviate":
         return "#0891b2"
     if e == "vespa":
@@ -3032,6 +3046,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
         "typesense": "#8b5cf6",
         "milvus": "#00a1ea",
         "mariadb": "#f97316",
+        "serenedb": "#fb7185",
         "weaviate": "#14b8a6",
         "vespa": "#22c55e",
     }

@@ -22,6 +22,7 @@ from .meilisearch_backend import MeilisearchBackend
 from .milvus_backend import MilvusBackend, suppress_pymilvus_probe_logs
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
+from .serenedb_backend import SereneDBBackend
 from .table_layout import wrap_text_lines
 from .typesense_backend import TypesenseBackend
 from .vespa_backend import VespaBackend
@@ -77,6 +78,7 @@ _SERVICES: list[tuple[str, str]] = [
     ("typesense", "Typesense"),
     ("milvus", "Milvus"),
     ("mariadb", "MariaDB Vector"),
+    ("serenedb", "SereneDB"),
     ("weaviate", "Weaviate"),
     ("vespa", "Vespa"),
 ]
@@ -139,6 +141,7 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
         "typesense": [project_root / "data" / "typesense_data"],
         "milvus": [project_root / "data" / "milvus_data"],
         "mariadb": [project_root / "data" / "mariadb_data"],
+        "serenedb": [project_root / "data" / "serenedb_data"],
         "weaviate": [project_root / "data" / "weaviate_data"],
         "vespa": [
             project_root / "data" / "vespa_data",
@@ -160,6 +163,14 @@ def _ensure_engine_dirs(project_root: Path, service: str) -> None:
                 pass
             except OSError:
                 pass
+        if service == "serenedb":
+            target.chmod(0o755)
+            try:
+                os.chown(target, 999, 999)
+            except PermissionError:
+                pass
+            except OSError:
+                pass
 
 
 def _engine_data_dir(project_root: Path, service: str) -> Path | None:
@@ -172,6 +183,7 @@ def _engine_data_dir(project_root: Path, service: str) -> Path | None:
         "typesense": project_root / "data" / "typesense_data",
         "milvus": project_root / "data" / "milvus_data",
         "mariadb": project_root / "data" / "mariadb_data",
+        "serenedb": project_root / "data" / "serenedb_data",
         "weaviate": project_root / "data" / "weaviate_data",
         "vespa": project_root / "data" / "vespa_data",
     }
@@ -447,6 +459,13 @@ def _engine_ready(cfg: AppConfig, service: str) -> tuple[bool, str]:
             return True, ""
         if service == "mariadb":
             backend = MariaDBBackend(cfg.mariadb)
+            try:
+                backend.ensure_accessible()
+            finally:
+                backend.close()
+            return True, ""
+        if service == "serenedb":
+            backend = SereneDBBackend(cfg.serenedb)
             try:
                 backend.ensure_accessible()
             finally:

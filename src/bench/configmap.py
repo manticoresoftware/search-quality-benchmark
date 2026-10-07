@@ -26,6 +26,7 @@ def _engine_color(engine: str) -> str:
         "opensearch": "#f7d9ff",
         "milvus": "#cceeff",
         "mariadb": "#ffe0b2",
+        "serenedb": "#ffd7c2",
     }.get(engine, "#eeeeee")
 
 
@@ -90,7 +91,7 @@ def render_configmap_markdown(config_path: str | Path) -> str:
     lines.append(f"- Config: `{Path(config_path)}`")
     lines.append(f"- Profiles: `{len(targets)}`")
     lines.append("")
-    for engine in ("manticore", "qdrant", "meilisearch", "opensearch", "milvus", "mariadb"):
+    for engine in ("manticore", "qdrant", "meilisearch", "opensearch", "milvus", "mariadb", "serenedb"):
         entries = groups.get(engine, [])
         if not entries:
             continue

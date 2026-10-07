@@ -20,6 +20,7 @@ from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
 from .runbench import run_benchmark, write_run_artifacts
 from .search_options import normalize_search_options
+from .serenedb_backend import SereneDBBackend
 from .typesense_backend import TypesenseBackend
 from .vespa_backend import VespaBackend
 from .weaviate_backend import WeaviateBackend
@@ -43,6 +44,7 @@ _ENGINE_TARGET_KEYS = {
     "typesense": {"collection_name"},
     "milvus": {"collection_name"},
     "mariadb": {"table_name"},
+    "serenedb": {"table_name"},
     "vespa": {"collection_name"},
     "weaviate": {"collection_name"},
 }
@@ -81,6 +83,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
             if "milvus" in name
             else "mariadb"
             if "mariadb" in name
+            else "serenedb"
+            if "serenedb" in name
             else "vespa"
             if "vespa" in name
             else "weaviate"
@@ -285,6 +289,31 @@ def _mariadb_hybrid_label(cfg: AppConfig) -> str:
     )
 
 
+def _serenedb_vector_label(cfg: AppConfig) -> str:
+    query_mode = str(cfg.serenedb.vector_query_mode or "exact").strip().lower()
+    extras = [
+        f"field:{cfg.serenedb.vector_field}",
+        f"search:{query_mode}",
+        f"metric:{cfg.serenedb.vector_metric}",
+    ]
+    if query_mode == "index":
+        extras.extend(
+            [
+                f"index:{cfg.serenedb.vector_index_type}",
+                f"quant:{cfg.serenedb.vector_quantization or 'none'}",
+            ]
+        )
+    return f"{resolved_embedding_model(cfg)} [{' '.join(extras)}]"
+
+
+def _serenedb_hybrid_label(cfg: AppConfig) -> str:
+    return (
+        f"{resolved_embedding_model(cfg)} [fusion=rrf k={int(cfg.serenedb.hybrid_rrf_k)} "
+        f"alpha={float(cfg.serenedb.hybrid_alpha):.2f} "
+        f"vector-search:{cfg.serenedb.vector_query_mode}]"
+    )
+
+
 def _weaviate_vector_label(cfg: AppConfig) -> str:
     return f"{resolved_embedding_model(cfg)} [field:{cfg.weaviate.vector_field}]"
 
@@ -316,7 +345,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 continue
             cfg = target.cfg
             engine = display_engine_for_profile(target.type, target.name)
-            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "milvus", "mariadb", "weaviate", "vespa") else ["fulltext", "vector"])
+            modes = [target.mode_filter] if target.mode_filter in ("fulltext", "vector", "hybrid") else (["fulltext", "vector", "hybrid"] if engine in ("meilisearch", "opensearch", "elasticsearch", "typesense", "milvus", "mariadb", "serenedb", "weaviate", "vespa") else ["fulltext", "vector"])
             for mode in modes:
                 if mode == "vector":
                     if is_manticore_like_type(engine):
@@ -333,6 +362,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _milvus_vector_label(cfg)
                     elif engine == "mariadb":
                         model_or_ranker = _mariadb_vector_label(cfg)
+                    elif engine == "serenedb":
+                        model_or_ranker = _serenedb_vector_label(cfg)
                     elif engine == "weaviate":
                         model_or_ranker = _weaviate_vector_label(cfg)
                     elif engine == "vespa":
@@ -355,6 +386,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                         model_or_ranker = _milvus_hybrid_label(cfg)
                     elif engine == "mariadb":
                         model_or_ranker = _mariadb_hybrid_label(cfg)
+                    elif engine == "serenedb":
+                        model_or_ranker = _serenedb_hybrid_label(cfg)
                     elif engine == "weaviate":
                         model_or_ranker = _weaviate_hybrid_label(cfg)
                     elif engine == "vespa":
@@ -389,6 +422,8 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     model_or_ranker = f"[BM25 field:{cfg.milvus.content_field} source:{'+'.join(cfg.milvus.text_fields or ['title', 'abstract'])}]"
                 elif engine == "mariadb":
                     model_or_ranker = f"[MATCH/AGAINST mode:{cfg.mariadb.fulltext_search_mode} fields:{','.join(cfg.mariadb.text_fields or ['title', 'abstract'])}]"
+                elif engine == "serenedb":
+                    model_or_ranker = f"[BM25 fields:{','.join(cfg.serenedb.text_fields or ['title', 'abstract'])}]"
                 elif engine == "weaviate":
                     model_or_ranker = f"[fields:{','.join(cfg.weaviate.text_fields or ['title', 'abstract'])}]"
                 elif engine == "vespa":
@@ -536,6 +571,8 @@ def _draw_row(
             color_engine = curses.color_pair(6)
         elif v.engine == "mariadb":
             color_engine = curses.color_pair(7)
+        elif v.engine == "serenedb":
+            color_engine = curses.color_pair(7)
         elif v.engine == "weaviate":
             color_engine = curses.color_pair(13)
         elif v.engine == "vespa":
@@ -587,6 +624,8 @@ def _variant_target_name(v: RunVariant) -> str:
         return str(v.cfg.milvus.collection_name or "").strip()
     if v.engine == "mariadb":
         return str(v.cfg.mariadb.table_name or "").strip()
+    if v.engine == "serenedb":
+        return str(v.cfg.serenedb.table_name or "").strip()
     if v.engine == "weaviate":
         return str(v.cfg.weaviate.collection_name or "").strip()
     if v.engine == "vespa":
@@ -644,6 +683,15 @@ def is_variant_runnable(v: RunVariant) -> bool:
                 if not backend.table_exists(target):
                     return False
                 if v.mode in ("fulltext", "hybrid") and not backend.table_has_fulltext(target):
+                    return False
+                return v.mode == "fulltext" or backend.table_has_vector(target)
+            finally:
+                backend.close()
+        if v.engine == "serenedb":
+            backend = SereneDBBackend(v.cfg.serenedb)
+            try:
+                backend.ensure_accessible()
+                if not backend.table_exists(target) or not backend.table_has_fulltext(target):
                     return False
                 return v.mode == "fulltext" or backend.table_has_vector(target)
             finally:
@@ -708,6 +756,12 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
                 backend.close()
         if v.engine == "mariadb":
             backend = MariaDBBackend(v.cfg.mariadb)
+            try:
+                return int(backend.get_document_count(_variant_target_name(v))), None
+            finally:
+                backend.close()
+        if v.engine == "serenedb":
+            backend = SereneDBBackend(v.cfg.serenedb)
             try:
                 return int(backend.get_document_count(_variant_target_name(v))), None
             finally:

@@ -22,6 +22,7 @@ from .opensearch_backend import OpenSearchBackend
 from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k, reciprocal_rank_at_k
 from .qdrant_backend import QdrantBackend
 from .search_options import normalize_search_options
+from .serenedb_backend import SereneDBBackend
 from .typesense_backend import TypesenseBackend
 from .vespa_backend import VespaBackend
 from .weaviate_backend import WeaviateBackend
@@ -369,6 +370,8 @@ def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
         return str(cfg.milvus.collection_name or "").strip()
     if engine == "mariadb":
         return str(cfg.mariadb.table_name or "").strip()
+    if engine == "serenedb":
+        return str(cfg.serenedb.table_name or "").strip()
     if engine == "weaviate":
         return str(cfg.weaviate.collection_name or "").strip()
     if engine == "vespa":
@@ -642,6 +645,42 @@ def _mariadb_hybrid_label(cfg: AppConfig) -> str:
         "fusion=rrf",
         f"k={int(cfg.mariadb.hybrid_rrf_k)}",
         f"alpha={float(cfg.mariadb.hybrid_alpha):.2f}",
+    ]
+    return f"{model} [{' '.join(extras)}]"
+
+
+def _serenedb_fulltext_label(cfg: AppConfig) -> str:
+    fields = ",".join(cfg.serenedb.text_fields or ["title", "abstract"])
+    return f"[BM25 fields:{fields}]"
+
+
+def _serenedb_vector_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    query_mode = str(cfg.serenedb.vector_query_mode or "exact").strip().lower()
+    extras = [
+        f"field:{cfg.serenedb.vector_field}",
+        f"search:{query_mode}",
+        f"metric:{cfg.serenedb.vector_metric}",
+    ]
+    if query_mode == "index":
+        extras.extend(
+            [
+                f"index:{cfg.serenedb.vector_index_type}",
+                f"quant:{cfg.serenedb.vector_quantization or 'none'}",
+                f"nprobe:{int(cfg.serenedb.vector_search_nprobe)}",
+                f"rerank:{int(cfg.serenedb.vector_rerank_factor)}",
+            ]
+        )
+    return f"{model} [{' '.join(extras)}]"
+
+
+def _serenedb_hybrid_label(cfg: AppConfig) -> str:
+    model = resolved_embedding_model(cfg)
+    extras = [
+        "fusion=rrf",
+        f"vector-search:{cfg.serenedb.vector_query_mode}",
+        f"k={int(cfg.serenedb.hybrid_rrf_k)}",
+        f"alpha={float(cfg.serenedb.hybrid_alpha):.2f}",
     ]
     return f"{model} [{' '.join(extras)}]"
 
@@ -1000,6 +1039,73 @@ def _collect_diagnostics_mariadb(
                         "query": qtext,
                         "vector_dim": len(query_vector) if mode != "fulltext" else 0,
                     }
+                    entry["top_hits"] = rows[:5]
+                except Exception as exc:
+                    entry["error"] = str(exc)
+                diagnostics[mode].append(entry)
+    finally:
+        backend.close()
+    return diagnostics
+
+
+def _collect_diagnostics_serenedb(
+    cfg: AppConfig,
+    modes: list[str],
+    topics: list[dict[str, str]],
+    *,
+    query_vectors: dict[str, list[float]],
+) -> dict[str, list[dict[str, Any]]]:
+    diagnostics: dict[str, list[dict[str, Any]]] = {}
+    backend = SereneDBBackend(cfg.serenedb)
+    diagnostics_topics = topics[: cfg.benchmark.diagnostics_queries]
+    try:
+        for mode in modes:
+            diagnostics[mode] = []
+            for topic in diagnostics_topics:
+                qtext = query_text_for_mode(
+                    topic,
+                    mode,
+                    fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+                )
+                entry: dict[str, Any] = {"topic_id": topic["topic_id"], "query": qtext}
+                try:
+                    query_vector: list[float] = []
+                    if mode == "fulltext":
+                        rows = backend.search_lexical(qtext, limit=min(cfg.benchmark.limit, 5))
+                    else:
+                        vector_text = query_text_for_mode(
+                            topic,
+                            "vector",
+                            fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+                        )
+                        query_vector = query_vectors.get(vector_text, [])
+                        if not query_vector:
+                            raise RuntimeError("Missing query vector for SereneDB diagnostics.")
+                        if mode == "vector":
+                            rows = backend.search_vector(
+                                query_vector, limit=min(cfg.benchmark.limit, 5)
+                            )
+                        else:
+                            rows = backend.search_hybrid(
+                                qtext, query_vector, limit=min(cfg.benchmark.limit, 5)
+                            )
+                    entry["request"] = {
+                        "table": backend.table_name(),
+                        "index": backend.index_name(),
+                        "mode": mode,
+                        "query": qtext,
+                        "vector_dim": len(query_vector),
+                    }
+                    if mode != "fulltext":
+                        vector_query_mode = str(
+                            cfg.serenedb.vector_query_mode or "exact"
+                        ).strip().lower()
+                        entry["request"]["vector_query_mode"] = vector_query_mode
+                        entry["request"]["vector_source"] = (
+                            backend.table_name()
+                            if vector_query_mode == "exact"
+                            else backend.index_name()
+                        )
                     entry["top_hits"] = rows[:5]
                 except Exception as exc:
                     entry["error"] = str(exc)
@@ -1457,6 +1563,56 @@ def _run_single_query_mariadb(
         backend.close()
 
 
+def _run_single_query_serenedb(
+    cfg: AppConfig,
+    mode: str,
+    topic_id: str,
+    query_text: str,
+    repeat_idx: int,
+    query_vector: list[float] | None = None,
+) -> QueryResult:
+    backend = SereneDBBackend(cfg.serenedb)
+    try:
+        started = perf_counter()
+        if mode == "fulltext":
+            rows = backend.search_lexical(query_text, limit=cfg.benchmark.limit)
+        elif mode == "vector":
+            if not query_vector:
+                raise RuntimeError("Missing query vector for SereneDB vector search.")
+            rows = backend.search_vector(query_vector, limit=cfg.benchmark.limit)
+        else:
+            if not query_vector:
+                raise RuntimeError("Missing query vector for SereneDB hybrid search.")
+            rows = backend.search_hybrid(query_text, query_vector, limit=cfg.benchmark.limit)
+        latency_ms = (perf_counter() - started) * 1000.0
+        doc_ids = [str(row["doc_id"]) for row in rows if row.get("doc_id")]
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=latency_ms,
+            success=True,
+            error="",
+            hit_count=len(doc_ids),
+            doc_ids=doc_ids,
+        )
+    except Exception as exc:
+        return QueryResult(
+            mode=mode,
+            topic_id=topic_id,
+            query=query_text,
+            repeat_idx=repeat_idx,
+            latency_ms=0.0,
+            success=False,
+            error=str(exc),
+            hit_count=0,
+            doc_ids=[],
+        )
+    finally:
+        backend.close()
+
+
 def _run_single_query_elasticsearch(
     cfg: AppConfig,
     backend: ElasticsearchBackend,
@@ -1729,6 +1885,19 @@ def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> li
             backend.close()
         return lines
 
+    if engine == "serenedb":
+        backend = SereneDBBackend(cfg.serenedb)
+        try:
+            table_name = backend.table_name()
+            try:
+                count = backend.get_document_count(table_name)
+                lines.append(f"rows ({table_name}): {int(count):,}")
+            except Exception as exc:
+                lines.append(f"rows ({table_name}): n/a ({exc})")
+        finally:
+            backend.close()
+        return lines
+
     if engine == "weaviate":
         backend = WeaviateBackend(cfg.weaviate)
         for m in modes:
@@ -1816,6 +1985,10 @@ def run_benchmark(
     elif engine == "mariadb":
         if mode not in ("fulltext", "vector", "hybrid"):
             raise ValueError("For engine=mariadb, mode must be one of: fulltext, vector, hybrid")
+        modes = [mode]
+    elif engine == "serenedb":
+        if mode not in ("fulltext", "vector", "hybrid"):
+            raise ValueError("For engine=serenedb, mode must be one of: fulltext, vector, hybrid")
         modes = [mode]
     elif engine == "weaviate":
         if mode not in ("fulltext", "vector", "hybrid"):
@@ -1962,6 +2135,18 @@ def run_benchmark(
                         ),
                     )
                     continue
+                if engine == "serenedb":
+                    _run_single_query_serenedb(
+                        cfg,
+                        m,
+                        t["topic_id"],
+                        qtext,
+                        repeat_idx=-1,
+                        query_vector=query_vectors.get(
+                            query_text_for_mode(t, "vector", fulltext_query_variant=cfg.manticore.fulltext_query_variant), []
+                        ),
+                    )
+                    continue
                 if engine == "weaviate":
                     _run_single_query_weaviate(
                         cfg,
@@ -2090,6 +2275,19 @@ def run_benchmark(
             futures = [
                 pool.submit(
                     _run_single_query_mariadb,
+                    cfg,
+                    m,
+                    tid,
+                    q,
+                    r,
+                    query_vectors.get(q, []) if m in ("vector", "hybrid") else None,
+                )
+                for (m, tid, q, r) in tasks
+            ]
+        elif engine == "serenedb":
+            futures = [
+                pool.submit(
+                    _run_single_query_serenedb,
                     cfg,
                     m,
                     tid,
@@ -2300,6 +2498,8 @@ def run_benchmark(
         diagnostics = _collect_diagnostics_milvus(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "mariadb":
         diagnostics = _collect_diagnostics_mariadb(cfg, modes, topics, query_vectors=query_vectors)
+    elif engine == "serenedb":
+        diagnostics = _collect_diagnostics_serenedb(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "weaviate":
         diagnostics = _collect_diagnostics_weaviate(cfg, modes, topics, query_vectors=query_vectors)
     elif engine == "vespa":
@@ -2322,6 +2522,8 @@ def run_benchmark(
             model_label = _milvus_vector_label(cfg)
         elif engine == "mariadb":
             model_label = _mariadb_vector_label(cfg)
+        elif engine == "serenedb":
+            model_label = _serenedb_vector_label(cfg)
         elif engine == "weaviate":
             model_label = _weaviate_vector_label(cfg)
         elif engine == "vespa":
@@ -2348,6 +2550,8 @@ def run_benchmark(
             model_label = _milvus_hybrid_label(cfg)
         elif engine == "mariadb":
             model_label = _mariadb_hybrid_label(cfg)
+        elif engine == "serenedb":
+            model_label = _serenedb_hybrid_label(cfg)
         elif engine == "weaviate":
             model_label = _weaviate_hybrid_label(cfg)
         elif engine == "vespa":
@@ -2369,6 +2573,8 @@ def run_benchmark(
             model_label = _milvus_fulltext_label(cfg)
         elif engine == "mariadb":
             model_label = _mariadb_fulltext_label(cfg)
+        elif engine == "serenedb":
+            model_label = _serenedb_fulltext_label(cfg)
         elif engine == "weaviate":
             model_label = _weaviate_fulltext_label(cfg)
         elif engine == "vespa":
@@ -2387,6 +2593,8 @@ def run_benchmark(
                 model_label = _milvus_vector_label(cfg)
             elif engine == "mariadb":
                 model_label = _mariadb_vector_label(cfg)
+            elif engine == "serenedb":
+                model_label = _serenedb_vector_label(cfg)
             elif engine == "weaviate":
                 model_label = _weaviate_vector_label(cfg)
             elif engine == "vespa":

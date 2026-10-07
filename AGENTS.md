@@ -32,6 +32,9 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - MariaDB full-text search (`MATCH ... AGAINST`)
 - MariaDB vector search (`VECTOR INDEX` + `VEC_DISTANCE`)
 - MariaDB hybrid search (weighted reciprocal-rank fusion of full-text and vector rankings)
+- SereneDB full-text search (inverted index + BM25)
+- SereneDB vector search (exact scan over cached user-provided vectors in bundled profiles)
+- SereneDB hybrid search (weighted reciprocal-rank fusion of BM25 and exact vector rankings in bundled profiles)
 - Weaviate lexical search
 - Weaviate vector search (user-provided vectors from the shared cache)
 - Weaviate hybrid search (query text + cached query vector)
@@ -53,7 +56,7 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
   - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`, `typesense fulltext`, `milvus fulltext`) use the shorter query variant.
+    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`, `typesense fulltext`, `milvus fulltext`, `mariadb fulltext`, `serenedb fulltext`, `weaviate fulltext`, `vespa fulltext`) use the shorter query variant.
     - vector/hybrid modes use the longer query variant, including Milvus vector and hybrid searches.
   - Prepared topic fields are explicit: `query_short` and `query_long`.
   - Example topics from TREC-COVID:
@@ -312,6 +315,19 @@ embedding:
 - `milvus.sparse_vector_field`, `sparse_index_algorithm`, `bm25_k1`, and `bm25_b`: native BM25 function/index settings
 - `milvus.hybrid_rrf_k` / `milvus.hybrid_candidates`: native RRF ranker and per-branch candidate count
 
+### SereneDB Config
+
+- `serenedb.host`, `port`, `user`, `password`, and `database`: PostgreSQL-wire connection settings (defaults: `127.0.0.1:7890`, `postgres`, `bench`, `postgres`)
+- `serenedb.table_name`: combined table and inverted-index relation used for all three search modes
+- `serenedb.text_fields`: fields tokenized by the English text-search dictionary and scored with BM25
+- `serenedb.vector_field`: fixed-size `FLOAT[N]` column populated from the shared vector cache
+- `serenedb.vector_metric`: `cosine`, `l2`, `l1`, or `ip`
+- `serenedb.vector_index_type`: `ivf` or `hnsw`; bundled profiles use IVF
+- `serenedb.vector_quantization`: optional SereneDB vector quantizer; bundled profiles use `sq8`
+- `serenedb.vector_query_mode`: `exact` reads the base table for a stable exact scan; `index` reads the inverted-index relation and uses its ANN implementation. Bundled profiles use `exact` because SereneDB `26.10.1` terminates with `SIGSEGV` under repeated 4096-dimensional ANN queries; use `index` only after validating the deployed SereneDB version.
+- `serenedb.vector_search_nprobe` / `vector_rerank_factor`: query-time IVF search settings; bundled profiles use SereneDB's documented defaults `8` and `4`
+- `serenedb.hybrid_alpha`, `hybrid_rrf_k`, and `hybrid_candidates`: weighted RRF blend and candidate depth
+
 ### Weaviate Config
 - `weaviate.url`: server URL (default: `http://127.0.0.1:8080`)
 - `weaviate.api_key` / `weaviate.api_key_file`: optional API key
@@ -408,6 +424,10 @@ manticore_vector_only:
   - combined collection name: `milvus.collection_name`
   - configured `text_fields` are concatenated into one analyzed `TEXT`; a native BM25 function writes its sparse representation
   - vector mode builds the same collection with both sparse BM25 and cached dense-vector fields, enabling native RRF hybrid search
+- SereneDB tables:
+  - lexical, vector, and hybrid modes share one table and one inverted index relation
+  - an English text-search dictionary supplies token normalization and stemming for BM25
+  - vector profiles build an IVF index over cached vectors; hybrid queries combine BM25 and vector ranks in SQL with weighted RRF
 - Weaviate collections:
   - combined collection name: `weaviate.collection_name`
   - lexical, vector, and hybrid all use the same physical collection/class
@@ -453,6 +473,7 @@ The services currently managed there are:
 - `typesense`
 - `milvus`
 - `mariadb`
+- `serenedb`
 - `weaviate`
 - `vespa`
 
@@ -480,6 +501,7 @@ Notes:
   ```
   The Milvus container runs as user `milvus` (`999:999`), so the bind-mounted host directory must be writable by that uid/gid.
 - MariaDB uses `127.0.0.1:3307`, database `search_bench`, and local development credentials `bench`/`bench` by default.
+- SereneDB uses `127.0.0.1:7890`, database/user `postgres`, and the local development password `bench`; its persistent data is stored in `data/serenedb_data`.
 - Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
 - Vespa is exposed at `http://127.0.0.1:8081`, with deploy API at `http://127.0.0.1:19071`.
 - Before starting Vespa for the first time, prepare the host bind-mount directories:
@@ -542,6 +564,12 @@ Behavior:
   - the bundled container defaults to a 32 GiB InnoDB buffer pool and an 8 GiB per-index HNSW cache; override these with `MARIADB_INNODB_BUFFER_POOL_SIZE` and `MARIADB_MHNSW_MAX_CACHE_SIZE`,
   - creates a combined InnoDB table with FULLTEXT and VECTOR indexes,
   - uses cache only and fails on cache misses,
+  - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).
+- SereneDB vector indexing:
+  - uses the shared cache only and fails on cache misses,
+  - stores the cached vectors in a fixed-size `FLOAT[N]` column,
+  - creates a combined BM25 + IVF inverted index,
+  - bundled runs query vectors with an exact base-table scan; `vector_query_mode: index` enables the ANN relation when a server version has been validated as stable,
   - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).
 
 ## Benchmark Report Methodology
