@@ -428,7 +428,7 @@ manticore_vector_only:
 - SereneDB tables:
   - lexical, vector, and hybrid modes share one table and one inverted index relation
   - an English text-search dictionary supplies token normalization and stemming for BM25
-  - vector profiles build an IVF index over cached vectors; hybrid queries combine BM25 and vector ranks in SQL with weighted RRF
+  - vector profiles build an IVF index over cached vectors; hybrid queries fetch the BM25 and vector candidate lists separately and combine them client-side with weighted RRF (SereneDB `26.10.1` can reject an equivalent SQL `UNION` with an invalid-Unicode construction error)
 - Weaviate collections:
   - combined collection name: `weaviate.collection_name`
   - lexical, vector, and hybrid all use the same physical collection/class

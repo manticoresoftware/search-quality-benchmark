@@ -328,28 +328,20 @@ class SereneDBBackend:
         candidates = max(int(limit), int(self.cfg.hybrid_candidates))
         alpha = min(1.0, max(0.0, float(self.cfg.hybrid_alpha)))
         rrf_k = max(1, int(self.cfg.hybrid_rrf_k))
-        predicate, match_params = self._lexical_predicate(text)
-        operator = self._vector_operator()
-        vector_source = self._vector_source_sql()
-        sql = (
-            "WITH fused AS ("
-            "SELECT doc_id, %s::DOUBLE AS weight, "
-            "RANK() OVER (ORDER BY score DESC) AS rank FROM ("
-            f"SELECT doc_id, BM25({self._index_sql()}.tableoid) AS score "
-            f"FROM {self._index_sql()} WHERE {predicate} "
-            "ORDER BY score DESC LIMIT %s) lexical "
-            "UNION ALL "
-            "SELECT doc_id, %s::DOUBLE AS weight, "
-            "RANK() OVER (ORDER BY distance) AS rank FROM ("
-            f"SELECT doc_id, {self._vector_field_sql()} {operator} "
-            f"%s::FLOAT[{len(values)}] AS distance FROM {vector_source} "
-            "ORDER BY distance LIMIT %s) semantic) "
-            "SELECT doc_id, SUM(weight / (%s + rank)) AS score FROM fused "
-            "GROUP BY doc_id ORDER BY score DESC, doc_id LIMIT %s"
-        )
-        params: list[Any] = [1.0 - alpha]
-        params.extend(match_params)
-        params.extend([candidates, alpha, values, candidates, rrf_k, int(limit)])
-        with self._connection().cursor() as cur:
-            cur.execute(sql, tuple(params))
-            return [dict(row) for row in cur.fetchall()]
+        lexical = self.search_lexical(text, limit=candidates)
+        semantic = self.search_vector(values, limit=candidates)
+        scores: dict[str, float] = {}
+        for rank, row in enumerate(lexical, start=1):
+            doc_id = str(row.get("doc_id", ""))
+            if doc_id:
+                scores[doc_id] = scores.get(doc_id, 0.0) + (1.0 - alpha) / (
+                    rrf_k + rank
+                )
+        for rank, row in enumerate(semantic, start=1):
+            doc_id = str(row.get("doc_id", ""))
+            if doc_id:
+                scores[doc_id] = scores.get(doc_id, 0.0) + alpha / (rrf_k + rank)
+        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[
+            : int(limit)
+        ]
+        return [{"doc_id": doc_id, "score": score} for doc_id, score in ranked]

@@ -83,7 +83,7 @@ def test_serenedb_bulk_index_binds_float_vector() -> None:
     assert rows[0][-1] == [1.0, 2.0, 3.0]
 
 
-def test_serenedb_hybrid_query_uses_weighted_rrf() -> None:
+def test_serenedb_hybrid_query_uses_weighted_rrf(monkeypatch) -> None:
     backend = SereneDBBackend(
         SereneDBConfig(
             table_name="docs",
@@ -93,30 +93,23 @@ def test_serenedb_hybrid_query_uses_weighted_rrf() -> None:
             vector_query_mode="exact",
         )
     )
-    connection = _FakeConnection([{"doc_id": "doc-1", "score": 0.1}])
-    backend._conn = connection  # type: ignore[assignment]
+    calls: list[tuple[str, int]] = []
+
+    def search_lexical(query: str, *, limit: int) -> list[dict[str, Any]]:
+        calls.append(("lexical", limit))
+        return [{"doc_id": "lexical"}, {"doc_id": "shared"}]
+
+    def search_vector(vector: list[float], *, limit: int) -> list[dict[str, Any]]:
+        calls.append(("vector", limit))
+        return [{"doc_id": "vector"}, {"doc_id": "shared"}]
+
+    monkeypatch.setattr(backend, "search_lexical", search_lexical)
+    monkeypatch.setattr(backend, "search_vector", search_vector)
 
     rows = backend.search_hybrid("apple", [1.0, 0.0], limit=3)
 
-    sql, params = connection.statements[-1]
-    assert "BM25(\"docs_idx\".tableoid)" in sql
-    assert 'FROM "docs" ORDER BY distance' in sql
-    assert 'has_any_tokens("title", %s, 1)' in sql
-    assert 'has_any_tokens("abstract", %s, 1)' in sql
-    assert "RANK() OVER" in sql
-    assert "SUM(weight / (%s + rank))" in sql
-    assert params == (
-        0.75,
-        ["apple"],
-        ["apple"],
-        10,
-        0.25,
-        [1.0, 0.0],
-        10,
-        42,
-        3,
-    )
-    assert rows == [{"doc_id": "doc-1", "score": 0.1}]
+    assert calls == [("lexical", 10), ("vector", 10)]
+    assert [row["doc_id"] for row in rows] == ["shared", "lexical", "vector"]
 
 
 def test_serenedb_lexical_query_uses_configured_minimum_match() -> None:
