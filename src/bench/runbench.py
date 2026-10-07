@@ -651,7 +651,8 @@ def _mariadb_hybrid_label(cfg: AppConfig) -> str:
 
 def _serenedb_fulltext_label(cfg: AppConfig) -> str:
     fields = ",".join(cfg.serenedb.text_fields or ["title", "abstract"])
-    return f"[BM25 fields:{fields}]"
+    minimum = float(cfg.serenedb.fulltext_min_match_ratio) * 100.0
+    return f"[BM25 fields:{fields} min-match:{minimum:g}%]"
 
 
 def _serenedb_vector_label(cfg: AppConfig) -> str:
@@ -679,6 +680,7 @@ def _serenedb_hybrid_label(cfg: AppConfig) -> str:
     extras = [
         "fusion=rrf",
         f"vector-search:{cfg.serenedb.vector_query_mode}",
+        f"lexical-min-match:{float(cfg.serenedb.fulltext_min_match_ratio) * 100.0:g}%",
         f"k={int(cfg.serenedb.hybrid_rrf_k)}",
         f"alpha={float(cfg.serenedb.hybrid_alpha):.2f}",
     ]
@@ -1096,6 +1098,13 @@ def _collect_diagnostics_serenedb(
                         "query": qtext,
                         "vector_dim": len(query_vector),
                     }
+                    if mode in {"fulltext", "hybrid"}:
+                        entry["request"]["fulltext_min_match"] = (
+                            backend.lexical_min_match(qtext)
+                        )
+                        entry["request"]["fulltext_min_match_ratio"] = float(
+                            cfg.serenedb.fulltext_min_match_ratio
+                        )
                     if mode != "fulltext":
                         vector_query_mode = str(
                             cfg.serenedb.vector_query_mode or "exact"

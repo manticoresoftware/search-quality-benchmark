@@ -310,6 +310,7 @@ def _serenedb_hybrid_label(cfg: AppConfig) -> str:
     return (
         f"{resolved_embedding_model(cfg)} [fusion=rrf k={int(cfg.serenedb.hybrid_rrf_k)} "
         f"alpha={float(cfg.serenedb.hybrid_alpha):.2f} "
+        f"lexical-min-match:{float(cfg.serenedb.fulltext_min_match_ratio) * 100.0:g}% "
         f"vector-search:{cfg.serenedb.vector_query_mode}]"
     )
 
@@ -423,7 +424,10 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                 elif engine == "mariadb":
                     model_or_ranker = f"[MATCH/AGAINST mode:{cfg.mariadb.fulltext_search_mode} fields:{','.join(cfg.mariadb.text_fields or ['title', 'abstract'])}]"
                 elif engine == "serenedb":
-                    model_or_ranker = f"[BM25 fields:{','.join(cfg.serenedb.text_fields or ['title', 'abstract'])}]"
+                    model_or_ranker = (
+                        f"[BM25 fields:{','.join(cfg.serenedb.text_fields or ['title', 'abstract'])} "
+                        f"min-match:{float(cfg.serenedb.fulltext_min_match_ratio) * 100.0:g}%]"
+                    )
                 elif engine == "weaviate":
                     model_or_ranker = f"[fields:{','.join(cfg.weaviate.text_fields or ['title', 'abstract'])}]"
                 elif engine == "vespa":

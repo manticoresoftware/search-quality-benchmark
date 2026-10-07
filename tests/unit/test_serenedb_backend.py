@@ -101,9 +101,44 @@ def test_serenedb_hybrid_query_uses_weighted_rrf() -> None:
     sql, params = connection.statements[-1]
     assert "BM25(\"docs_idx\".tableoid)" in sql
     assert 'FROM "docs" ORDER BY distance' in sql
+    assert 'has_any_tokens("title", %s, 1)' in sql
+    assert 'has_any_tokens("abstract", %s, 1)' in sql
     assert "RANK() OVER" in sql
     assert "SUM(weight / (%s + rank))" in sql
-    assert params == (0.75, "apple", "apple", 10, 0.25, [1.0, 0.0], 10, 42, 3)
+    assert params == (
+        0.75,
+        ["apple"],
+        ["apple"],
+        10,
+        0.25,
+        [1.0, 0.0],
+        10,
+        42,
+        3,
+    )
+    assert rows == [{"doc_id": "doc-1", "score": 0.1}]
+
+
+def test_serenedb_lexical_query_uses_configured_minimum_match() -> None:
+    backend = SereneDBBackend(
+        SereneDBConfig(
+            table_name="docs",
+            fulltext_min_match_ratio=0.25,
+        )
+    )
+    connection = _FakeConnection([{"doc_id": "doc-1", "score": 0.1}])
+    backend._conn = connection  # type: ignore[assignment]
+
+    rows = backend.search_lexical("one two three four five", limit=3)
+
+    sql, params = connection.statements[-1]
+    assert 'has_any_tokens("title", %s, 2)' in sql
+    assert 'has_any_tokens("abstract", %s, 2)' in sql
+    assert params == (
+        ["one", "two", "three", "four", "five"],
+        ["one", "two", "three", "four", "five"],
+        3,
+    )
     assert rows == [{"doc_id": "doc-1", "score": 0.1}]
 
 

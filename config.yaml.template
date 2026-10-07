@@ -259,6 +259,10 @@ serenedb:
   table_name: "trec_covid_serenedb"
   index_layout: "combined"
   text_fields: ["title", "abstract"]
+  # Fraction of whitespace-delimited query terms that must match. SereneDB
+  # accepts an integer min_match, which the client derives with ceil().
+  # The bundled 10% avoids a SereneDB 26.10.1 crash on wide OR queries.
+  fulltext_min_match_ratio: 0.1
   vector_field: "embedding"
   vector_metric: "cosine"
   vector_index_type: "ivf"

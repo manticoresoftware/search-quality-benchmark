@@ -320,6 +320,7 @@ embedding:
 - `serenedb.host`, `port`, `user`, `password`, and `database`: PostgreSQL-wire connection settings (defaults: `127.0.0.1:7890`, `postgres`, `bench`, `postgres`)
 - `serenedb.table_name`: combined table and inverted-index relation used for all three search modes
 - `serenedb.text_fields`: fields tokenized by the English text-search dictionary and scored with BM25
+- `serenedb.fulltext_min_match_ratio`: fraction of whitespace-delimited query terms that must match in each text field; the client passes all terms through `has_any_tokens` and derives SereneDB's integer `min_match` with `ceil(term_count × ratio)`. Bundled profiles use `0.1`, because pure wide-OR queries reproducibly terminate SereneDB `26.10.1` on verbose datasets such as ArguAna.
 - `serenedb.vector_field`: fixed-size `FLOAT[N]` column populated from the shared vector cache
 - `serenedb.vector_metric`: `cosine`, `l2`, `l1`, or `ip`
 - `serenedb.vector_index_type`: `ivf` or `hnsw`; bundled profiles use IVF
@@ -571,6 +572,12 @@ Behavior:
   - creates a combined BM25 + IVF inverted index,
   - bundled runs query vectors with an exact base-table scan; `vector_query_mode: index` enables the ANN relation when a server version has been validated as stable,
   - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).
+
+SereneDB lexical queries use `has_any_tokens` with the configured minimum-match
+ratio for both full-text runs and the lexical branch of hybrid runs. Short
+queries naturally resolve to `min_match = 1`; longer queries retain every term
+while requiring a modest subset to match. The effective integer and ratio are
+recorded in diagnostics, and the ratio is included in the run's model label.
 
 ## Benchmark Report Methodology
 

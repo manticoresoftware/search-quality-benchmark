@@ -248,6 +248,7 @@ class SereneDBConfig:
     table_name: str = "trec_covid_serenedb"
     index_layout: str = "combined"
     text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])
+    fulltext_min_match_ratio: float = 0.1
     vector_field: str = "embedding"
     vector_metric: str = "cosine"
     vector_index_type: str = "ivf"

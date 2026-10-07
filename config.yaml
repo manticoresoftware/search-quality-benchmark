@@ -278,6 +278,9 @@ serenedb:
   table_name: "trec_covid_serenedb"
   index_layout: "combined"
   text_fields: ["title", "abstract"]
+  # Require a modest share of query terms. Pure wide OR queries can crash
+  # SereneDB 26.10.1 on verbose datasets such as ArguAna.
+  fulltext_min_match_ratio: 0.1
   vector_field: "embedding"
   vector_metric: "cosine"
   vector_index_type: "ivf"

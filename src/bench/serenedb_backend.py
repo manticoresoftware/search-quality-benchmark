@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -262,23 +263,39 @@ class SereneDBBackend:
             row = cur.fetchone() or {}
         return int(row.get("count") or 0)
 
-    def _lexical_predicate(self) -> str:
-        return " OR ".join(
-            f"{_identifier(field, label='text field')} @@ %s"
+    def lexical_min_match(self, query: str) -> int:
+        ratio = float(self.cfg.fulltext_min_match_ratio)
+        if not 0.0 <= ratio <= 1.0:
+            raise ValueError(
+                "SereneDB fulltext_min_match_ratio must be between 0 and 1"
+            )
+        tokens = str(query or "").split()
+        if not tokens:
+            return 0
+        return max(1, int(math.ceil(len(tokens) * ratio)))
+
+    def _lexical_predicate(self, query: str) -> tuple[str, list[Any]]:
+        tokens = str(query or "").split()
+        minimum = self.lexical_min_match(query)
+        if minimum <= 0:
+            return "FALSE", []
+        predicate = " OR ".join(
+            f"has_any_tokens({_identifier(field, label='text field')}, %s, {minimum})"
             for field in self._text_fields()
         )
+        return predicate, [tokens] * len(self._text_fields())
 
     def search_lexical(self, query: str, *, limit: int) -> list[dict[str, Any]]:
         text = str(query or "").strip()
         if not text or int(limit) <= 0:
             return []
-        predicate = self._lexical_predicate()
+        predicate, match_params = self._lexical_predicate(text)
         sql = (
             f"SELECT doc_id, BM25({self._index_sql()}.tableoid) AS score "
             f"FROM {self._index_sql()} WHERE {predicate} "
             "ORDER BY score DESC, id LIMIT %s"
         )
-        params = tuple([text] * len(self._text_fields()) + [int(limit)])
+        params = tuple([*match_params, int(limit)])
         with self._connection().cursor() as cur:
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
@@ -311,7 +328,7 @@ class SereneDBBackend:
         candidates = max(int(limit), int(self.cfg.hybrid_candidates))
         alpha = min(1.0, max(0.0, float(self.cfg.hybrid_alpha)))
         rrf_k = max(1, int(self.cfg.hybrid_rrf_k))
-        predicate = self._lexical_predicate()
+        predicate, match_params = self._lexical_predicate(text)
         operator = self._vector_operator()
         vector_source = self._vector_source_sql()
         sql = (
@@ -331,7 +348,7 @@ class SereneDBBackend:
             "GROUP BY doc_id ORDER BY score DESC, doc_id LIMIT %s"
         )
         params: list[Any] = [1.0 - alpha]
-        params.extend([text] * len(self._text_fields()))
+        params.extend(match_params)
         params.extend([candidates, alpha, values, candidates, rrf_k, int(limit)])
         with self._connection().cursor() as cur:
             cur.execute(sql, tuple(params))

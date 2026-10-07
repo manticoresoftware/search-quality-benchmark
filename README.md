@@ -137,6 +137,9 @@ fixed-mode comparison.
 Bundled SereneDB vector and hybrid profiles use exact vector scans. SereneDB
 26.10.1's ANN path was excluded after reproducible server crashes on repeated
 4096-dimensional queries; run artifacts identify the exact-search setting.
+SereneDB lexical branches use a documented 10% minimum-term match instead of a
+pure OR, which avoids the same release's crash on verbose queries while keeping
+all query terms available to BM25. This setting is also shown in artifacts.
 
 The benchmark currently uses concurrency 1 and one repeat. QPS is therefore the
 observed single-client query rate, and one run cannot estimate run-to-run
