@@ -889,6 +889,11 @@ Combined report (`bench report`):
   date window.
 - Identity rule: exclude artifacts whose engine is `manticore`; retain
   `columnar` and display it as Manticore.
+- Engine discovery is data-driven: every other non-empty engine key in an
+  eligible artifact is included. Known engines may have display-name
+  overrides, while unknown keys receive a title-cased fallback label. The HTML
+  assigns colors dynamically from the engines present in `DATA.systems`; do
+  not add an engine-name color allowlist to the template.
 - The report is standalone. Do not add external JavaScript, fonts, analytics,
   chart services, or runtime data requests.
 - `bench report` invokes this generator and passes selected run IDs only as the

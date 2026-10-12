@@ -116,3 +116,37 @@ def test_report_includes_serenedb_only_when_it_has_a_versioned_run(
         }
     }
     assert data["runs"][0]["engine"] == "serenedb"
+
+
+def test_report_discovers_engines_not_named_in_the_generator(
+    tmp_path: Path, monkeypatch
+) -> None:
+    generator = _load_report_generator()
+    _write_metrics(
+        tmp_path,
+        "future",
+        datetime(2026, 10, 2, tzinfo=UTC),
+        "1.0.0",
+        engine="future_search",
+    )
+    monkeypatch.setattr(generator, "ARTIFACTS_DIR", tmp_path)
+
+    data = generator.collect_data()
+
+    assert data["systems"] == {
+        "future_search": {
+            "name": "Future Search",
+            "version": "1.0.0",
+            "image": "unknown",
+            "imageCreatedAt": "",
+        }
+    }
+    assert data["runs"][0]["engine"] == "future_search"
+
+
+def test_report_template_assigns_engine_colors_from_embedded_data() -> None:
+    generator = _load_report_generator()
+
+    assert "const ALL_ENGINE_KEYS = Object.keys(DATA.systems);" in generator.HTML_TEMPLATE
+    assert "Object.fromEntries(ALL_ENGINE_KEYS.map((engine, index)" in generator.HTML_TEMPLATE
+    assert "columnar: '#895af8'" not in generator.HTML_TEMPLATE

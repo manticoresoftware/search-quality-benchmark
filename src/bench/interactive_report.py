@@ -37,7 +37,10 @@ OUTPUT_PATH = ROOT / "reports" / "search-benchmark" / "index.html"
 SLOW_QUERIES_PER_RUN = 8
 UNKNOWN_VERSION_VALUES = {"", "unknown", "n/a", "na", "none", "null", "latest"}
 
-DISPLAY_NAMES = {
+# These are presentation overrides, not an allowlist. Engines without an
+# override are still included and receive a readable name derived from their
+# artifact key.
+DISPLAY_NAME_OVERRIDES = {
     "columnar": "Manticore",
     "elasticsearch": "Elasticsearch",
     "mariadb": "MariaDB",
@@ -93,6 +96,13 @@ def safe_number(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return number if number == number else 0.0
+
+
+def engine_display_name(engine: str) -> str:
+    if engine in DISPLAY_NAME_OVERRIDES:
+        return DISPLAY_NAME_OVERRIDES[engine]
+    words = re.sub(r"[-_]+", " ", engine).strip().split()
+    return " ".join(word[:1].upper() + word[1:] for word in words) or engine
 
 
 def known_engine_version(payload: dict[str, Any]) -> str | None:
@@ -154,9 +164,9 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         if engine == "manticore":
             excluded_manticore += 1
             continue
-        if engine not in DISPLAY_NAMES:
+        if not engine:
             continue
-        systems.setdefault(engine, {"name": DISPLAY_NAMES[engine]})
+        systems.setdefault(engine, {"name": engine_display_name(engine)})
         mode = str(payload.get("mode", "")).strip().lower()
         dataset = str(payload.get("dataset_source", "")).strip()
         docs = extract_doc_count(payload)
@@ -205,7 +215,12 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         artifact_dirs[run_id] = metrics_path.parent
 
     runs.sort(key=lambda item: (item["runAt"], item["runId"]))
-    systems = {engine: systems[engine] for engine in DISPLAY_NAMES if engine in systems}
+    systems = dict(
+        sorted(
+            systems.items(),
+            key=lambda item: (item[1]["name"].casefold(), item[0]),
+        )
+    )
     for engine, system in systems.items():
         engine_runs = [run for run in runs if run["engine"] == engine]
         versions = sorted({run["version"] for run in engine_runs if run["version"] != "unknown"})
@@ -1154,13 +1169,18 @@ HTML_TEMPLATE = r'''<!doctype html>
     'use strict';
     const DATA = JSON.parse(document.getElementById('report-data').textContent);
     const $ = (selector) => document.querySelector(selector);
-    const COLORS = {
-      columnar: '#895af8', elasticsearch: '#ffb454', mariadb: '#e06c9f', meilisearch: '#b48ead',
-      milvus: '#5ed29a', opensearch: '#7fd7e0', qdrant: '#3386ff', typesense: '#d0c05a',
-      serenedb: '#f97316', vespa: '#9aa7ff', weaviate: '#ff7b6b'
-    };
     const ALL_DATASET_KEYS = DATA.datasets.map(d => d.key);
     const ALL_ENGINE_KEYS = Object.keys(DATA.systems);
+    const ENGINE_PALETTE = [
+      '#3386ff', '#5ed29a', '#ffb454', '#c084fc', '#ff7b6b', '#7fd7e0',
+      '#f472b6', '#a3e635', '#facc15', '#818cf8', '#fb7185', '#2dd4bf',
+      '#60a5fa', '#4ade80', '#fb923c', '#e879f9', '#22d3ee', '#f87171',
+      '#a78bfa', '#84cc16', '#fbbf24', '#38bdf8', '#34d399', '#fda4af'
+    ];
+    const COLORS = Object.fromEntries(ALL_ENGINE_KEYS.map((engine, index) => [
+      engine,
+      ENGINE_PALETTE[index] || `hsl(${Math.round((index - ENGINE_PALETTE.length) * 137.508) % 360} 70% 65%)`
+    ]));
     const ALL_MODE_KEYS = ['fulltext', 'vector', 'hybrid'];
     const MODE_NAMES = { fulltext: 'Full text', vector: 'Vector', hybrid: 'Hybrid' };
     const ALL_FILTER_VALUES = { datasets: ALL_DATASET_KEYS, engines: ALL_ENGINE_KEYS, modes: ALL_MODE_KEYS };
