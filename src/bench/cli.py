@@ -707,7 +707,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                     f"bench --config {v.config_path} index --engine {v.engine} "
                     f"--mode {v.mode} --entry {v.entry}"
                 )
-            vector_variants = [v for v in selected if v.mode == "vector"]
+            vector_variants = [v for v in selected if v.target_kind == "vector"]
             for v in vector_variants:
                 if not _confirm_vector_cache_coverage(
                     cfg=v.cfg,
@@ -717,7 +717,11 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 ):
                     print("Index canceled: vector cache coverage not confirmed.")
                     return 0
-            manticore_vector_cfgs = [v.cfg for v in selected if is_manticore_like_type(v.engine) and v.mode == "vector"]
+            manticore_vector_cfgs = [
+                v.cfg
+                for v in selected
+                if is_manticore_like_type(v.engine) and v.target_kind == "vector"
+            ]
             if not _confirm_manticore_vector_reindex_for_configs(
                 manticore_vector_cfgs, auto_yes=bool(args.yes)
             ):

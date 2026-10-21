@@ -230,8 +230,11 @@ milvus_hybrid:
     assert {target.mode_filter for target in targets} >= {"fulltext", "vector", "hybrid"}
     assert {row.mode for row in run_rows} == {"fulltext", "vector", "hybrid"}
     assert [(row.mode, row.target_kind, row.target) for row in index_rows] == [
-        ("vector", "combined", "docs")
+        ("fulltext", "fulltext", "docs"),
+        ("vector", "vector", "docs"),
     ]
+    assert index_rows[0].used_by == ("milvus_fulltext",)
+    assert index_rows[1].used_by == ("milvus_hybrid", "milvus_vector")
 
 
 def test_milvus_fulltext_indexing_recreates_and_finalizes_collection(

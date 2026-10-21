@@ -48,7 +48,9 @@ The normal workflow is:
 
 1. `engines` — start or stop the required search engines.
 2. `prepare` — download a dataset and prepare documents, topics, judgments, and embeddings.
-3. `index` — create and populate indexes for selected engine profiles.
+3. `index` — create and populate indexes for selected engine profiles. Shared
+   targets expose separate full-text and vector-capable builds, so an engine can
+   still participate in lexical comparisons when its vector build is impractical.
 4. `run` — execute benchmark queries and write run artifacts.
 5. `report` — compare selected runs in Markdown and standalone HTML.
 

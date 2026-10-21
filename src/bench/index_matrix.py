@@ -367,27 +367,18 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                         cfg=cfg,
                     )
                 )
-    grouped: dict[tuple[str, str], list[IndexVariant]] = {}
+    grouped: dict[tuple[str, str, str], list[IndexVariant]] = {}
     for v in raw_rows:
-        grouped.setdefault((v.engine, v.target), []).append(v)
+        build_kind = "fulltext" if v.mode == "fulltext" else "vector"
+        grouped.setdefault((v.engine, v.target, build_kind), []).append(v)
 
     def _preferred_mode(rows: list[IndexVariant]) -> str:
-        layout_mode = _preferred_layout_mode(rows[0].cfg, rows[0].engine)
-        if layout_mode is not None:
-            return layout_mode
         modes = {r.mode for r in rows}
+        layout_mode = _preferred_layout_mode(rows[0].cfg, rows[0].engine)
+        if layout_mode is not None and layout_mode in modes:
+            return layout_mode
         if "hybrid" in modes and is_manticore_like_type(rows[0].engine):
             return "hybrid"
-        if "vector" in modes:
-            return "vector"
-        return "fulltext"
-
-    def _target_kind(rows: list[IndexVariant]) -> str:
-        modes = {r.mode for r in rows}
-        if is_manticore_like_type(rows[0].engine) and {"fulltext", "vector", "hybrid"} & modes and len(modes) > 1:
-            return "combined"
-        if "vector" in modes and "fulltext" in modes:
-            return "combined"
         if "vector" in modes:
             return "vector"
         return "fulltext"
@@ -399,9 +390,8 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
         return pool[0]
 
     out: list[IndexVariant] = []
-    for (_, _), rows in grouped.items():
+    for (_, _, build_kind), rows in grouped.items():
         preferred_mode = _preferred_mode(rows)
-        kind = _target_kind(rows)
         rep = _pick_repr(rows, preferred_mode)
         used_by = tuple(sorted(r.entry for r in rows))
         out.append(
@@ -415,7 +405,7 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                 batch_size=rep.batch_size,
                 target=rep.target,
                 cfg=rep.cfg,
-                target_kind=kind,
+                target_kind=build_kind,
                 used_by=used_by,
             )
         )

@@ -1,5 +1,12 @@
+from pathlib import Path
+
 from bench.config import AppConfig
-from bench.index_matrix import IndexVariant, _common_detail_keys, _details_lines
+from bench.index_matrix import (
+    IndexVariant,
+    _common_detail_keys,
+    _details_lines,
+    build_index_variants_from_config_paths,
+)
 
 
 def _variant(entry: str, *, source: str, table: str) -> IndexVariant:
@@ -59,3 +66,38 @@ def test_common_detail_keys_compare_only_same_engine() -> None:
     hidden = _common_detail_keys([v1, v2, q], v1)
 
     assert "dataset.source" in hidden
+
+
+def test_combined_manticore_target_has_separate_fulltext_and_vector_builds(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+manticore:
+  type: manticore
+  index_layout: combined
+  fulltext_table: docs
+  vector_table: docs
+manticore_fulltext:
+  base: manticore
+  type: fulltext
+manticore_vector:
+  base: manticore
+  type: vector
+manticore_hybrid:
+  base: manticore
+  type: hybrid
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = build_index_variants_from_config_paths([config_path])
+
+    assert [(row.mode, row.target_kind, row.entry) for row in rows] == [
+        ("fulltext", "fulltext", "manticore_fulltext"),
+        ("hybrid", "vector", "manticore_hybrid"),
+    ]
+    assert rows[0].used_by == ("manticore_fulltext",)
+    assert rows[1].used_by == ("manticore_hybrid", "manticore_vector")

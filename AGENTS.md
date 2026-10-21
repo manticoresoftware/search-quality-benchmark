@@ -176,7 +176,13 @@ Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-
 
 Note:
 
-The index selector combines options discovered from all local `config*.yaml` files (excluding templates).
+The index selector combines options discovered from all local `config*.yaml`
+files (excluding templates). It keeps full-text and vector-capable build actions
+separate even when they write to the same physical target. A full-text-only build
+therefore remains available for engines or datasets whose vector index is too
+expensive. Vector and hybrid profiles that share one vector-capable build are
+still deduplicated into one row; for a combined Manticore table that row executes
+the required hybrid indexing action.
 
 `prepare` also supports direct filtering:
 - `bench --config config.yaml prepare --source msmarco-passage/dev/small`
