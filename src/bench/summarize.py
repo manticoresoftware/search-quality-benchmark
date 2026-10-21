@@ -830,7 +830,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
-            help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  f filter  a select all  d delete  ENTER submit  ESC/q cancel"
+            help1 = "↑/↓ move  ←/→ sort col  SPACE toggle  f filter  a select all  d delete  ENTER submit  ESC/q back"
             stdscr.addstr(0, 0, fit_text(help1, max(1, w - 1)), curses.A_BOLD)
             filter_lines = filter_block_height(filters, widths)
             draw_header_with_filters(

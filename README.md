@@ -55,7 +55,8 @@ The normal workflow is:
 5. `report` — compare selected runs in Markdown and standalone HTML.
 
 The interactive menus use arrow keys and `Enter`; multi-select screens also use
-`Space`. Press `Esc` or `q` to leave a screen.
+`Space`. Press `Esc` or `q` in a submenu to return to the main menu. Press either
+key in the main menu to exit `bench`.
 
 ## Configuration
 

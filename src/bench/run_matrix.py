@@ -1054,7 +1054,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             h, w = stdscr.getmaxyx()
             widths = fit_column_widths(preferred_widths, minimum_widths, max(1, w - 1))
             row_h = dynamic_row_lines(len(variants), h)
-            stdscr.addstr(0, 0, fit_text("↑/↓ move  ←/→ sort col  SPACE toggle  f filter  ENTER run selected  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)
+            stdscr.addstr(0, 0, fit_text("↑/↓ move  ←/→ sort col  SPACE toggle  f filter  ENTER run selected  ESC/q back", max(1, w - 1)), curses.A_BOLD)
             filter_lines = filter_block_height(filters, widths)
             draw_header_with_filters(
                 stdscr,

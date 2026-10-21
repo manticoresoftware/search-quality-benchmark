@@ -683,9 +683,9 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             if refresh.error and not rows:
                 stdscr.erase()
                 h, w = stdscr.getmaxyx()
-                header = "Engines: refresh failed  ESC/q cancel"
+                header = "Engines: refresh failed  ESC/q back"
                 if refresh.running:
-                    header = "Engines: refreshing  ESC/q cancel"
+                    header = "Engines: refreshing  ESC/q back"
                 stdscr.addstr(0, 0, _fit(header, max(1, w - 1)), curses.A_BOLD)
                 stdscr.addstr(2, 0, _fit(refresh.error, max(1, w - 1)), curses.A_DIM)
                 stdscr.refresh()
@@ -699,7 +699,7 @@ def cmd_engines(cfg: AppConfig, _: Any) -> int:
             current = min(max(0, current), max(0, len(rows) - 1))
             stdscr.erase()
             h, w = stdscr.getmaxyx()
-            header = "Engines: ↑/↓ move  ENTER start/stop  r refresh  ESC/q cancel"
+            header = "Engines: ↑/↓ move  ENTER start/stop  r refresh  ESC/q back"
             if refresh.running:
                 header += "  [refreshing]"
             if refresh.disk_running:

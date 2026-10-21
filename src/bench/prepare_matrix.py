@@ -250,7 +250,7 @@ def _select_prepare_variants_curses(variants: list[PrepareVariant]) -> PrepareSe
             stdscr.addstr(
                 0,
                 0,
-                fit_text("↑/↓ move  ←/→ column  SPACE toggle  f filter  ENTER prepare  r reset embeddings  ESC/q cancel", max(1, w - 1)),
+                fit_text("↑/↓ move  ←/→ column  SPACE toggle  f filter  ENTER prepare  r reset embeddings  ESC/q back", max(1, w - 1)),
                 curses.A_BOLD,
             )
 

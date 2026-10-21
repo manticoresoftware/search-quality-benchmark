@@ -175,7 +175,7 @@ Main actions:
 4. `run`: execute topic queries with fixed benchmark settings and compute metrics (opens interactive run matrix; variants come from named config profiles and include `PROFILE`, `ENGINE`, `MODE`, `MODEL/OPTS`).
 5. `report`: render combined Markdown and standalone interactive HTML reports from selected artifacts.
 
-Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-select is available).
+Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-select is available). `ESC/q` returns from a submenu to the main menu and exits only from the main menu.
 
 Note:
 

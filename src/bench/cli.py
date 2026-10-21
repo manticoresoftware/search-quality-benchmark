@@ -56,7 +56,7 @@ def _select_simple_option_interactive(title: str, options: list[tuple[str, str]]
                 while True:
                     stdscr.erase()  # type: ignore[attr-defined]
                     h, w = stdscr.getmaxyx()  # type: ignore[attr-defined]
-                    stdscr.addstr(0, 0, _fit(f"{title}: ↑/↓ move  ENTER select  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)  # type: ignore[attr-defined]
+                    stdscr.addstr(0, 0, _fit(f"{title}: ↑/↓ move  ENTER select  ESC/q back", max(1, w - 1)), curses.A_BOLD)  # type: ignore[attr-defined]
                     for i, (_, label) in enumerate(options):
                         attrs = curses.A_REVERSE if i == current else curses.A_NORMAL
                         stdscr.addstr(2 + i, 2, _fit(label, max(1, w - 3)), attrs)  # type: ignore[attr-defined]
@@ -116,7 +116,7 @@ def _select_top_command_interactive() -> str | None:
                 while True:
                     stdscr.erase()  # type: ignore[attr-defined]
                     h, w = stdscr.getmaxyx()  # type: ignore[attr-defined]
-                    stdscr.addstr(0, 0, _fit("Select command: ↑/↓ move  ENTER run  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)  # type: ignore[attr-defined]
+                    stdscr.addstr(0, 0, _fit("Select command: ↑/↓ move  ENTER run  ESC/q exit", max(1, w - 1)), curses.A_BOLD)  # type: ignore[attr-defined]
                     for i, (name, label, desc) in enumerate(options):
                         attrs = curses.A_REVERSE if i == current else curses.A_NORMAL
                         if curses.has_colors():
@@ -965,29 +965,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_command(cfg: AppConfig, args: argparse.Namespace) -> int:
+    if args.command == "engines":
+        return cmd_engines(cfg, args)
+    if args.command == "prepare":
+        return cmd_prepare(cfg, args)
+    if args.command == "index":
+        return cmd_index(cfg, args)
+    if args.command == "run":
+        return cmd_run(cfg, args)
+    if args.command == "report":
+        return cmd_report(cfg, args)
+    if args.command == "configmap":
+        return cmd_configmap(cfg, args)
+    return 2
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     args.config = str(resolve_config_path(args.config))
-    if args.command is None:
+
+    if args.command is not None:
+        cfg = load_config(args.config)
+        raise SystemExit(_run_command(cfg, args))
+
+    while True:
         picked = _select_top_command_interactive()
         if picked is None:
             raise SystemExit(0)
-        args = parser.parse_args(["--config", args.config, picked])
-    cfg = load_config(args.config)
-    if args.command == "engines":
-        raise SystemExit(cmd_engines(cfg, args))
-    if args.command == "prepare":
-        raise SystemExit(cmd_prepare(cfg, args))
-    if args.command == "index":
-        raise SystemExit(cmd_index(cfg, args))
-    if args.command == "run":
-        raise SystemExit(cmd_run(cfg, args))
-    if args.command == "report":
-        raise SystemExit(cmd_report(cfg, args))
-    if args.command == "configmap":
-        raise SystemExit(cmd_configmap(cfg, args))
-    raise SystemExit(2)
+        submenu_args = parser.parse_args(["--config", args.config, picked])
+        cfg = load_config(args.config)
+        _run_command(cfg, submenu_args)
 
 
 if __name__ == "__main__":
