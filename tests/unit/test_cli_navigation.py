@@ -9,6 +9,31 @@ from bench import cli
 from bench.config import AppConfig
 
 
+class _BellStream:
+    def __init__(self) -> None:
+        self.value = ""
+        self.flushed = False
+
+    def isatty(self) -> bool:
+        return True
+
+    def write(self, value: str) -> None:
+        self.value += value
+
+    def flush(self) -> None:
+        self.flushed = True
+
+
+def test_terminal_bell_writes_and_flushes_bel(monkeypatch: Any) -> None:
+    stream = _BellStream()
+    monkeypatch.setattr(cli.sys, "stdout", stream)
+
+    cli._terminal_bell()
+
+    assert stream.value == "\a"
+    assert stream.flushed is True
+
+
 def test_no_argument_tui_returns_to_main_menu_after_submenus(monkeypatch: Any) -> None:
     selections = iter(["engines", "prepare", None])
     commands: list[str] = []
@@ -17,6 +42,11 @@ def test_no_argument_tui_returns_to_main_menu_after_submenus(monkeypatch: Any) -
     monkeypatch.setattr(cli, "resolve_config_path", lambda path: path)
     monkeypatch.setattr(cli, "load_config", lambda _path: AppConfig())
     monkeypatch.setattr(cli, "_select_top_command_interactive", lambda: next(selections))
+    monkeypatch.setattr(
+        cli,
+        "_terminal_bell",
+        lambda: pytest.fail("a canceled or non-task submenu must not ring"),
+    )
     monkeypatch.setattr(
         cli,
         "cmd_engines",
@@ -35,6 +65,33 @@ def test_no_argument_tui_returns_to_main_menu_after_submenus(monkeypatch: Any) -
     assert commands == ["engines", "prepare"]
 
 
+def test_long_task_bells_before_main_menu_is_shown_again(monkeypatch: Any) -> None:
+    selections = iter(["index", None])
+    events: list[str] = []
+
+    def select_command() -> str | None:
+        events.append("menu")
+        return next(selections)
+
+    def run_index(_cfg: AppConfig, args: Any) -> int:
+        events.append("index")
+        cli._mark_long_task_started(args)
+        return 0
+
+    monkeypatch.setattr(sys, "argv", ["bench"])
+    monkeypatch.setattr(cli, "resolve_config_path", lambda path: path)
+    monkeypatch.setattr(cli, "load_config", lambda _path: AppConfig())
+    monkeypatch.setattr(cli, "_select_top_command_interactive", select_command)
+    monkeypatch.setattr(cli, "cmd_index", run_index)
+    monkeypatch.setattr(cli, "_terminal_bell", lambda: events.append("bell"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code == 0
+    assert events == ["menu", "index", "bell", "menu"]
+
+
 def test_explicit_subcommand_remains_one_shot(monkeypatch: Any) -> None:
     calls: list[str] = []
 
@@ -45,6 +102,11 @@ def test_explicit_subcommand_remains_one_shot(monkeypatch: Any) -> None:
         cli,
         "_select_top_command_interactive",
         lambda: pytest.fail("explicit subcommands must not open the main menu"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_terminal_bell",
+        lambda: pytest.fail("explicit subcommands must not ring the menu bell"),
     )
     monkeypatch.setattr(
         cli,

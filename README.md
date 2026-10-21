@@ -56,7 +56,8 @@ The normal workflow is:
 
 The interactive menus use arrow keys and `Enter`; multi-select screens also use
 `Space`. Press `Esc` or `q` in a submenu to return to the main menu. Press either
-key in the main menu to exit `bench`.
+key in the main menu to exit `bench`. After a prepare, index, or benchmark run
+has started, the TUI rings the terminal bell before returning to the main menu.
 
 ## Configuration
 

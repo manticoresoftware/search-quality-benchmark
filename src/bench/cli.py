@@ -46,6 +46,17 @@ def _fit(text: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
+def _mark_long_task_started(args: argparse.Namespace) -> None:
+    setattr(args, "_long_task_started", True)
+
+
+def _terminal_bell() -> None:
+    if not sys.stdout.isatty():
+        return
+    sys.stdout.write("\a")
+    sys.stdout.flush()
+
+
 def _select_simple_option_interactive(title: str, options: list[tuple[str, str]]) -> str | None:
     if sys.stdin.isatty() and sys.stdout.isatty():
         try:
@@ -491,6 +502,7 @@ def cmd_prepare(cfg: AppConfig, args: argparse.Namespace) -> int:
         for cmd in replay:
             print(cmd)
 
+        _mark_long_task_started(args)
         for v in selected:
             if action == "reset":
                 print(f"Resetting embeddings: source={v.source} output={v.cfg.dataset.prepared_dir}")
@@ -727,6 +739,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             ):
                 print("Index canceled: Manticore vector reindex not confirmed.")
                 return 0
+            _mark_long_task_started(args)
             for v in selected:
                 if bool(args.resume) and not (v.engine == "vespa" and v.mode == "vector"):
                     raise ValueError("--resume is only supported for engine=vespa with mode=vector.")
@@ -789,6 +802,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         started_by_key.clear()
         last_by_key.clear()
         run_id = generate_run_id()
+        _mark_long_task_started(args)
         results = run_index(
             cfg_for_engine,
             engine=engine,
@@ -822,6 +836,7 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
         if not selected:
             print("Run canceled: no runs selected.")
             return 0
+        _mark_long_task_started(args)
         try:
             results = run_selected_variants(selected, concurrency_override=args.concurrency)
         except Exception as exc:
@@ -869,6 +884,7 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
         else:
             print(line, flush=True)
 
+    _mark_long_task_started(args)
     try:
         run_id, metrics, per_query_rows = run_benchmark(
             cfg_for_engine,
@@ -997,6 +1013,8 @@ def main() -> None:
         submenu_args = parser.parse_args(["--config", args.config, picked])
         cfg = load_config(args.config)
         _run_command(cfg, submenu_args)
+        if bool(getattr(submenu_args, "_long_task_started", False)):
+            _terminal_bell()
 
 
 if __name__ == "__main__":

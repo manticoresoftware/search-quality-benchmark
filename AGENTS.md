@@ -177,6 +177,12 @@ Main actions:
 
 Interactive menu controls: `↑/↓`, `ENTER`, `ESC/q` (and `SPACE` where multi-select is available). `ESC/q` returns from a submenu to the main menu and exits only from the main menu.
 
+When launched from the main `bench` TUI, prepare, index, and benchmark-run tasks
+mark themselves as started immediately before their long-running backend work.
+Once the command returns, the dispatcher emits one terminal bell before drawing
+the main menu again. Canceling before work starts does not ring, and explicitly
+invoked subcommands remain one-shot and do not emit the main-menu bell.
+
 Note:
 
 The index selector combines options discovered from all local `config*.yaml`
