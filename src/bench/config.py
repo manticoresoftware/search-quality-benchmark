@@ -57,7 +57,7 @@ class ManticoreConfig:
     search_options: str = ""
     fulltext_options: str = ""
     fulltext_query_mode: str = "or"
-    fulltext_query_variant: str = "short"
+    fulltext_query_variant: str = "long"
     fulltext_query_quorum: float = 0.5
     batch_size: int = 500
     index_concurrency: int = 1
