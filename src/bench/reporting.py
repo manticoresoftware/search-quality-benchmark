@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .io_utils import read_json
+from .query_policy import effective_query_variant
 
 
 def _display_mode(mode: str) -> str:
@@ -57,6 +58,17 @@ def build_summary_markdown(metrics: dict[str, Any]) -> str:
     if dataset_source:
         lines.append(f"- Dataset source: `{dataset_source}`")
     lines.append(f"- Mode: `{_display_mode(str(metrics.get('mode', '')))}`")
+    query_variant = str(metrics.get("query_variant", "") or "").strip().lower()
+    query_variant_requested = str(metrics.get("query_variant_requested", "") or "").strip().lower()
+    variants_distinct = metrics.get("query_variants_distinct")
+    if query_variant:
+        if query_variant == "same":
+            lines.append(
+                f"- Query variant: `same` (short and long texts are identical; requested `{query_variant_requested or 'unknown'}`)"
+            )
+        else:
+            distinction = "short and long texts differ" if variants_distinct is True else "dataset distinction unknown"
+            lines.append(f"- Query variant: `{query_variant}` ({distinction})")
     lines.append(f"- Runtime (sec): `{metrics.get('runtime_seconds', 0):.3f}`")
     bcfg = metrics.get("benchmark_settings", {}) or {}
     if bcfg:
@@ -105,6 +117,40 @@ def compare_summaries(current: dict[str, Any], other: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append(f"# Comparison: {current.get('run_id')} vs {other.get('run_id')}")
     lines.append("")
+    current_dataset = str(current.get("dataset_source") or "").strip()
+    other_dataset = str(other.get("dataset_source") or "").strip()
+    _, current_variant = effective_query_variant(
+        mode=str(current.get("mode") or ""),
+        recorded_variant=current.get("query_variant"),
+        recorded_requested_variant=current.get("query_variant_requested"),
+        variants_distinct=(
+            current.get("query_variants_distinct")
+            if isinstance(current.get("query_variants_distinct"), bool)
+            else None
+        ),
+    )
+    _, other_variant = effective_query_variant(
+        mode=str(other.get("mode") or ""),
+        recorded_variant=other.get("query_variant"),
+        recorded_requested_variant=other.get("query_variant_requested"),
+        variants_distinct=(
+            other.get("query_variants_distinct")
+            if isinstance(other.get("query_variants_distinct"), bool)
+            else None
+        ),
+    )
+    variants_compatible = (
+        current_variant == other_variant
+        or current_variant == "same"
+        or other_variant == "same"
+    )
+    if current_dataset != other_dataset or not variants_compatible:
+        lines.append(
+            "These runs are not directly comparable because their dataset or effective query set differs "
+            f"(`{current_dataset or 'unknown'} / {current_variant}` vs "
+            f"`{other_dataset or 'unknown'} / {other_variant}`)."
+        )
+        return "\n".join(lines).strip() + "\n"
     for mode in sorted(set(current.get("performance", {}).keys()) | set(other.get("performance", {}).keys())):
         c_perf = current.get("performance", {}).get(mode, {})
         o_perf = other.get("performance", {}).get(mode, {})

@@ -1,7 +1,7 @@
 import json
 
 from bench import runbench
-from bench.reporting import build_summary_markdown
+from bench.reporting import build_summary_markdown, compare_summaries
 
 
 def test_build_summary_includes_resolved_config_and_live_state() -> None:
@@ -15,6 +15,9 @@ def test_build_summary_includes_resolved_config_and_live_state() -> None:
         "engine_image_created_at": "2026-09-11T14:19:52Z",
         "dataset_source": "msmarco-passage/dev/small",
         "mode": "fulltext",
+        "query_variant_requested": "long",
+        "query_variant": "same",
+        "query_variants_distinct": False,
         "runtime_seconds": 0.12,
         "benchmark_settings": {
             "concurrency": 1,
@@ -44,6 +47,7 @@ def test_build_summary_includes_resolved_config_and_live_state() -> None:
     assert "- Engine image digest: `manticoresearch/manticore@sha256:example`" in md
     assert "- Engine image created: `2026-09-11T14:19:52Z`" in md
     assert "- Dataset source: `msmarco-passage/dev/small`" in md
+    assert "- Query variant: `same` (short and long texts are identical; requested `long`)" in md
 
 
 def test_write_run_artifacts_records_engine_metadata(tmp_path, monkeypatch) -> None:
@@ -79,3 +83,53 @@ def test_write_run_artifacts_records_engine_metadata(tmp_path, monkeypatch) -> N
     assert written["engine_image_digest"] == "manticoresearch/manticore@sha256:digest"
     assert written["engine_image_created_at"] == "2026-09-11T14:19:52Z"
     assert written["engine_version_source"] == "container"
+
+
+def test_compare_summaries_rejects_distinct_query_sets() -> None:
+    legacy_short = {
+        "run_id": "old",
+        "dataset_source": "beir/trec-covid",
+        "mode": "fulltext",
+        "performance": {"fulltext": {"qps": 1.0}},
+        "relevance": {"fulltext": {"ndcg@10": 0.1}},
+    }
+    new_long = {
+        "run_id": "new",
+        "dataset_source": "beir/trec-covid",
+        "mode": "fulltext",
+        "query_variant_requested": "long",
+        "query_variant": "long",
+        "query_variants_distinct": True,
+        "performance": {"fulltext": {"qps": 2.0}},
+        "relevance": {"fulltext": {"ndcg@10": 0.2}},
+    }
+
+    comparison = compare_summaries(new_long, legacy_short)
+
+    assert "not directly comparable" in comparison
+    assert "delta" not in comparison
+
+
+def test_compare_summaries_accepts_same_text_identity() -> None:
+    short = {
+        "run_id": "old",
+        "dataset_source": "beir/scifact/test",
+        "mode": "fulltext",
+        "performance": {"fulltext": {"qps": 1.0}},
+        "relevance": {"fulltext": {"ndcg@10": 0.1}},
+    }
+    same = {
+        "run_id": "new",
+        "dataset_source": "beir/scifact/test",
+        "mode": "fulltext",
+        "query_variant_requested": "long",
+        "query_variant": "same",
+        "query_variants_distinct": False,
+        "performance": {"fulltext": {"qps": 2.0}},
+        "relevance": {"fulltext": {"ndcg@10": 0.2}},
+    }
+
+    comparison = compare_summaries(same, short)
+
+    assert "not directly comparable" not in comparison
+    assert "delta" in comparison

@@ -14,7 +14,13 @@ import sys
 from typing import Any
 from urllib.parse import quote
 
-from .io_utils import read_json
+from .io_utils import read_json, read_jsonl
+from .query_policy import (
+    TREC_COVID_DATASET,
+    dataset_query_variants_distinct,
+    effective_query_variant,
+    query_variants_distinct,
+)
 from .reporting import metric_definitions_markdown
 from .table_filters import (
     draw_header_with_filters,
@@ -46,6 +52,16 @@ class ArtifactRow:
     relevance: dict[str, float]
     performance: dict[str, float]
     status: str
+    query_variant_requested: str = "unknown"
+    query_variant: str = "unknown"
+    query_variants_distinct: bool | None = None
+    query_variant_explicit: bool = False
+
+    @property
+    def comparison_dataset_source(self) -> str:
+        source = self.dataset_source or "-"
+        variant = self.query_variant or "unknown"
+        return f"{source}\x1f{variant}"
 
 
 @dataclass(frozen=True)
@@ -66,11 +82,33 @@ _DATASET_URLS: dict[str, str] = {
 }
 
 
+def _split_comparison_dataset(dataset: str) -> tuple[str, str]:
+    source, separator, query_variant = str(dataset or "").partition("\x1f")
+    return source, query_variant if separator else ""
+
+
+def _query_variant_label(query_variant: str) -> str:
+    return "same text" if query_variant == "same" else f"{query_variant} text"
+
+
+def _query_variant_selection_label(row: ArtifactRow) -> str:
+    label = _query_variant_label(row.query_variant)
+    if row.query_variant == "short":
+        origin = "recorded" if row.query_variant_explicit else "legacy inferred"
+        return f"{label}, {origin}"
+    return label
+
+
 def _dataset_label(dataset: str) -> str:
-    url = _DATASET_URLS.get(dataset)
+    source, query_variant = _split_comparison_dataset(dataset)
+    url = _DATASET_URLS.get(source)
     if url:
-        return f"[`{dataset}`]({url})"
-    return f"`{dataset}`"
+        label = f"[`{source}`]({url})"
+    else:
+        label = f"`{source}`"
+    if query_variant:
+        label += f" (`queries: {_query_variant_label(query_variant)}`)"
+    return label
 
 
 def _dataset_group_label(dataset: str, doc_count: int | None) -> str:
@@ -78,6 +116,16 @@ def _dataset_group_label(dataset: str, doc_count: int | None) -> str:
     if doc_count is None:
         return f"{base} (`docs: unknown`)"
     return f"{base} (`docs: {int(doc_count):,}`)"
+
+
+def _plain_dataset_group_label(dataset: str, doc_count: int | None) -> str:
+    source, query_variant = _split_comparison_dataset(dataset)
+    label = source
+    if query_variant:
+        label += f" [queries: {_query_variant_label(query_variant)}]"
+    if doc_count is not None:
+        label += f" ({int(doc_count):,})"
+    return label
 
 
 def _system_label(engine: str, mode: str) -> str:
@@ -225,11 +273,11 @@ def _extract_doc_count(payload: dict[str, Any]) -> int | None:
     return None
 
 
-def _prepared_manifest_group_stats() -> dict[tuple[str, int | None], dict[str, int | None]]:
+def _prepared_manifest_group_stats() -> dict[tuple[str, int | None], dict[str, Any]]:
     root = Path("data/prepared")
     if not root.exists():
         return {}
-    out: dict[tuple[str, int | None], dict[str, int | None]] = {}
+    out: dict[tuple[str, int | None], dict[str, Any]] = {}
     for manifest_path in root.glob("**/manifest.json"):
         try:
             payload = read_json(manifest_path)
@@ -254,16 +302,48 @@ def _prepared_manifest_group_stats() -> dict[tuple[str, int | None], dict[str, i
             topic_count = int(raw_topics) if raw_topics is not None else None
         except Exception:
             topic_count = None
+        variants_distinct: bool | None = None
+        topics_path = manifest_path.with_name("topics.jsonl")
+        if topics_path.is_file():
+            try:
+                variants_distinct = query_variants_distinct(read_jsonl(topics_path))
+            except Exception:
+                variants_distinct = None
         key = (dataset_source, doc_count)
         prev = out.get(key)
         if prev is None:
-            out[key] = {"qrels_count": qrels_count, "topic_count": topic_count}
+            out[key] = {
+                "qrels_count": qrels_count,
+                "topic_count": topic_count,
+                "query_variants_distinct": variants_distinct,
+            }
             continue
         prev_qrels = int(prev.get("qrels_count") or 0)
         new_qrels = int(qrels_count or 0)
         if new_qrels > prev_qrels:
-            out[key] = {"qrels_count": qrels_count, "topic_count": topic_count}
+            out[key] = {
+                "qrels_count": qrels_count,
+                "topic_count": topic_count,
+                "query_variants_distinct": variants_distinct,
+            }
     return out
+
+
+def _inferred_query_variants_distinct(
+    prepared_group_stats: dict[tuple[str, int | None], dict[str, Any]],
+    dataset_source: str,
+    doc_count: int | None,
+) -> bool | None:
+    direct = prepared_group_stats.get((dataset_source, doc_count), {}).get("query_variants_distinct")
+    if isinstance(direct, bool):
+        return direct
+    candidates = {
+        stats.get("query_variants_distinct")
+        for (source, _), stats in prepared_group_stats.items()
+        if source == dataset_source and isinstance(stats.get("query_variants_distinct"), bool)
+    }
+    inspected = next(iter(candidates)) if len(candidates) == 1 else None
+    return dataset_query_variants_distinct(dataset_source, inspected)
 
 
 def discover_artifacts() -> list[ArtifactRow]:
@@ -316,6 +396,26 @@ def discover_artifacts() -> list[ArtifactRow]:
             dataset_source = str(payload.get("dataset_source", "") or "")
             doc_count = _extract_doc_count(payload)
             group_stats = prepared_group_stats.get((dataset_source, doc_count), {})
+            recorded_distinct = payload.get("query_variants_distinct")
+            variants_distinct = (
+                recorded_distinct
+                if isinstance(recorded_distinct, bool)
+                else _inferred_query_variants_distinct(
+                    prepared_group_stats,
+                    dataset_source,
+                    doc_count,
+                )
+            )
+            if not isinstance(variants_distinct, bool):
+                variants_distinct = None
+            query_variant_requested, query_variant = effective_query_variant(
+                mode=mode,
+                recorded_variant=payload.get("query_variant"),
+                recorded_requested_variant=payload.get("query_variant_requested"),
+                variants_distinct=variants_distinct,
+            )
+            recorded_query_variant = str(payload.get("query_variant") or "").strip().lower()
+            query_variant_explicit = recorded_query_variant == query_variant
             out.append(
                 ArtifactRow(
                     run_id=run_id_val,
@@ -327,6 +427,10 @@ def discover_artifacts() -> list[ArtifactRow]:
                     mode=mode,
                     model=model,
                     dataset_source=dataset_source,
+                    query_variant_requested=query_variant_requested,
+                    query_variant=query_variant,
+                    query_variants_distinct=variants_distinct,
+                    query_variant_explicit=query_variant_explicit,
                     doc_count=doc_count,
                     qrels_count=(
                         int(group_stats.get("qrels_count"))
@@ -356,6 +460,10 @@ def discover_artifacts() -> list[ArtifactRow]:
                     mode="",
                     model="n/a",
                     dataset_source="",
+                    query_variant_requested="unknown",
+                    query_variant="unknown",
+                    query_variants_distinct=None,
+                    query_variant_explicit=False,
                     doc_count=None,
                     qrels_count=None,
                     runtime_seconds=0.0,
@@ -366,6 +474,51 @@ def discover_artifacts() -> list[ArtifactRow]:
                 )
             )
     return sorted(out, key=lambda x: (x.run_at_unix, x.run_id), reverse=True)
+
+
+def default_query_cohort_rows(rows: list[ArtifactRow]) -> list[ArtifactRow]:
+    """Keep the automatic query-text cohort for each dataset/document group.
+
+    Identical prepared query texts use the shared ``same`` cohort. Otherwise,
+    automatic reports use ``long``. A ``short`` cohort is intentionally never
+    selected here; callers include it by explicitly selecting its run IDs.
+    """
+    variants_by_group: dict[tuple[str, int | None], set[str]] = {}
+    for row in rows:
+        key = (row.dataset_source, row.doc_count)
+        variants_by_group.setdefault(key, set()).add(row.query_variant)
+
+    selected_by_group: dict[tuple[str, int | None], str | None] = {}
+    for key, variants in variants_by_group.items():
+        if "same" in variants:
+            selected_by_group[key] = "same"
+        elif "long" in variants:
+            selected_by_group[key] = "long"
+        else:
+            selected_by_group[key] = None
+
+    return [
+        row
+        for row in rows
+        if row.query_variant == selected_by_group[(row.dataset_source, row.doc_count)]
+    ]
+
+
+def selected_query_cohort_rows(rows: list[ArtifactRow]) -> list[ArtifactRow]:
+    """Apply the recorded-short gate to TREC-COVID selections only."""
+    recorded_short_selected = any(
+        row.dataset_source == TREC_COVID_DATASET
+        and row.query_variant == "short"
+        and row.query_variant_explicit
+        for row in rows
+    )
+    if recorded_short_selected:
+        return rows
+    return [
+        row
+        for row in rows
+        if row.dataset_source != TREC_COVID_DATASET or row.query_variant != "short"
+    ]
 
 
 def _parse_selection(raw: str, n: int) -> list[int]:
@@ -455,7 +608,7 @@ def _draw_row(
         (str(idx), attrs, widths["idx"]),
         (row.run_id, attrs, widths["run_id"]),
         (row.run_at, attrs, widths["run_at"]),
-        (row.dataset_source or "-", attrs, widths["dataset"]),
+        (f"{row.dataset_source or '-'} [{_query_variant_selection_label(row)}]", attrs, widths["dataset"]),
         (row.engine or "-", attrs | curses.color_pair(e_pair), widths["engine"]),
         (_display_mode(row.mode or "-"), attrs | curses.color_pair(m_pair), widths["mode"]),
         (f"{int(row.doc_count):,}" if row.doc_count is not None else "-", attrs, widths["docs"]),
@@ -483,7 +636,7 @@ def _row_height(row: ArtifactRow, widths: dict[str, int]) -> int:
         "[x]",
         row.run_id,
         row.run_at,
-        row.dataset_source or "-",
+        f"{row.dataset_source or '-'} [{_query_variant_selection_label(row)}]",
         row.engine or "-",
         _display_mode(row.mode or "-"),
         f"{int(row.doc_count):,}" if row.doc_count is not None else "-",
@@ -599,7 +752,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             if col == "run_at":
                 return float(row.run_at_unix or 0)
             if col == "dataset":
-                return (row.dataset_source or "").lower()
+                return ((row.dataset_source or "").lower(), row.query_variant)
             if col == "engine":
                 return (row.engine or "").lower()
             if col == "mode":
@@ -630,7 +783,7 @@ def _select_artifacts_curses(rows: list[ArtifactRow]) -> list[ArtifactRow]:
             if col == "run_at":
                 return row.run_at
             if col == "dataset":
-                return row.dataset_source
+                return f"{row.dataset_source} {_query_variant_selection_label(row)}"
             if col == "engine":
                 return row.engine
             if col == "mode":
@@ -828,7 +981,7 @@ def select_artifacts_interactive(rows: list[ArtifactRow]) -> list[ArtifactRow]:
         docs_text = f"{int(r.doc_count):,}" if r.doc_count is not None else "-"
         print(
             f"{i:>2}.\trun_id={r.run_id}\trun_at={r.run_at}\tdataset={r.dataset_source or '-'}\tengine={r.engine or '-'}\tmode={_display_mode(r.mode or '-')}\t"
-            f"docs={docs_text}\tmodel={r.model or 'n/a'}\tstatus={r.status}\tndcg@10={ndcg_val:.4f}\t"
+            f"queries={_query_variant_selection_label(r)}\tdocs={docs_text}\tmodel={r.model or 'n/a'}\tstatus={r.status}\tndcg@10={ndcg_val:.4f}\t"
             f"runtime={r.runtime_seconds:.3f}s\tconcurrency={r.concurrency if r.concurrency is not None else '-'}"
         )
     print("")
@@ -882,7 +1035,8 @@ def _performance_sort_key(r: ArtifactRow) -> tuple[float, float, float, float]:
 
 def _profile_system_model_label(r: ArtifactRow) -> str:
     profile = f"**{r.profile}**" if (r.profile or "").strip() else "-"
-    return " / ".join([profile, _system_label(r.engine, r.mode), r.model or "n/a"])
+    query_label = f"queries: {_query_variant_label(r.query_variant)}"
+    return " / ".join([profile, _system_label(r.engine, r.mode), r.model or "n/a", query_label])
 
 
 def _best_metric_rows(rows: list[ArtifactRow], metric: str) -> list[tuple[str, ArtifactRow]]:
@@ -1024,7 +1178,7 @@ def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
 
     grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in eligible:
-        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+        grouped.setdefault((row.comparison_dataset_source, row.doc_count), []).append(row)
 
     per_variant_scores: dict[tuple[str, str], list[float]] = {}
     per_variant_ndcg: dict[tuple[str, str], list[float]] = {}
@@ -1070,7 +1224,7 @@ def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
 
     lines = ["## Global Relevance Leaderboard", ""]
     lines.append(
-        "Scoring: for each dataset/doc-count group, take the best run per engine, "
+        "Scoring: for each dataset/doc-count/query-set group, take the best run per engine, "
         "compute a relevance composite (`NDCG@10`, `MRR@10`, optional `MAP@10`), "
         "normalize it within the group, then average globally. Coverage across groups is included in the final score."
     )
@@ -1094,7 +1248,7 @@ def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
 
     grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in eligible:
-        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+        grouped.setdefault((row.comparison_dataset_source, row.doc_count), []).append(row)
 
     per_engine_scores: dict[str, list[float]] = {}
     per_engine_ndcg: dict[str, list[float]] = {}
@@ -1159,7 +1313,7 @@ def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
 
     lines = ["## Global Efficiency Leaderboard", ""]
     lines.append(
-        "Scoring: for each dataset/doc-count group, take the best run per engine by "
+        "Scoring: for each dataset/doc-count/query-set group, take the best run per engine by "
         "`relevance * log(1 + qps)`, normalize it within the group, then average globally. "
         "Coverage across groups is included in the final score."
     )
@@ -1187,13 +1341,13 @@ def _global_variant_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
 
     grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in eligible:
-        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+        grouped.setdefault((row.comparison_dataset_source, row.doc_count), []).append(row)
     total_groups = len(grouped)
     if total_groups <= 0:
         return []
 
     common_notes = (
-        "For every variant: runs are first split by `(dataset_source, doc_count)`. "
+        "For every variant: runs are first split by `(dataset_source, doc_count, effective_query_variant)`. "
         "Inside each group, keep the best run per engine according to the variant score. "
         "Then average the raw per-group scores globally across full-coverage entries. "
         "Runs with `status != ok` or `error_rate > 0` are excluded."
@@ -1420,7 +1574,7 @@ def _global_variant_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
         lines.append(
             "This leaderboard uses the canonical metric for each dataset family. "
             "The per-group raw score is `MRR@10` for `msmarco-passage/*`, and `NDCG@10` for `beir/*`, `hf-beir:*`, and `wands`. "
-            "For each `(dataset_source, doc_count)` group, the table keeps one best run per engine+mode and averages those raw canonical scores globally. "
+            "For each `(dataset_source, doc_count, effective_query_variant)` group, the table keeps one best run per engine+mode and averages those raw canonical scores globally. "
             "Only full-coverage entries are included, so engines or modes missing any group are omitted from this table. "
             "Runs with `status != ok` or `error_rate > 0` are excluded."
         )
@@ -1460,7 +1614,7 @@ def _engine_only_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
 
     grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in eligible:
-        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+        grouped.setdefault((row.comparison_dataset_source, row.doc_count), []).append(row)
     total_groups = len(grouped)
     if total_groups <= 0:
         return []
@@ -1502,7 +1656,7 @@ def _engine_only_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     lines = ["## Leaderboard", ""]
     lines.append(
         "This is the engine-level view of the same canonical-metric logic. "
-        "For each dataset/doc-count group, each engine contributes only its best mode for that group. "
+        "For each dataset/doc-count/query-set group, each engine contributes only its best mode for that group. "
         "The table shows the average raw canonical metric across those groups. "
         "Only engines with 100% group coverage are included here."
     )
@@ -1549,13 +1703,13 @@ def _leaderboard_sections_lines(rows: list[ArtifactRow]) -> list[str]:
         lines.append("")
         lines.append(
             "This leaderboard uses the canonical metric for each dataset family. "
-            "For each dataset/doc-count group in this scope, it first chooses the single best run for each engine across all modes. "
+            "For each dataset/doc-count/query-set group in this scope, it first chooses the single best run for each engine across all modes. "
             "Then `Score`, `QPS`, and `P50` are averaged over those selected rows only. "
-            "`Qrels-weighted score` uses the same selected rows, but weights each dataset/doc-count group by its `qrels_count` from the prepared manifest when available; groups without known `qrels_count` fall back to weight `1`. "
-            "`Relative to winner` divides that selected score by the winning selected score inside the same dataset/doc-count group, then averages those ratios; higher is better. "
-            "`Rank sum` ranks engines inside each dataset/doc-count group by the selected canonical metric, then sums those ranks across groups; lower is better, and ties share the average rank. "
+            "`Qrels-weighted score` uses the same selected rows, but weights each dataset/doc-count/query-set group by its `qrels_count` from the prepared manifest when available; groups without known `qrels_count` fall back to weight `1`. "
+            "`Relative to winner` divides that selected score by the winning selected score inside the same dataset/doc-count/query-set group, then averages those ratios; higher is better. "
+            "`Rank sum` ranks engines inside each dataset/doc-count/query-set group by the selected canonical metric, then sums those ranks across groups; lower is better, and ties share the average rank. "
             "`Mode counts` shows how many times each mode was selected for that engine across the groups in this scope, using the format `ft:x vec:y hyb:z`. "
-            "All compared engines listed above have coverage for every dataset/doc-count group in this scope."
+            "All compared engines listed above have coverage for every dataset/doc-count/query-set group in this scope."
         )
         lines.append("")
         lines.append("Sorted by `Score` descending. Here `Score` is just the average canonical metric.")
@@ -1575,7 +1729,7 @@ def _leaderboard_sections_lines(rows: list[ArtifactRow]) -> list[str]:
         lines.append("")
         lines.append(
             "This is the engine+mode view for the same dataset scope. "
-            "For each dataset/doc-count group in this scope, it chooses the best run for each exact engine+mode pair. "
+            "For each dataset/doc-count/query-set group in this scope, it chooses the best run for each exact engine+mode pair. "
             "Then `Score`, `QPS`, and `P50` are averaged over those selected rows only. "
             "Only full-coverage engine+mode entries are included."
         )
@@ -1608,7 +1762,7 @@ def _dataset_engine_coverage_table_lines(rows: list[ArtifactRow]) -> list[str]:
     if not successful:
         return []
     group_keys = sorted(
-        {(row.dataset_source or "-", row.doc_count) for row in successful},
+        {(row.comparison_dataset_source, row.doc_count) for row in successful},
         key=lambda item: ((item[0] or "").lower(), item[1] or 0),
     )
     engines = sorted({row.engine for row in successful}, key=str.lower)
@@ -1616,7 +1770,7 @@ def _dataset_engine_coverage_table_lines(rows: list[ArtifactRow]) -> list[str]:
         return []
     counts: dict[tuple[tuple[str, int | None], str], int] = {}
     for row in successful:
-        key = ((row.dataset_source or "-", row.doc_count), row.engine)
+        key = ((row.comparison_dataset_source, row.doc_count), row.engine)
         counts[key] = counts.get(key, 0) + 1
     lines = ["## Dataset x Engine Coverage", ""]
     lines.append("Successful runs only. `✅` means at least one run completed with `status=ok` for that dataset and engine. `❌` means none did.")
@@ -1639,7 +1793,7 @@ def _canonical_grouped_rows(rows: list[ArtifactRow]) -> tuple[dict[tuple[str, in
     eligible = [row for row in rows if _eligible_for_global_relevance(row)]
     grouped: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in eligible:
-        grouped.setdefault((row.dataset_source or "-", row.doc_count), []).append(row)
+        grouped.setdefault((row.comparison_dataset_source, row.doc_count), []).append(row)
     return grouped, len(grouped)
 
 
@@ -1652,7 +1806,7 @@ def _group_scope_title(
 
 
 def _short_dataset_name(dataset: str, doc_count: int | None) -> str:
-    ds = str(dataset or "")
+    ds, _ = _split_comparison_dataset(dataset)
     if ds == "beir/nfcorpus/test":
         return "nfcorpus"
     if ds == "beir/trec-covid":
@@ -1683,7 +1837,13 @@ def _short_dataset_name(dataset: str, doc_count: int | None) -> str:
 
 
 def _short_scope_title(group_keys: frozenset[tuple[str, int | None]]) -> str:
-    labels = [_short_dataset_name(dataset, doc_count) for dataset, doc_count in sorted(group_keys, key=lambda item: ((item[0] or "").lower(), item[1] or 0))]
+    labels = []
+    for dataset, doc_count in sorted(group_keys, key=lambda item: ((item[0] or "").lower(), item[1] or 0)):
+        _, query_variant = _split_comparison_dataset(dataset)
+        label = _short_dataset_name(dataset, doc_count)
+        if query_variant:
+            label += f" [{_query_variant_label(query_variant)}]"
+        labels.append(label)
     if len(labels) <= 4:
         return ", ".join(labels)
     return f"{', '.join(labels[:3])}, +{len(labels) - 3} more"
@@ -2369,7 +2529,7 @@ def _engine_consistency_radar_lines(rows: list[ArtifactRow]) -> list[str]:
         return []
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
-    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     palette = [
         ("qdrant", "#3b82f6"),
         ("manticore", "#10b981"),
@@ -2414,7 +2574,7 @@ def _engine_consistency_series(rows: list[ArtifactRow]) -> tuple[list[str], list
         return [], []
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
-    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     palette = [
         ("qdrant", "#3b82f6"),
         ("manticore", "#10b981"),
@@ -2462,7 +2622,7 @@ def _engine_consistency_heatmap_lines(rows: list[ArtifactRow]) -> list[str]:
         return []
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
-    x_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    x_labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     y_labels = [item[0] for item in leaderboard]
     cells: list[tuple[str, str, float]] = []
     for engine, *rest in leaderboard:
@@ -2516,7 +2676,8 @@ def _engine_consistency_heatmap_lines(rows: list[ArtifactRow]) -> list[str]:
 
 
 def _dataset_family_name(dataset_source: str) -> str:
-    ds = str(dataset_source or "").strip().lower()
+    raw_source, _ = _split_comparison_dataset(dataset_source)
+    ds = raw_source.strip().lower()
     if ds.startswith("msmarco-passage/"):
         return "MSMARCO"
     if ds == "wands":
@@ -2560,7 +2721,7 @@ def _best_mode_counts_chart_lines(rows: list[ArtifactRow]) -> list[str]:
 
 def _coverage_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
     all_groups: list[tuple[str, int | None]] = sorted(
-        {(row.dataset_source or "-", row.doc_count) for row in rows if row.engine and row.mode},
+        {(row.comparison_dataset_source, row.doc_count) for row in rows if row.engine and row.mode},
         key=lambda item: ((item[0] or "").lower(), item[1] or 0),
     )
     if not all_groups:
@@ -2570,7 +2731,7 @@ def _coverage_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
         key=lambda item: (item[0].lower(), item[1].lower()),
     )
     usable = {
-        (row.engine, row.mode, row.dataset_source or "-", row.doc_count)
+        (row.engine, row.mode, row.comparison_dataset_source, row.doc_count)
         for row in rows
         if _eligible_for_global_relevance(row)
     }
@@ -2581,7 +2742,7 @@ def _coverage_matrix_lines(rows: list[ArtifactRow]) -> list[str]:
     ]
     header = ['<tr><th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left;">Engine / mode</th>']
     for dataset, doc_count in all_groups:
-        label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        label = _plain_dataset_group_label(dataset, doc_count)
         header.append(f'<th style="border:1px solid #ddd; padding:6px; background:#f8f8f8; text-align:left; min-width:110px;">{label}</th>')
     header.append("</tr>")
     lines.append("".join(header))
@@ -2722,7 +2883,7 @@ def _top_engine_mode_relative_heatmap_lines(rows: list[ArtifactRow], limit: int 
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
     top = leaderboard[:limit]
-    x_labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    x_labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     y_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, *_ in top]
 
     lines = [
@@ -2773,7 +2934,7 @@ def _top_engine_mode_series(rows: list[ArtifactRow], limit: int = 5) -> tuple[li
         return [], []
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
-    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     palette = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"]
     datasets: list[dict[str, Any]] = []
     for idx, (engine, mode, *_) in enumerate(leaderboard[:limit]):
@@ -2986,7 +3147,7 @@ def _best_mode_per_engine_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str
     ]
     engine_labels = [item[0] for item in leaderboard]
     for dataset, doc_count in group_keys:
-        group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        group_label = _plain_dataset_group_label(dataset, doc_count)
         mode_values: dict[str, list[float | None]] = {
             "fulltext": [],
             "vector": [],
@@ -3031,7 +3192,7 @@ def _relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
         return []
     grouped, _ = _canonical_grouped_rows(rows)
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
-    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     palette = {
         "qdrant": "#3b82f6",
         "manticore": "#10b981",
@@ -3088,7 +3249,7 @@ def _mode_family_grouped_bar_lines(rows: list[ArtifactRow]) -> list[str]:
     if total_groups <= 0:
         return []
     group_keys = sorted(grouped.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0))
-    labels = [f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset for dataset, doc_count in group_keys]
+    labels = [_plain_dataset_group_label(dataset, doc_count) for dataset, doc_count in group_keys]
     mode_order = [("fulltext", "full-text"), ("vector", "vector"), ("hybrid", "hybrid")]
     datasets: list[dict[str, Any]] = []
     for mode, label in mode_order:
@@ -3135,7 +3296,7 @@ def _top_engine_mode_grouped_bar_lines(rows: list[ArtifactRow], limit: int = 6) 
     ]
     variant_labels = [f"{engine} / {_display_mode(mode)}" for engine, mode, *_ in top]
     for dataset, doc_count in group_keys:
-        group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        group_label = _plain_dataset_group_label(dataset, doc_count)
         group_rows = grouped[(dataset, doc_count)]
         datasets: list[dict[str, Any]] = []
         for engine, mode, *_ in top:
@@ -3175,7 +3336,7 @@ def _engine_mode_relative_to_winner_grouped_bar_lines(rows: list[ArtifactRow], l
         "",
     ]
     for dataset, doc_count in group_keys:
-        group_label = f"{dataset} ({int(doc_count):,})" if doc_count is not None else dataset
+        group_label = _plain_dataset_group_label(dataset, doc_count)
         group_rows = grouped[(dataset, doc_count)]
         best_score = max(_row_canonical_metric_value(row) for row in group_rows) if group_rows else 0.0
         datasets: list[dict[str, Any]] = []
@@ -3248,7 +3409,7 @@ def render_combined_report(rows: list[ArtifactRow], title: str) -> str:
     lines.extend(_scatter_chart_sections_lines(rows))
     by_dataset: dict[tuple[str, int | None], list[ArtifactRow]] = {}
     for row in rows:
-        key = (row.dataset_source or "-", row.doc_count)
+        key = (row.comparison_dataset_source, row.doc_count)
         by_dataset.setdefault(key, []).append(row)
 
     for dataset, doc_count in sorted(by_dataset.keys(), key=lambda item: ((item[0] or "").lower(), item[1] or 0)):
@@ -3395,10 +3556,12 @@ def generate_combined_report(
     if run_ids:
         wanted = set(run_ids)
         selected = [r for r in all_rows if r.run_id in wanted]
+        selected = selected_query_cohort_rows(selected)
     elif interactive:
         selected = select_artifacts_interactive(all_rows)
+        selected = selected_query_cohort_rows(selected)
     else:
-        selected = all_rows
+        selected = default_query_cohort_rows(all_rows)
     if not selected:
         raise RuntimeError("No artifacts selected.")
 

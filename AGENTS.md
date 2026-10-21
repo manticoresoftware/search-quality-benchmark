@@ -56,8 +56,11 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
 - Queries: official TREC-COVID topics.
   - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
   - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`, `typesense fulltext`, `milvus fulltext`, `mariadb fulltext`, `serenedb fulltext`, `weaviate fulltext`, `vespa fulltext`) use the shorter query variant.
+    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`, `typesense fulltext`, `milvus fulltext`, `mariadb fulltext`, `serenedb fulltext`, `weaviate fulltext`, `vespa fulltext`) use `manticore.fulltext_query_variant` (`long` by default).
     - vector/hybrid modes use the longer query variant, including Milvus vector and hybrid searches.
+    - every run records `query_variant_requested`, `query_variant`, `query_variants_distinct`, `query_variants_requested_by_mode`, and `query_variants_by_mode`. `query_variant` is the comparison identity: `short` or `long` when prepared texts differ, and `same` when both fields resolve to identical text.
+    - reports group results by dataset, document count, and effective query variant. Consequently, short-query and long-query TREC-COVID runs are not compared in the same result set, while modes remain comparable for datasets that store identical text in both fields.
+    - legacy artifacts without query-variant metadata are interpreted as `short` for full-text and `long` for vector/hybrid. Prepared topics are inspected to collapse those identities to `same` when the texts are identical.
   - Prepared topic fields are explicit: `query_short` and `query_long`.
   - Example topics from TREC-COVID:
     - Topic `1`
@@ -251,6 +254,7 @@ embedding:
   - `or` (default): natural disjunction / broader recall
   - `quorum`: uses Manticore quorum syntax like `"term1 term2 term3"/0.5`
 - `manticore.fulltext_query_quorum`: quorum threshold used when `fulltext_query_mode: "quorum"` (default: `0.5`)
+- `manticore.fulltext_query_variant`: prepared topic text used by full-text mode across all engines: `short` or `long` (default: `long`). Vector and hybrid modes always use `long`.
 
 ### Manticore Vector Quantization/Search Config
 - `manticore.vector_quantization`: `""` (off), `8bit`, `1bit`, or `1bitsimple`
@@ -591,6 +595,22 @@ The interactive report compares completed runs across selected engines and
 datasets. Its filters affect the leaderboard, matrix, dataset explorer, raw-run
 table, and exports.
 
+Automatic report generation selects one query-text cohort per dataset and
+document population: `same` when the prepared short/long texts are identical,
+otherwise `long`. It never falls back to `short`. A short-query cohort is
+included only when a selected run explicitly records `query_variant: short`
+(through the artifact selector or `--run-ids`). Selecting an unmarked legacy
+run that is inferred as short does not satisfy this gate. Once a recorded-short
+run is selected, selected legacy inferred-short runs are admitted too, and the
+standalone HTML makes the other inferred-short runs available. Short and long
+remain separate dataset cohorts.
+
+The recorded-short selection gate applies only to `beir/trec-covid`. For legacy
+artifacts without query metadata, prepared-topic inspection determines whether
+the texts differ. When prepared topics are unavailable, TREC-COVID defaults to
+distinct variants and every other currently supported dataset defaults to
+`same`; explicit artifact metadata still takes precedence.
+
 ### Search modes
 
 `Best available` selects the highest-quality completed mode separately for each
@@ -863,7 +883,7 @@ Note:
 ## Output Paths
 
 Per benchmark run:
-- `artifacts/<run_id>/metrics.json`: aggregated run-level metrics (quality + latency/QPS/error), plus the engine version, configured image, image creation timestamp, and—when Docker exposes them—the immutable image ID and registry digest captured for that run.
+- `artifacts/<run_id>/metrics.json`: aggregated run-level metrics (quality + latency/QPS/error), query-variant identity, plus the engine version, configured image, image creation timestamp, and—when Docker exposes them—the immutable image ID and registry digest captured for that run.
 - `artifacts/<run_id>/per_query.csv`: one row per evaluated query with per-query quality and timing fields.
 - `artifacts/<run_id>/summary.md`: human-readable single-run report.
 - `artifacts/<run_id>/diagnostics.json`: sampled query diagnostics (query plans/profiles or backend debug details).
@@ -890,6 +910,17 @@ Combined report (`bench report`):
 - Golden UI reference: `reports/search-benchmark/reference.html`.
 - Inputs: individual `artifacts/*/metrics.json` and
   `artifacts/*/per_query.csv` files; combined Markdown reports are never inputs.
+- Comparison cohorts include the effective query variant. Distinct `short` and
+  `long` query sets never share a dataset cell; `query_variant: same` is shared
+  across modes because the underlying query texts are identical.
+- Default cohort selection prefers `same`, then `long`, and does not fall back
+  to `short`. A selected ID enables short only if its artifact explicitly
+  records `query_variant: short`; selecting an inferred-short legacy ID alone
+  is ignored by this gate. Once enabled, inferred-short artifacts are admitted
+  alongside the recorded-short artifact.
+- Scope the recorded-short gate to `beir/trec-covid`. Unmarked legacy artifacts
+  from other current datasets resolve to `same` when prepared-topic inspection
+  is unavailable, because those datasets use identical short/long text.
 - Cohort rule: include runs with a concrete `engine_version`; reject missing,
   `unknown`, `n/a`, `none`, `null`, and floating `latest` values. Do not add a
   date window.

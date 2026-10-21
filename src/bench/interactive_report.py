@@ -32,10 +32,12 @@ def locate_repository() -> Path:
 
 ROOT = locate_repository()
 ARTIFACTS_DIR = ROOT / "artifacts"
+PREPARED_DIR = ROOT / "data" / "prepared"
 OUTPUT_PATH = ROOT / "reports" / "search-benchmark" / "index.html"
 
 SLOW_QUERIES_PER_RUN = 8
 UNKNOWN_VERSION_VALUES = {"", "unknown", "n/a", "na", "none", "null", "latest"}
+TREC_COVID_DATASET = "beir/trec-covid"
 
 # These are presentation overrides, not an allowlist. Engines without an
 # override are still included and receive a readable name derived from their
@@ -82,12 +84,132 @@ def canonical_metric(dataset: str) -> str:
     return "mrr@10" if dataset.lower().startswith("msmarco-passage/") else "ndcg@10"
 
 
-def dataset_label(dataset: str, docs: int | None) -> str:
+def query_variant_label(query_variant: str) -> str:
+    return "same text" if query_variant == "same" else f"{query_variant} text"
+
+
+def dataset_label(dataset: str, docs: int | None, query_variant: str) -> str:
     if dataset == "msmarco-passage/dev/small":
         base = "MS MARCO Dev (250K corpus)" if docs is not None and docs < 1_000_000 else "MS MARCO Dev (full corpus)"
     else:
         base = DATASET_NAMES.get(dataset, dataset)
-    return f"{base} · {docs:,} docs" if docs is not None else base
+    if docs is not None:
+        base = f"{base} · {docs:,} docs"
+    return f"{base} · {query_variant_label(query_variant)} queries"
+
+
+def prepared_query_variant_stats() -> dict[tuple[str, int | None], bool]:
+    stats: dict[tuple[str, int | None], bool] = {}
+    if not PREPARED_DIR.is_dir():
+        return stats
+    for manifest_path in PREPARED_DIR.glob("**/manifest.json"):
+        topics_path = manifest_path.with_name("topics.jsonl")
+        if not topics_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source = str(manifest.get("dataset_source") or "").strip()
+            raw_docs = manifest.get("doc_count")
+            docs = int(raw_docs) if raw_docs is not None else None
+            distinct = False
+            with topics_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    topic = json.loads(line)
+                    short_query = str(topic.get("query_short") or "").strip()
+                    long_query = str(topic.get("query_long") or "").strip()
+                    short_query = short_query or long_query
+                    long_query = long_query or short_query
+                    if short_query != long_query:
+                        distinct = True
+                        break
+            if source:
+                key = (source, docs)
+                stats[key] = bool(stats.get(key, False) or distinct)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+    return stats
+
+
+def inferred_variants_distinct(
+    stats: dict[tuple[str, int | None], bool], dataset: str, docs: int | None
+) -> bool | None:
+    direct = stats.get((dataset, docs))
+    if isinstance(direct, bool):
+        return direct
+    candidates = {value for (source, _), value in stats.items() if source == dataset}
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    return dataset.strip().lower() == TREC_COVID_DATASET
+
+
+def artifact_query_variant(
+    payload: dict[str, Any],
+    mode: str,
+    inferred_distinct: bool | None,
+) -> tuple[str, str, bool | None]:
+    recorded_distinct = payload.get("query_variants_distinct")
+    variants_distinct = recorded_distinct if isinstance(recorded_distinct, bool) else inferred_distinct
+    requested = str(payload.get("query_variant_requested") or "").strip().lower()
+    if requested not in {"short", "long", "mixed"}:
+        requested = "short" if mode == "fulltext" else "long"
+    effective = str(payload.get("query_variant") or "").strip().lower()
+    if effective not in {"short", "long", "same", "mixed"}:
+        effective = requested
+    if variants_distinct is False:
+        effective = "same"
+    return requested, effective, variants_distinct
+
+
+def query_cohort_runs(
+    runs: list[dict[str, Any]],
+    explicitly_selected_run_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Choose reportable query cohorts, gating legacy inferred-short runs.
+
+    Identical texts (``same``) take precedence, followed by ``long``. Short
+    runs become available only when the selected IDs contain at least one run
+    whose artifact explicitly records ``query_variant: short``; selecting an
+    inferred legacy-short run alone does not enable the short cohort.
+    """
+    selected_ids = explicitly_selected_run_ids or set()
+    recorded_short_selected = any(
+        str(run.get("runId") or "") in selected_ids
+        and run.get("dataset") == TREC_COVID_DATASET
+        and run.get("queryVariant") == "short"
+        and run.get("queryVariantExplicit") is True
+        for run in runs
+    )
+    runs_by_group: dict[tuple[str, int | None], list[dict[str, Any]]] = {}
+    for run in runs:
+        key = (str(run.get("dataset") or ""), run.get("docs"))
+        runs_by_group.setdefault(key, []).append(run)
+
+    allowed_by_group: dict[tuple[str, int | None], set[str]] = {}
+    for key, group_runs in runs_by_group.items():
+        dataset, _ = key
+        variants = {str(run.get("queryVariant") or "unknown") for run in group_runs}
+        if "same" in variants:
+            allowed_by_group[key] = {"same"}
+        elif "long" in variants:
+            allowed_by_group[key] = {"long"}
+        else:
+            allowed_by_group[key] = set()
+        selected_variants = {
+            str(run.get("queryVariant") or "unknown")
+            for run in group_runs
+            if str(run.get("runId") or "") in selected_ids
+        }
+        if dataset != TREC_COVID_DATASET:
+            allowed_by_group[key].update(selected_variants)
+        elif recorded_short_selected and "short" in variants:
+            allowed_by_group[key].add("short")
+
+    return [
+        run
+        for run in runs
+        if str(run.get("queryVariant") or "unknown")
+        in allowed_by_group[(str(run.get("dataset") or ""), run.get("docs"))]
+    ]
 
 
 def safe_number(value: Any) -> float:
@@ -129,6 +251,7 @@ def slow_queries(csv_path: Path, run: dict[str, Any]) -> list[dict[str, Any]]:
                 "version": run["version"],
                 "imageCreatedAt": run["imageCreatedAt"],
                 "mode": run["mode"],
+                "queryVariant": run["queryVariant"],
                 "topicId": str(row.get("topic_id", "")),
                 "query": str(row.get("query", "")),
                 "latency": latency,
@@ -143,12 +266,11 @@ def slow_queries(csv_path: Path, run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
-    systems: dict[str, dict[str, str]] = {}
-
     runs: list[dict[str, Any]] = []
     artifact_dirs: dict[str, Path] = {}
     excluded_manticore = 0
     invalid = 0
+    prepared_variant_stats = prepared_query_variant_stats()
 
     for metrics_path in sorted(ARTIFACTS_DIR.glob("*/metrics.json")):
         try:
@@ -166,11 +288,16 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             continue
         if not engine:
             continue
-        systems.setdefault(engine, {"name": engine_display_name(engine)})
         mode = str(payload.get("mode", "")).strip().lower()
         dataset = str(payload.get("dataset_source", "")).strip()
         docs = extract_doc_count(payload)
-        dataset_key = f"{dataset}|{docs if docs is not None else 'unknown'}"
+        query_variant_requested, query_variant, query_variants_distinct = artifact_query_variant(
+            payload,
+            mode,
+            inferred_variants_distinct(prepared_variant_stats, dataset, docs),
+        )
+        recorded_query_variant = str(payload.get("query_variant") or "").strip().lower()
+        dataset_key = f"{dataset}|{docs if docs is not None else 'unknown'}|queries:{query_variant}"
         relevance = payload.get("relevance", {}) or {}
         performance = payload.get("performance", {}) or {}
         rel = relevance.get(mode, {}) if isinstance(relevance, dict) else {}
@@ -189,6 +316,10 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "mode": mode,
             "dataset": dataset,
             "datasetKey": dataset_key,
+            "queryVariantRequested": query_variant_requested,
+            "queryVariant": query_variant,
+            "queryVariantsDistinct": query_variants_distinct,
+            "queryVariantExplicit": recorded_query_variant == query_variant,
             "docs": docs,
             "metric": metric,
             "quality": safe_number(rel.get(metric)),
@@ -214,7 +345,14 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         runs.append(run)
         artifact_dirs[run_id] = metrics_path.parent
 
+    discovered_run_count = len(runs)
+    runs = query_cohort_runs(runs, default_run_ids)
+    excluded_query_cohort_runs = discovered_run_count - len(runs)
     runs.sort(key=lambda item: (item["runAt"], item["runId"]))
+    systems = {
+        run["engine"]: {"name": engine_display_name(run["engine"])}
+        for run in runs
+    }
     systems = dict(
         sorted(
             systems.items(),
@@ -241,7 +379,8 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "key": run["datasetKey"],
             "source": run["dataset"],
             "docs": run["docs"],
-            "label": dataset_label(run["dataset"], run["docs"]),
+            "queryVariant": run["queryVariant"],
+            "label": dataset_label(run["dataset"], run["docs"], run["queryVariant"]),
             "metric": run["metric"],
         }
 
@@ -254,6 +393,7 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "generatedAt": generated_at,
             "runs": len(runs),
             "excludedManticoreRuns": excluded_manticore,
+            "excludedQueryCohortRuns": excluded_query_cohort_runs,
             "invalidArtifacts": invalid,
             "slowQueriesPerRun": SLOW_QUERIES_PER_RUN,
             "source": "Individual artifacts/*/metrics.json and artifacts/*/per_query.csv files",
@@ -1084,7 +1224,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     </button>
 
     <section class="filter-bar" aria-label="Report filters"><div class="filter-caption">FILTERS</div>
-      <div class="filter-field">Datasets<details class="multi-select" id="dataset-filter"><summary><span id="dataset-summary" class="multi-summary">All datasets</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="datasets" data-choice="all">All</button><button type="button" data-multi="datasets" data-choice="none">Clear</button></div><div id="dataset-options" class="multi-options"></div></div></details></div>
+      <div class="filter-field">Dataset / query set<details class="multi-select" id="dataset-filter"><summary><span id="dataset-summary" class="multi-summary">All datasets</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="datasets" data-choice="all">All</button><button type="button" data-multi="datasets" data-choice="none">Clear</button></div><div id="dataset-options" class="multi-options"></div></div></details></div>
       <div class="filter-field">Engines<details class="multi-select" id="engine-filter"><summary><span id="engine-summary" class="multi-summary">All engines</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="engines" data-choice="all">All</button><button type="button" data-multi="engines" data-choice="none">Clear</button></div><div id="engine-options" class="multi-options"></div></div></details></div>
       <div class="filter-field">Search modes<details class="multi-select" id="mode-filter"><summary><span id="mode-summary" class="multi-summary">All modes</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="modes" data-choice="all">All</button><button type="button" data-multi="modes" data-choice="none">Clear</button></div><div id="mode-options" class="multi-options"></div></div></details></div>
       <select id="metric-filter" hidden aria-hidden="true"><option value="canonical">Recommended for each dataset</option><option value="ndcg10">Ranking quality · top 10 (NDCG@10)</option><option value="ndcg20">Ranking quality · top 20 (NDCG@20)</option><option value="mrr10">First useful result · top 10 (MRR@10)</option><option value="map10">Relevant results near top (MAP@10)</option><option value="p20">Useful share of top 20 (P@20)</option><option value="recall100">Relevant-result coverage (Recall@100)</option></select>
@@ -1115,7 +1255,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 
     <div class="grid">
       <section class="panel" data-view="overview">
-        <div class="panel-head"><div><h2>Overall quality</h2><p>Mean relative shows average quality across the selected datasets. Quality floor shows the engine’s worst relative result: how close it stays to the best observed result even on its weakest dataset. Engines missing a selected dataset remain visible but are not ranked.</p></div><span id="leaderboard-scope" class="tag"></span></div>
+        <div class="panel-head"><div><h2>Overall quality</h2><p>Mean relative shows average quality across the selected dataset/query-set cohorts. Quality floor shows the engine’s worst relative result: how close it stays to the best observed result even on its weakest cohort. Engines missing a selected cohort remain visible but are not ranked.</p></div><span id="leaderboard-scope" class="tag"></span></div>
         <div class="panel-body"><div id="leaderboard"></div><div class="reference-note">Reference values are computed from all benchmarked engines for the selected datasets and modes, including engines currently hidden by the engine filter. Higher is better for both Mean relative and Quality floor.</div></div>
       </section>
 
@@ -1130,7 +1270,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       </section>
 
       <section class="panel" data-view="overview">
-        <div class="panel-head"><div><h2>Dataset × engine quality matrix</h2><p>Each cell uses the best result among the selected search modes. “Per-dataset relative” is the engine score divided by the best observed score in that dataset. Color uses a fixed scale, so the same percentage always has the same color across filters and screenshots.</p></div><div class="panel-controls"><label>Matrix values<select id="value-filter"><option value="relative">Per-dataset relative</option><option value="absolute">Absolute metric</option></select></label><div class="legend"><span>&lt;90%</span><i class="fixed-gradient"></i><span>100%</span></div></div></div>
+        <div class="panel-head"><div><h2>Dataset × engine quality matrix</h2><p>Each cell uses the best result among the selected search modes for one effective query set. Distinct short and long query sets are separate columns; identical texts share one “same text” cohort. “Per-dataset relative” is the engine score divided by the best observed score in that cohort.</p></div><div class="panel-controls"><label>Matrix values<select id="value-filter"><option value="relative">Per-dataset relative</option><option value="absolute">Absolute metric</option></select></label><div class="legend"><span>&lt;90%</span><i class="fixed-gradient"></i><span>100%</span></div></div></div>
         <div class="panel-body"><div id="heatmap"></div></div>
       </section>
 
@@ -1212,11 +1352,16 @@ HTML_TEMPLATE = r'''<!doctype html>
     const systemVersionLabel = engine => versionWithDate(systemVersion(engine), DATA.systems[engine]?.imageCreatedAt);
     const runVersionLabel = run => versionWithDate(runVersion(run), run?.imageCreatedAt);
     const modeBadge = mode => `<span class="mode-badge mode-${escapeHtml(mode)}">${escapeHtml(mode === 'fulltext' ? 'FT' : mode[0])}</span>`;
+    const queryVariantText = run => run?.queryVariant === 'same'
+      ? `Same text (requested ${run?.queryVariantRequested || 'unknown'})`
+      : run?.queryVariant === 'short'
+        ? `Short text (${run?.queryVariantExplicit ? 'recorded' : 'legacy inferred'})`
+        : `${String(run?.queryVariant || 'unknown').replace(/^./, value => value.toUpperCase())} text`;
     const variantName = item => `${systemName(item.engine)} / ${item.mode}`;
     const METRIC_LABELS = { canonical: 'Canonical', ndcg10: 'NDCG@10', ndcg20: 'NDCG@20', mrr10: 'MRR@10', map10: 'MAP@10', p20: 'P@20', recall100: 'Recall@100' };
     const METRIC_DETAILS = {
-      'Coverage': ['Dataset coverage', 'Completed results for this engine out of all datasets selected in the filter. Missing any selected dataset makes the engine incomplete and therefore unranked.'],
-      'Mean relative': ['Average relative score', 'Arithmetic mean of engine score ÷ best observed score for every completed selected dataset. The best reference includes hidden engines, so filtering engines does not move it.'],
+      'Coverage': ['Dataset/query-set coverage', 'Completed results for this engine out of all dataset/query-set cohorts selected in the filter. Missing any selected cohort makes the engine incomplete and therefore unranked.'],
+      'Mean relative': ['Average relative score', 'Arithmetic mean of engine score ÷ best observed score for every completed selected dataset/query-set cohort. The best reference includes hidden engines, so filtering engines does not move it.'],
       'Mean raw': ['Average metric value', 'Arithmetic mean of the displayed metric values. With “Recommended for each dataset”, this can combine NDCG@10 and MRR@10, so use it only as a quick orientation.'],
       'Dataset wins': ['Best results', 'Number of selected datasets where this engine matches the best observed score. Ties count as wins.'],
       'Chosen modes': ['Modes behind the scores', 'Counts of the modes supplying each displayed result: FT = full text, V = vector, H = hybrid. The highest-quality result among the selected search modes is chosen separately for every engine and dataset.'],
@@ -1885,19 +2030,19 @@ HTML_TEMPLATE = r'''<!doctype html>
       }));
     }
 
-    const SORT_LABELS = {date:'Date',engine:'Engine',mode:'Mode',dataset:'Dataset',docs:'Docs',quality:'Quality',p50:'P50',p95:'P95',p99:'P99',qps:'QPS'};
+    const SORT_LABELS = {date:'Date',engine:'Engine',mode:'Mode',dataset:'Dataset',queryVariant:'Query set',docs:'Docs',quality:'Quality',p50:'P50',p95:'P95',p99:'P99',qps:'QPS'};
     function renderRunTable() {
       const needle = state.search.trim().toLowerCase();
-      const rows=visibleRuns().filter(run => !needle || [run.engine, systemName(run.engine), run.mode, run.dataset, datasetByKey[run.datasetKey]?.label, run.profile, run.model].join(' ').toLowerCase().includes(needle));
+      const rows=visibleRuns().filter(run => !needle || [run.engine, systemName(run.engine), run.mode, run.dataset, datasetByKey[run.datasetKey]?.label, run.queryVariant, run.queryVariantRequested, run.profile, run.model].join(' ').toLowerCase().includes(needle));
       const key=state.sort, direction=state.direction==='asc'?1:-1;
       rows.sort((a,b)=>{let av=key==='quality'?metricValue(a):a[key],bv=key==='quality'?metricValue(b):b[key];if(key==='date'){av=a.runAt;bv=b.runAt;}if(key==='engine'){av=systemName(a.engine);bv=systemName(b.engine);}if(key==='dataset'){av=datasetByKey[a.datasetKey]?.label||a.datasetKey;}return (typeof av==='string'?av.localeCompare(bv):(av||0)-(bv||0))*direction;});
       $('#run-count').textContent=`${fmt.format(rows.length)} runs`;
       const header=Object.entries(SORT_LABELS).map(([key,label])=>{const metricKey=label==='Quality'?(state.metric==='canonical'?'NDCG@10 / MRR@10':METRIC_LABELS[state.metric]):label.toUpperCase();const help=label==='Quality'?'The selected quality metric; canonical uses the recommended metric for each dataset.':metricDescription(metricKey);return `<th class="${['docs','quality','qps','p50','p95','p99'].includes(key)?'num':''}"><button class="sort-button" data-sort="${key}" title="${escapeHtml(help)}">${label}${state.sort===key?(state.direction==='asc'?' ↑':' ↓'):''}</button></th>`;}).join('');
       const pageSize=50, pages=Math.max(1,Math.ceil(rows.length/pageSize)); state.page=Math.min(state.page,pages);
       const visible=rows.slice((state.page-1)*pageSize,state.page*pageSize);
-      const body=visible.map(run=>`<tr><td><button type="button" class="sort-button" data-run-id="${escapeHtml(run.runId)}" title="Open run details">${escapeHtml(run.date.replace(' UTC',''))}</button></td><td class="engine-cell"><b style="color:${COLORS[run.engine]}">${escapeHtml(systemName(run.engine))}</b><small>${escapeHtml(runVersionLabel(run))}</small></td><td>${modeBadge(run.mode)} ${escapeHtml(MODE_NAMES[run.mode])}</td><td title="${escapeHtml(run.dataset)}">${escapeHtml((datasetByKey[run.datasetKey]?.label||run.dataset).replace(/ · .*/,''))}</td><td class="num">${run.docs==null?'—':fmt.format(run.docs)}</td><td class="num" title="${escapeHtml(metricLabel(run))}">${dec(metricValue(run),4)}</td><td class="num">${ms(run.p50)}</td><td class="num">${ms(run.p95)}</td><td class="num">${ms(run.p99)}</td><td class="num">${dec(run.qps,1)}</td></tr>`).join('');
+      const body=visible.map(run=>`<tr><td><button type="button" class="sort-button" data-run-id="${escapeHtml(run.runId)}" title="Open run details">${escapeHtml(run.date.replace(' UTC',''))}</button></td><td class="engine-cell"><b style="color:${COLORS[run.engine]}">${escapeHtml(systemName(run.engine))}</b><small>${escapeHtml(runVersionLabel(run))}</small></td><td>${modeBadge(run.mode)} ${escapeHtml(MODE_NAMES[run.mode])}</td><td title="${escapeHtml(run.dataset)}">${escapeHtml((datasetByKey[run.datasetKey]?.label||run.dataset).replace(/ · .*/,''))}</td><td>${escapeHtml(queryVariantText(run))}</td><td class="num">${run.docs==null?'—':fmt.format(run.docs)}</td><td class="num" title="${escapeHtml(metricLabel(run))}">${dec(metricValue(run),4)}</td><td class="num">${ms(run.p50)}</td><td class="num">${ms(run.p95)}</td><td class="num">${ms(run.p99)}</td><td class="num">${dec(run.qps,1)}</td></tr>`).join('');
       $('#run-table').innerHTML=`<div class="table-wrap" style="max-height:680px"><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div><div class="pagination"><span>Page ${state.page} of ${pages} · ${fmt.format(rows.length)} results</span><div class="button-row"><button type="button" data-page="prev" ${state.page===1?'disabled':''}>Previous</button><button type="button" data-page="next" ${state.page===pages?'disabled':''}>Next</button></div></div>`;
-      document.querySelectorAll('[data-sort]').forEach(button=>button.addEventListener('click',()=>{const next=button.dataset.sort;if(state.sort===next)state.direction=state.direction==='asc'?'desc':'asc';else{state.sort=next;state.direction=['engine','mode','dataset','date'].includes(next)?'asc':'desc';}renderRunTable();}));
+      document.querySelectorAll('[data-sort]').forEach(button=>button.addEventListener('click',()=>{const next=button.dataset.sort;if(state.sort===next)state.direction=state.direction==='asc'?'desc':'asc';else{state.sort=next;state.direction=['engine','mode','dataset','queryVariant','date'].includes(next)?'asc':'desc';}renderRunTable();}));
       document.querySelectorAll('#run-table [data-run-id]').forEach(button=>button.addEventListener('click',()=>showRun(button.dataset.runId)));
       document.querySelectorAll('#run-table [data-page]').forEach(button=>button.addEventListener('click',()=>{state.page+=button.dataset.page==='next'?1:-1;renderRunTable();}));
     }
@@ -1909,13 +2054,13 @@ HTML_TEMPLATE = r'''<!doctype html>
         ['NDCG@10',run.ndcg10],['NDCG@20',run.ndcg20],['MRR@10',run.mrr10],['MAP@10',run.map10],['P@20',run.p20],['Recall@100',run.recall100],
         ['P50',ms(run.p50)],['P95',ms(run.p95)],['P99',ms(run.p99)],['QPS',run.qps]
       ];
-      $('#run-dialog-content').innerHTML=`<div class="dialog-head"><div><h2>${escapeHtml(systemName(run.engine))} / ${escapeHtml(MODE_NAMES[run.mode])}</h2><div class="subtle">${escapeHtml(runVersionLabel(run))}</div></div><button class="dialog-close" type="button" aria-label="Close">×</button></div><div class="dialog-body"><div class="detail-hero"><div class="detail-score"><span>${metricNameHtml(metricLabel(run))}</span><strong>${dec(metricValue(run),4)}</strong><small>${escapeHtml(METRIC_DETAILS[metricLabel(run)]?.[0] || '')} · ${escapeHtml(dataset.label)}</small></div><div class="detail-score"><span>${metricNameHtml('P50')}</span><strong>${ms(run.p50)}</strong><small>Tail ${metricNameHtml('P99')} ${ms(run.p99)} · ${metricNameHtml('QPS')} ${dec(run.qps,1)}</small></div></div><div class="performance-disclaimer"><strong>Performance note.</strong> This benchmark is designed primarily to compare search quality. Latency and QPS were measured with a lightweight methodology and may be noisy; use them only as directional context, not as an authoritative performance comparison.</div><div class="detail-grid">${metrics.map(([name,value])=>`<div class="detail-tile"><span>${METRIC_DETAILS[name] ? metricNameHtml(name) : escapeHtml(name)}</span><strong>${typeof value==='number'?dec(value,4):value}</strong></div>`).join('')}</div><dl class="detail-kv"><dt>Run date</dt><dd>${escapeHtml(run.date)}</dd><dt>Dataset</dt><dd>${escapeHtml(dataset.label)}</dd><dt>Profile</dt><dd>${escapeHtml(run.profile)}</dd><dt>Model/options</dt><dd>${escapeHtml(run.model)}</dd><dt>Settings</dt><dd>concurrency ${escapeHtml(run.concurrency)} · limit ${escapeHtml(run.limit)} · warmup ${escapeHtml(run.warmup)} · repeats ${escapeHtml(run.repeats)}</dd></dl></div>`;
+      $('#run-dialog-content').innerHTML=`<div class="dialog-head"><div><h2>${escapeHtml(systemName(run.engine))} / ${escapeHtml(MODE_NAMES[run.mode])}</h2><div class="subtle">${escapeHtml(runVersionLabel(run))}</div></div><button class="dialog-close" type="button" aria-label="Close">×</button></div><div class="dialog-body"><div class="detail-hero"><div class="detail-score"><span>${metricNameHtml(metricLabel(run))}</span><strong>${dec(metricValue(run),4)}</strong><small>${escapeHtml(METRIC_DETAILS[metricLabel(run)]?.[0] || '')} · ${escapeHtml(dataset.label)}</small></div><div class="detail-score"><span>${metricNameHtml('P50')}</span><strong>${ms(run.p50)}</strong><small>Tail ${metricNameHtml('P99')} ${ms(run.p99)} · ${metricNameHtml('QPS')} ${dec(run.qps,1)}</small></div></div><div class="performance-disclaimer"><strong>Performance note.</strong> This benchmark is designed primarily to compare search quality. Latency and QPS were measured with a lightweight methodology and may be noisy; use them only as directional context, not as an authoritative performance comparison.</div><div class="detail-grid">${metrics.map(([name,value])=>`<div class="detail-tile"><span>${METRIC_DETAILS[name] ? metricNameHtml(name) : escapeHtml(name)}</span><strong>${typeof value==='number'?dec(value,4):value}</strong></div>`).join('')}</div><dl class="detail-kv"><dt>Run date</dt><dd>${escapeHtml(run.date)}</dd><dt>Dataset</dt><dd>${escapeHtml(dataset.label)}</dd><dt>Query set</dt><dd>${escapeHtml(queryVariantText(run))}</dd><dt>Profile</dt><dd>${escapeHtml(run.profile)}</dd><dt>Model/options</dt><dd>${escapeHtml(run.model)}</dd><dt>Settings</dt><dd>concurrency ${escapeHtml(run.concurrency)} · limit ${escapeHtml(run.limit)} · warmup ${escapeHtml(run.warmup)} · repeats ${escapeHtml(run.repeats)}</dd></dl></div>`;
       $('#run-dialog-content .dialog-close').addEventListener('click',()=>$('#run-dialog').close());
       $('#run-dialog').showModal();
     }
 
     function exportCsv() {
-      const columns=['date','engine','version','mode','dataset','docs','metric','quality','qps','p50','p95','p99','profile','model'];
+      const columns=['date','engine','version','mode','dataset','queryVariant','queryVariantRequested','queryVariantExplicit','queryVariantsDistinct','docs','metric','quality','qps','p50','p95','p99','profile','model'];
       const quote=value=>`"${String(value??'').replaceAll('"','""')}"`;
       const lines=[columns.join(',')];
       for(const run of visibleRuns()) lines.push(columns.map(column=>quote(column==='version'?runVersionLabel(run):column==='engine'?systemName(run.engine):run[column])).join(','));
@@ -1946,7 +2091,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     populateControls();
     const updatedDate = new Date(DATA.meta.generatedAt.replace(' ', 'T').replace(' UTC', 'Z'));
     $('#generated-at').textContent = `Last updated ${new Intl.DateTimeFormat('en-US', {month:'short', day:'numeric', year:'numeric', timeZone:'UTC'}).format(updatedDate)}`;
-    $('#header-meta').textContent = `${fmt.format(DATA.meta.runs)} measured runs · ${Object.keys(DATA.systems).length} engines · ${DATA.datasets.length} public datasets`;
+    $('#header-meta').textContent = `${fmt.format(DATA.meta.runs)} measured runs · ${Object.keys(DATA.systems).length} engines · ${DATA.datasets.length} dataset/query-set cohorts`;
     updateDatasetSwitcherOffset();
     window.addEventListener('resize', updateDatasetSwitcherOffset);
     if ('ResizeObserver' in window) new ResizeObserver(updateDatasetSwitcherOffset).observe($('.filter-bar'));

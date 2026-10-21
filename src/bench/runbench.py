@@ -21,6 +21,7 @@ from .milvus_backend import MilvusBackend
 from .opensearch_backend import OpenSearchBackend
 from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k, reciprocal_rank_at_k
 from .qdrant_backend import QdrantBackend
+from .query_policy import query_variant_metadata, resolved_topic_queries
 from .search_options import normalize_search_options
 from .serenedb_backend import SereneDBBackend
 from .typesense_backend import TypesenseBackend
@@ -46,23 +47,18 @@ def query_text_for_mode(
     topic: dict[str, str],
     mode: str,
     *,
-    fulltext_query_variant: str = "short",
+    fulltext_query_variant: str = "long",
 ) -> str:
-    short_q = str(topic.get("query_short") or "").strip()
-    long_q = str(topic.get("query_long") or "").strip()
-    if not short_q:
-        short_q = long_q
-    if not long_q:
-        long_q = short_q
+    short_q, long_q = resolved_topic_queries(topic)
     if not short_q and not long_q:
         raise ValueError(
             "Prepared topics are missing query_short/query_long. "
             "Please rerun: bench prepare"
         )
-    # Policy: shorter query for full-text-like modes by default, longer query for
-    # vector modes. Specific profiles may override the full-text variant.
+    # Policy: full-text-like modes use the configured variant (long by default),
+    # while vector and hybrid modes always use the long variant.
     if mode == "fulltext":
-        return long_q if str(fulltext_query_variant or "short").strip().lower() == "long" else short_q
+        return long_q if str(fulltext_query_variant or "long").strip().lower() == "long" else short_q
     return long_q
 
 
@@ -2635,6 +2631,13 @@ def run_benchmark(
         "performance": perf_metrics,
         "runtime_seconds": total_runtime,
     }
+    metrics.update(
+        query_variant_metadata(
+            topics,
+            modes,
+            fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+        )
+    )
     metrics["resolved_config_lines"] = _build_resolved_config_lines(cfg, engine=report_engine, mode=mode, profile_name=profile_name)
     metrics["live_state_lines"] = _build_live_state_lines(cfg, engine=engine, modes=modes)
     metrics["diagnostics"] = diagnostics

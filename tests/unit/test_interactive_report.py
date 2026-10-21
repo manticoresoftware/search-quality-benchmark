@@ -23,6 +23,9 @@ def _write_metrics(
     version: str | None,
     *,
     engine: str = "qdrant",
+    mode: str = "vector",
+    dataset: str = "beir/scifact/test",
+    query_variant: str | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir()
@@ -30,13 +33,21 @@ def _write_metrics(
         "run_id": run_id,
         "run_at_unix": int(run_date.timestamp()),
         "engine": engine,
-        "mode": "vector",
-        "dataset_source": "beir/scifact/test",
-        "relevance": {"vector": {"ndcg@10": 0.5}},
-        "performance": {"vector": {"queries_total": 1}},
+        "mode": mode,
+        "dataset_source": dataset,
+        "relevance": {mode: {"ndcg@10": 0.5}},
+        "performance": {mode: {"queries_total": 1}},
     }
     if version is not None:
         payload["engine_version"] = version
+    if query_variant is not None:
+        payload.update(
+            {
+                "query_variant_requested": query_variant,
+                "query_variant": query_variant,
+                "query_variants_distinct": True,
+            }
+        )
     (run_dir / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -150,3 +161,110 @@ def test_report_template_assigns_engine_colors_from_embedded_data() -> None:
     assert "const ALL_ENGINE_KEYS = Object.keys(DATA.systems);" in generator.HTML_TEMPLATE
     assert "Object.fromEntries(ALL_ENGINE_KEYS.map((engine, index)" in generator.HTML_TEMPLATE
     assert "columnar: '#895af8'" not in generator.HTML_TEMPLATE
+
+
+def test_legacy_query_variants_split_only_when_topic_texts_differ() -> None:
+    generator = _load_report_generator()
+
+    assert generator.artifact_query_variant({}, "fulltext", True) == ("short", "short", True)
+    assert generator.artifact_query_variant({}, "vector", True) == ("long", "long", True)
+    assert generator.artifact_query_variant({}, "fulltext", False) == ("short", "same", False)
+    assert generator.artifact_query_variant({}, "vector", False) == ("long", "same", False)
+
+
+def test_recorded_long_fulltext_query_variant_is_preserved() -> None:
+    generator = _load_report_generator()
+    payload = {
+        "query_variant_requested": "long",
+        "query_variant": "long",
+        "query_variants_distinct": True,
+    }
+
+    assert generator.artifact_query_variant(payload, "fulltext", None) == ("long", "long", True)
+
+
+def test_unmarked_non_trec_fulltext_is_same_when_prepared_data_is_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    generator = _load_report_generator()
+    _write_metrics(
+        tmp_path,
+        "scifact-ft",
+        datetime(2026, 10, 1, tzinfo=UTC),
+        "1.2.3",
+        mode="fulltext",
+        dataset="beir/scifact/test",
+    )
+    monkeypatch.setattr(generator, "ARTIFACTS_DIR", tmp_path)
+    monkeypatch.setattr(generator, "PREPARED_DIR", tmp_path / "missing-prepared")
+
+    data = generator.collect_data()
+
+    assert data["runs"][0]["queryVariant"] == "same"
+    assert data["runs"][0]["queryVariantExplicit"] is False
+
+
+def test_selected_legacy_short_does_not_enable_short_without_recorded_short(
+    tmp_path: Path, monkeypatch
+) -> None:
+    generator = _load_report_generator()
+    run_date = datetime(2026, 10, 1, tzinfo=UTC)
+    _write_metrics(
+        tmp_path,
+        "legacy-short",
+        run_date,
+        "1.2.3",
+        mode="fulltext",
+        dataset="beir/trec-covid",
+    )
+    _write_metrics(
+        tmp_path,
+        "recorded-short",
+        run_date,
+        "1.2.3",
+        mode="fulltext",
+        dataset="beir/trec-covid",
+        query_variant="short",
+    )
+    _write_metrics(
+        tmp_path,
+        "long",
+        run_date,
+        "1.2.3",
+        mode="vector",
+        dataset="beir/trec-covid",
+    )
+    monkeypatch.setattr(generator, "ARTIFACTS_DIR", tmp_path)
+    monkeypatch.setattr(generator, "PREPARED_DIR", tmp_path / "missing-prepared")
+
+    default_data = generator.collect_data()
+    mistaken_data = generator.collect_data(default_run_ids={"legacy-short", "long"})
+    enabled_data = generator.collect_data(
+        default_run_ids={"legacy-short", "recorded-short"}
+    )
+
+    assert [run["runId"] for run in default_data["runs"]] == ["long"]
+    assert default_data["meta"]["excludedQueryCohortRuns"] == 2
+    assert [run["runId"] for run in mistaken_data["runs"]] == ["long"]
+    assert [run["runId"] for run in enabled_data["runs"]] == [
+        "legacy-short",
+        "long",
+        "recorded-short",
+    ]
+    assert enabled_data["runs"][0]["queryVariantExplicit"] is False
+    assert enabled_data["runs"][2]["queryVariantExplicit"] is True
+
+
+def test_only_a_selected_recorded_short_enables_inferred_short_runs() -> None:
+    generator = _load_report_generator()
+    runs = [
+        {"runId": "legacy-short", "dataset": "beir/trec-covid", "docs": 10, "queryVariant": "short", "queryVariantExplicit": False},
+        {"runId": "recorded-short", "dataset": "beir/trec-covid", "docs": 10, "queryVariant": "short", "queryVariantExplicit": True},
+        {"runId": "long", "dataset": "beir/trec-covid", "docs": 10, "queryVariant": "long", "queryVariantExplicit": True},
+    ]
+
+    mistaken = generator.query_cohort_runs(runs, {"legacy-short", "long"})
+    enabled = generator.query_cohort_runs(runs, {"recorded-short"})
+
+    assert mistaken == [runs[2]]
+    assert enabled == runs

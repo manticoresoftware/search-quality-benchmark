@@ -136,6 +136,24 @@ When several search modes are selected, each matrix cell uses the best result
 among those modes and labels the winning mode. Select exactly one mode for a
 fixed-mode comparison.
 
+Query wording is also part of the comparison identity. Each run records whether
+it used the prepared `short` or `long` query text. Reports keep distinct query
+sets in separate dataset cohorts, so an older short-query TREC-COVID full-text
+run is not mixed with long-query runs. If a dataset stores identical text in
+both fields, the run is labeled `same` and all modes remain comparable. By
+default, report generation includes the `same` cohort when available and
+otherwise the `long` cohort. A `short` cohort is included only when its run is
+explicitly recorded as `short` and that recorded-short run is selected for the
+report. Selecting a legacy unmarked run that is merely inferred as `short` does
+not enable the short cohort. Once a recorded-short run is selected, matching
+legacy inferred-short runs are also available to the report.
+
+This recorded-short gate is specific to TREC-COVID. For legacy artifacts from
+other current datasets, missing query-variant metadata resolves to `same`
+because their prepared `query_short` and `query_long` texts are identical.
+Prepared-topic inspection still takes precedence if a dataset actually contains
+different texts.
+
 Bundled SereneDB vector and hybrid profiles use exact vector scans. SereneDB
 26.10.1's ANN path was excluded after reproducible server crashes on repeated
 4096-dimensional queries; run artifacts identify the exact-search setting.

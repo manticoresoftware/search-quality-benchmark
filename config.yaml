@@ -66,6 +66,7 @@ manticore:
   fulltext_options: ""
   search_options: ""
   fulltext_query_mode: "or"
+  fulltext_query_variant: "long"
   fulltext_query_quorum: 0.5
   batch_size: 2000
   index_concurrency: 16
