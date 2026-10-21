@@ -31,7 +31,7 @@ from .table_filters import (
     fit_text,
     prompt_filter_value,
 )
-from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
+from .table_layout import dynamic_row_lines, fit_column_widths, wrap_cell, wrap_text_lines
 
 _fit = fit_text
 _DATASET_KEYS = {"source", "prepared_dir", "max_docs", "keep_qrels_docs"}
@@ -960,13 +960,21 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             curses.init_pair(7, curses.COLOR_YELLOW, -1)   # engine: mariadb
             curses.init_pair(13, curses.COLOR_CYAN, -1)     # engine: weaviate
             curses.init_pair(14, curses.COLOR_GREEN, -1)    # engine: vespa
-        widths = {
+        preferred_widths = {
             "sel": 3,
             "entry": 18,
             "engine": 10,
             "mode": 9,
             "target": 24,
             "model": 45,
+        }
+        minimum_widths = {
+            "sel": 3,
+            "entry": 12,
+            "engine": 8,
+            "mode": 7,
+            "target": 12,
+            "model": 12,
         }
         sort_cols = ["entry", "engine", "mode", "target", "model"]
         sort_idx = 0
@@ -1044,6 +1052,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
+            widths = fit_column_widths(preferred_widths, minimum_widths, max(1, w - 1))
             row_h = dynamic_row_lines(len(variants), h)
             stdscr.addstr(0, 0, fit_text("↑/↓ move  ←/→ sort col  SPACE toggle  f filter  ENTER run selected  ESC/q cancel", max(1, w - 1)), curses.A_BOLD)
             filter_lines = filter_block_height(filters, widths)
@@ -1087,6 +1096,13 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                     history_status=_history_status(variants[ridx]),
                     target_status=_target_status(variants[ridx]),
                 )
+            if not variants:
+                message = (
+                    "No run targets match the active filters."
+                    if filters
+                    else "No available run targets. Start the required engine first."
+                )
+                stdscr.addstr(rows_y, 0, fit_text(message, max(1, w - 1)), curses.A_DIM)
             if variants:
                 _draw_details_panel(
                     stdscr,
@@ -1106,7 +1122,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
             if ch in (curses.KEY_UP, ord("k")):
                 current = max(0, current - 1)
             elif ch in (curses.KEY_DOWN, ord("j")):
-                current = min(len(variants) - 1, current + 1)
+                if variants:
+                    current = min(len(variants) - 1, current + 1)
             elif ch == curses.KEY_LEFT:
                 sort_idx = (sort_idx - 1) % len(sort_cols)
                 sort_key = sort_cols[sort_idx]
@@ -1129,12 +1146,13 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                         filters.pop(sort_key, None)
                     _apply_sort()
             elif ch == ord(" "):
-                if current in selected_idx:
-                    selected_idx.remove(current)
-                else:
-                    selected_idx.add(current)
+                if variants:
+                    if current in selected_idx:
+                        selected_idx.remove(current)
+                    else:
+                        selected_idx.add(current)
             elif ch in (10, 13, curses.KEY_ENTER):
-                return sorted(selected_idx)
+                return sorted(selected_idx) if variants else []
             elif ch == 27 or ch in (ord("q"),):
                 return []
 

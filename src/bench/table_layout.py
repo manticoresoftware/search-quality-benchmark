@@ -3,6 +3,44 @@ from __future__ import annotations
 from .table_filters import fit_text
 
 
+def fit_column_widths(
+    preferred: dict[str, int],
+    minimum: dict[str, int],
+    max_width: int,
+) -> dict[str, int]:
+    """Shrink table columns to fit without letting curses wrap a row."""
+    keys = list(preferred)
+    if not keys:
+        return {}
+
+    content_budget = max(0, int(max_width) - (len(keys) - 1))
+    widths = {key: 0 for key in keys}
+
+    # Give every column a cell when the terminal is wide enough, then grow all
+    # columns fairly toward their minimum and preferred sizes.
+    for key in keys:
+        if content_budget <= 0:
+            break
+        widths[key] = 1
+        content_budget -= 1
+
+    for limits in (minimum, preferred):
+        while content_budget > 0:
+            grew = False
+            for key in keys:
+                limit = max(0, int(limits.get(key, preferred[key])))
+                if widths[key] >= limit:
+                    continue
+                widths[key] += 1
+                content_budget -= 1
+                grew = True
+                if content_budget <= 0:
+                    break
+            if not grew:
+                break
+    return widths
+
+
 def wrap_text_lines(text: str, width: int) -> list[str]:
     if width <= 1:
         return [text[: max(0, width)]]

@@ -29,7 +29,7 @@ from .table_filters import (
     fit_text,
     prompt_filter_value,
 )
-from .table_layout import dynamic_row_lines, wrap_cell, wrap_text_lines
+from .table_layout import dynamic_row_lines, fit_column_widths, wrap_cell, wrap_text_lines
 
 _fit = fit_text
 _DATASET_KEYS = {"source", "prepared_dir", "max_docs", "keep_qrels_docs"}
@@ -769,6 +769,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(3, curses.COLOR_BLUE, -1)    # full-text
             curses.init_pair(4, curses.COLOR_WHITE, -1)   # vector
             curses.init_pair(5, curses.COLOR_CYAN, -1)    # meilisearch
+            curses.init_pair(6, curses.COLOR_MAGENTA, -1)  # hybrid / milvus / manticore avgdl
             curses.init_pair(9, curses.COLOR_MAGENTA, -1) # opensearch
             curses.init_pair(12, curses.COLOR_BLUE, -1)   # elasticsearch
             curses.init_pair(11, curses.COLOR_RED, -1)    # typesense
@@ -778,7 +779,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_RED)     # target pending
             curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)  # target unexpected
 
-        widths = {
+        preferred_widths = {
             "sel": 3,
             "engine": 10,
             "target": 22,
@@ -786,6 +787,15 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             "used_by": 38,
             "model": 38,
             "batch": 8,
+        }
+        minimum_widths = {
+            "sel": 3,
+            "engine": 8,
+            "target": 12,
+            "kind": 7,
+            "used_by": 12,
+            "model": 12,
+            "batch": 5,
         }
         sort_cols = ["engine", "target", "kind", "used_by", "model", "batch"]
         sort_idx = 0
@@ -859,6 +869,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
         while True:
             stdscr.erase()
             h, w = stdscr.getmaxyx()
+            widths = fit_column_widths(preferred_widths, minimum_widths, max(1, w - 1))
             row_h = dynamic_row_lines(len(variants), h)
             stdscr.addstr(
                 0,
@@ -906,6 +917,13 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                     row_lines=row_h,
                     target_status=_get_status(variants[ridx]),
                 )
+            if not variants:
+                message = (
+                    "No index targets match the active filters."
+                    if filters
+                    else "No available index targets. Start an engine from `bench engines`."
+                )
+                stdscr.addstr(rows_y, 0, fit_text(message, max(1, w - 1)), curses.A_DIM)
             if variants:
                 _draw_details_panel(
                     stdscr,
@@ -943,7 +961,8 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             if ch in (curses.KEY_UP, ord("k")):
                 current = max(0, current - 1)
             elif ch in (curses.KEY_DOWN, ord("j")):
-                current = min(len(variants) - 1, current + 1)
+                if variants:
+                    current = min(len(variants) - 1, current + 1)
             elif ch == curses.KEY_LEFT:
                 sort_idx = (sort_idx - 1) % len(sort_cols)
                 sort_key = sort_cols[sort_idx]
@@ -966,12 +985,13 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                         filters.pop(sort_key, None)
                     _apply_sort()
             elif ch == ord(" "):
-                if current in selected_idx:
-                    selected_idx.remove(current)
-                else:
-                    selected_idx.add(current)
+                if variants:
+                    if current in selected_idx:
+                        selected_idx.remove(current)
+                    else:
+                        selected_idx.add(current)
             elif ch in (10, 13, curses.KEY_ENTER):
-                return sorted(selected_idx)
+                return sorted(selected_idx) if variants else []
             elif ch == 27 or ch in (ord("q"),):
                 return []
 
