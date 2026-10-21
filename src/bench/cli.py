@@ -583,6 +583,34 @@ def _resolve_entry_cfg(
     return fallback_cfg, engine, None
 
 
+def _print_index_results(results: list[object], *, engine: str) -> None:
+    for result in results:
+        mode = str(getattr(result, "mode", "") or "-")
+        duration = float(getattr(result, "duration_seconds", 0.0) or 0.0)
+        inserted = int(getattr(result, "rows_inserted", 0) or 0)
+        docs_per_second = float(getattr(result, "docs_per_second", 0.0) or 0.0)
+        print(
+            f"Index completed [{engine}:{mode}] inserted={inserted} "
+            f"total_elapsed={duration:.1f}s avg_rate={docs_per_second:.1f} docs/s"
+        )
+
+        retried = int(getattr(result, "retried_batches", 0) or 0)
+        failed = int(getattr(result, "failed_batches", 0) or 0)
+        reasons = dict(getattr(result, "error_reasons", {}) or {})
+        if retried <= 0 and failed <= 0 and not reasons:
+            continue
+        print(f"Index issues [{mode}]: retries={retried} failed={failed}")
+        if reasons:
+            for reason, count in sorted(
+                reasons.items(), key=lambda item: (-int(item[1]), str(item[0]))
+            )[:8]:
+                print(f"  {count:>4}  {reason}")
+        else:
+            last_error = str(getattr(result, "last_error", "") or "").strip()
+            if last_error:
+                print(f"  last error: {last_error}")
+
+
 def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
     is_tty = sys.stdout.isatty()
     last_by_key: dict[tuple[str, str], float] = {}
@@ -689,23 +717,6 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             print(line, flush=True)
         last_by_key[key] = now
 
-    def _print_index_result_details(results: list[object]) -> None:
-        for result in results:
-            retried = int(getattr(result, "retried_batches", 0) or 0)
-            failed = int(getattr(result, "failed_batches", 0) or 0)
-            reasons = dict(getattr(result, "error_reasons", {}) or {})
-            if retried <= 0 and failed <= 0 and not reasons:
-                continue
-            mode = str(getattr(result, "mode", "") or "-")
-            print(f"Index issues [{mode}]: retries={retried} failed={failed}")
-            if reasons:
-                for reason, count in sorted(reasons.items(), key=lambda item: (-int(item[1]), str(item[0])))[:8]:
-                    print(f"  {count:>4}  {reason}")
-            else:
-                last_error = str(getattr(result, "last_error", "") or "").strip()
-                if last_error:
-                    print(f"  last error: {last_error}")
-
     try:
         if args.mode is None and args.engine is None:
             variants = build_index_variants_from_config_paths(discover_config_paths())
@@ -755,7 +766,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 )
                 model_note = f" model={v.model}" if v.mode == "vector" else ""
                 print(f"Indexed profile={v.entry} engine={v.engine} mode={v.mode}{model_note} run_id={run_id}")
-                _print_index_result_details(results)
+                _print_index_results(results, engine=v.engine)
             print(f"Index batch completed: {len(selected)} runs")
             return 0
 
@@ -812,7 +823,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
         )
         model_note = f" model={resolved_embedding_model(cfg_for_engine)}" if args.mode in ("vector", "hybrid") else ""
         print(f"Indexed profile={entry_name} engine={engine} mode={args.mode}{model_note}")
-        _print_index_result_details(results)
+        _print_index_results(results, engine=engine)
         return 0
     except KeyboardInterrupt:
         if is_tty:

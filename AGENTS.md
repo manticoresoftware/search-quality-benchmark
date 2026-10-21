@@ -171,7 +171,7 @@ bench
 Main actions:
 1. `engines`: start/stop Docker-backed engines and watch their status/load live.
 2. `prepare`: choose one or more dataset sources and download/prepare corpus/topics/qrels.
-3. `index`: build search indexes/tables for selected engine+mode (opens interactive index matrix when selected from `bench`; prints live indexing progress with `processed/total`, percent, inserted rows, retries/failures, elapsed seconds).
+3. `index`: build search indexes/tables for selected engine+mode (opens interactive index matrix when selected from `bench`; prints live indexing progress with `processed/total`, percent, inserted rows, retries/failures, elapsed seconds; after each task, prints a completion summary whose `total_elapsed` covers ingestion plus any engine-side synchronization/finalization and whose average rate uses that total).
 4. `run`: execute topic queries with fixed benchmark settings and compute metrics (opens interactive run matrix; variants come from named config profiles and include `PROFILE`, `ENGINE`, `MODE`, `MODEL/OPTS`).
 5. `report`: render combined Markdown and standalone interactive HTML reports from selected artifacts.
 
