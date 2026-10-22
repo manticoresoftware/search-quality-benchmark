@@ -24,6 +24,37 @@ class _BellStream:
         self.flushed = True
 
 
+class _TTYInput:
+    def isatty(self) -> bool:
+        return True
+
+
+class _MenuScreen:
+    def __init__(self) -> None:
+        self.timeouts: list[int] = []
+
+    def keypad(self, _enabled: bool) -> None:
+        pass
+
+    def timeout(self, delay: int) -> None:
+        self.timeouts.append(delay)
+
+    def erase(self) -> None:
+        pass
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return (24, 100)
+
+    def addstr(self, *_args: Any) -> None:
+        pass
+
+    def refresh(self) -> None:
+        pass
+
+    def getch(self) -> int:
+        return ord("q")
+
+
 def test_terminal_bell_writes_and_flushes_bel(monkeypatch: Any) -> None:
     stream = _BellStream()
     monkeypatch.setattr(cli.sys, "stdout", stream)
@@ -32,6 +63,18 @@ def test_terminal_bell_writes_and_flushes_bel(monkeypatch: Any) -> None:
 
     assert stream.value == "\a"
     assert stream.flushed is True
+
+
+def test_main_menu_clears_timeout_inherited_from_engines(monkeypatch: Any) -> None:
+    screen = _MenuScreen()
+    monkeypatch.setattr(cli.sys, "stdin", _TTYInput())
+    monkeypatch.setattr(cli.sys, "stdout", _BellStream())
+    monkeypatch.setattr(cli.curses, "curs_set", lambda _value: None)
+    monkeypatch.setattr(cli.curses, "has_colors", lambda: False)
+    monkeypatch.setattr(cli.curses, "wrapper", lambda callback: callback(screen))
+
+    assert cli._select_top_command_interactive() is None
+    assert screen.timeouts == [-1]
 
 
 def test_no_argument_tui_returns_to_main_menu_after_submenus(monkeypatch: Any) -> None:

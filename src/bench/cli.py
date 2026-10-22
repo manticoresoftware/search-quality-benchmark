@@ -64,6 +64,7 @@ def _select_simple_option_interactive(title: str, options: list[tuple[str, str]]
                 current = 0
                 curses.curs_set(0)
                 stdscr.keypad(True)  # type: ignore[attr-defined]
+                stdscr.timeout(-1)  # type: ignore[attr-defined]
                 while True:
                     stdscr.erase()  # type: ignore[attr-defined]
                     h, w = stdscr.getmaxyx()  # type: ignore[attr-defined]
@@ -115,6 +116,10 @@ def _select_top_command_interactive() -> str | None:
                 current = 0
                 curses.curs_set(0)
                 stdscr.keypad(True)  # type: ignore[attr-defined]
+                # The engines screen uses timed reads for live refreshes. Curses
+                # keeps that delay on stdscr across wrapper() calls, so restore
+                # normal blocking input before drawing another menu.
+                stdscr.timeout(-1)  # type: ignore[attr-defined]
                 if curses.has_colors():
                     curses.start_color()
                     curses.use_default_colors()

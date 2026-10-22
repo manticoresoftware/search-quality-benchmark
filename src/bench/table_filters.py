@@ -67,6 +67,10 @@ def prompt_filter_value(
     prompt_text = prompt[: max(0, w - 1)]
     curses.echo()
     try:
+        # A previous live-refresh screen may have left stdscr with a short input
+        # timeout. Filter entry must wait for the user instead of accepting an
+        # empty value as soon as that timeout expires.
+        stdscr.timeout(-1)
         stdscr.move(y, 0)
         stdscr.clrtoeol()
         stdscr.addstr(y, 0, prompt_text, curses.A_BOLD)

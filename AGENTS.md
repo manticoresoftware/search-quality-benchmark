@@ -183,6 +183,11 @@ Once the command returns, the dispatcher emits one terminal bell before drawing
 the main menu again. Canceling before work starts does not ring, and explicitly
 invoked subcommands remain one-shot and do not emit the main-menu bell.
 
+The live engine window uses timed curses reads for periodic refreshes. Blocking
+menus and table filter prompts explicitly restore blocking reads because curses
+can retain the engine window's timeout across successive `wrapper()` calls in
+the same `bench` process.
+
 Note:
 
 The index selector combines options discovered from all local `config*.yaml`
