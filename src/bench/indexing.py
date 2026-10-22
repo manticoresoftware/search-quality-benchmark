@@ -138,7 +138,24 @@ def _run_index_manticore(
     cfg: AppConfig,
     mode: str,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    allow_shared_fulltext_recreate: bool = False,
 ) -> list[ModeIndexResult]:
+    shared_fulltext_table = (
+        mode == "fulltext"
+        and str(cfg.manticore.fulltext_table) == str(cfg.manticore.vector_table)
+    )
+    if shared_fulltext_table and not allow_shared_fulltext_recreate:
+        preflight_client = ManticoreClient(cfg.manticore)
+        try:
+            if preflight_client.table_exists(cfg.manticore.fulltext_table):
+                raise RuntimeError(
+                    "Refusing to recreate an existing shared Manticore full-text/vector table "
+                    "as full-text-only because that removes its vector field and data. "
+                    "Use mode=hybrid, configure distinct table names, or explicitly allow the destructive rebuild."
+                )
+        finally:
+            preflight_client.close()
+
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
     if progress_callback is not None:
         progress_callback(
@@ -2607,9 +2624,15 @@ def run_index(
     mode: str,
     resume: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    allow_shared_manticore_fulltext_recreate: bool = False,
 ) -> list[ModeIndexResult]:
     if is_manticore_like_type(engine):
-        return _run_index_manticore(cfg, mode=mode, progress_callback=progress_callback)
+        return _run_index_manticore(
+            cfg,
+            mode=mode,
+            progress_callback=progress_callback,
+            allow_shared_fulltext_recreate=allow_shared_manticore_fulltext_recreate,
+        )
     if engine == "qdrant":
         return _run_index_qdrant(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "meilisearch":

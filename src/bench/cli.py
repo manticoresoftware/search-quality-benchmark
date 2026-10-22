@@ -179,77 +179,93 @@ def _select_top_command_interactive() -> str | None:
     return None
 
 
-def _confirm_manticore_vector_reindex_if_needed(
-    cfg: AppConfig, *, needs_vector_reindex: bool, auto_yes: bool = False
-) -> bool:
-    if not needs_vector_reindex:
-        return True
-
-    client = ManticoreClient(cfg.manticore)
-    try:
-        vec_exists = client.table_exists(cfg.manticore.vector_table)
-    finally:
-        client.close()
-
-    if not vec_exists:
-        return True
-    if auto_yes:
-        return True
-
-    message = (
-        "\nManticore vector benchmark table already exists:\n"
-        f"- vector: {cfg.manticore.vector_table}\n\n"
-        "Indexing in vector mode will drop and recreate this table.\n"
-        "Cached vectors are reused; cache misses now fail and must be built during `bench prepare`.\n"
-        "Type 'yes' to continue: "
-    )
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            "Refusing to recreate existing Manticore vector benchmark table in non-interactive mode. "
-            "Re-run with `bench index --yes ...`."
-        )
-    answer = input(message).strip().lower()
-    return answer == "yes"
+def _manticore_destructive_reindex_target(
+    cfg: AppConfig, mode: str
+) -> tuple[str, bool] | None:
+    """Return (table, removes_vectors) when a Manticore mode can replace vector data."""
+    if mode == "fulltext":
+        if str(cfg.manticore.fulltext_table) != str(cfg.manticore.vector_table):
+            return None
+        return str(cfg.manticore.fulltext_table), True
+    if mode == "vector":
+        return str(cfg.manticore.vector_table), False
+    if mode == "hybrid":
+        if str(cfg.manticore.fulltext_table) != str(cfg.manticore.vector_table):
+            return None
+        return str(cfg.manticore.fulltext_table), False
+    return None
 
 
-def _confirm_manticore_vector_reindex_for_configs(
-    cfgs: list[AppConfig], *, auto_yes: bool = False
-) -> bool:
-    existing: list[tuple[str, int, str]] = []
-    seen: set[tuple[str, int, str, str, str]] = set()
-    for cfg in cfgs:
+def _existing_manticore_reindex_plans(
+    plans: list[tuple[AppConfig, str]],
+) -> list[tuple[str, int, str, str, bool]]:
+    existing: list[tuple[str, int, str, str, bool]] = []
+    seen: set[tuple[str, int, str, str, str, str]] = set()
+    for cfg, mode in plans:
+        target = _manticore_destructive_reindex_target(cfg, mode)
+        if target is None:
+            continue
+        table, removes_vectors = target
         key = (
             cfg.manticore.host,
             int(cfg.manticore.sql_port),
             cfg.manticore.user,
             cfg.manticore.password,
-            cfg.manticore.vector_table,
+            table,
+            mode,
         )
         if key in seen:
             continue
         seen.add(key)
         client = ManticoreClient(cfg.manticore)
         try:
-            if client.table_exists(cfg.manticore.vector_table):
-                existing.append((cfg.manticore.host, int(cfg.manticore.sql_port), cfg.manticore.vector_table))
+            if client.table_exists(table):
+                existing.append(
+                    (
+                        cfg.manticore.host,
+                        int(cfg.manticore.sql_port),
+                        table,
+                        mode,
+                        removes_vectors,
+                    )
+                )
         finally:
             client.close()
+    return existing
 
-    if not existing:
+
+def _confirm_manticore_reindex_plans(
+    plans: list[tuple[AppConfig, str]], *, auto_yes: bool = False
+) -> bool:
+    existing = _existing_manticore_reindex_plans(plans)
+    if not existing or auto_yes:
         return True
-    if auto_yes:
-        return True
+
     if not sys.stdin.isatty():
         raise RuntimeError(
-            "Refusing to recreate existing Manticore vector benchmark table(s) in non-interactive mode. "
-            "Re-run with `bench index --yes ...`."
+            "Refusing to recreate existing Manticore benchmark table(s) in non-interactive mode. "
+            "A shared full-text/vector table may lose its vector index and data. "
+            "Re-run with `bench index --yes ...` to confirm the destructive rebuild."
         )
-    tables_text = "\n".join(f"- {h}:{p} table={t}" for h, p, t in existing)
+
+    table_lines: list[str] = []
+    removes_vectors = False
+    for host, port, table, mode, removes in existing:
+        effect = "removes vector field/data" if removes else "rebuilds vector field/data"
+        table_lines.append(f"- {host}:{port} table={table} mode={mode} ({effect})")
+        removes_vectors = removes_vectors or removes
+    tables_text = "\n".join(table_lines)
     message = (
-        "\nManticore vector benchmark table(s) already exist:\n"
+        "\nExisting Manticore benchmark table(s) will be dropped and recreated:\n"
         f"{tables_text}\n\n"
-        "Indexing in vector mode will drop and recreate these table(s).\n"
-        "Cached vectors are reused; cache misses now fail and must be built during `bench prepare`.\n"
+    )
+    if removes_vectors:
+        message += (
+            "A full-text-only rebuild of a shared table removes its existing vector index and vectors.\n"
+            "Use mode=hybrid to rebuild the combined table, or configure different table names to keep them separate.\n"
+        )
+    message += (
+        "Vector-capable rebuilds reuse cached vectors; cache misses must be built during `bench prepare`.\n"
         "Type 'yes' to continue: "
     )
     answer = input(message).strip().lower()
@@ -745,15 +761,13 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 ):
                     print("Index canceled: vector cache coverage not confirmed.")
                     return 0
-            manticore_vector_cfgs = [
-                v.cfg
-                for v in selected
-                if is_manticore_like_type(v.engine) and v.target_kind == "vector"
+            manticore_reindex_plans = [
+                (v.cfg, v.mode) for v in selected if is_manticore_like_type(v.engine)
             ]
-            if not _confirm_manticore_vector_reindex_for_configs(
-                manticore_vector_cfgs, auto_yes=bool(args.yes)
+            if not _confirm_manticore_reindex_plans(
+                manticore_reindex_plans, auto_yes=bool(args.yes)
             ):
-                print("Index canceled: Manticore vector reindex not confirmed.")
+                print("Index canceled: Manticore destructive reindex not confirmed.")
                 return 0
             _mark_long_task_started(args)
             for v in selected:
@@ -768,6 +782,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                     mode=v.mode,
                     resume=bool(args.resume),
                     progress_callback=_progress,
+                    allow_shared_manticore_fulltext_recreate=is_manticore_like_type(v.engine),
                 )
                 model_note = f" model={v.model}" if v.mode == "vector" else ""
                 print(f"Indexed profile={v.entry} engine={v.engine} mode={v.mode}{model_note} run_id={run_id}")
@@ -792,8 +807,8 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 f"Requested mode '{args.mode}' is not allowed."
             )
         if is_manticore_like_type(engine):
-            needs_vector_reindex = args.mode == "vector"
-            if needs_vector_reindex and not _confirm_vector_cache_coverage(
+            needs_vector_cache = args.mode in ("vector", "hybrid")
+            if needs_vector_cache and not _confirm_vector_cache_coverage(
                 cfg=cfg_for_engine,
                 engine=engine,
                 entry_name=entry_name,
@@ -801,10 +816,10 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             ):
                 print("Index canceled: vector cache coverage not confirmed.")
                 return 0
-            if not _confirm_manticore_vector_reindex_if_needed(
-                cfg_for_engine, needs_vector_reindex=needs_vector_reindex, auto_yes=bool(args.yes)
+            if not _confirm_manticore_reindex_plans(
+                [(cfg_for_engine, args.mode)], auto_yes=bool(args.yes)
             ):
-                print("Index canceled: Manticore vector reindex not confirmed.")
+                print("Index canceled: Manticore destructive reindex not confirmed.")
                 return 0
         elif args.mode in ("vector", "hybrid"):
             if not _confirm_vector_cache_coverage(
@@ -825,6 +840,7 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             mode=args.mode,
             resume=bool(args.resume),
             progress_callback=_progress,
+            allow_shared_manticore_fulltext_recreate=is_manticore_like_type(engine),
         )
         model_note = f" model={resolved_embedding_model(cfg_for_engine)}" if args.mode in ("vector", "hybrid") else ""
         print(f"Indexed profile={entry_name} engine={engine} mode={args.mode}{model_note}")
@@ -970,7 +986,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_index.add_argument(
         "--yes",
         action="store_true",
-        help="Skip Manticore vector table recreation confirmation",
+        help="Confirm destructive Manticore table recreation",
     )
     p_index.add_argument(
         "--resume",

@@ -51,6 +51,11 @@ The normal workflow is:
 3. `index` — create and populate indexes for selected engine profiles. Shared
    targets expose separate full-text and vector-capable builds, so an engine can
    still participate in lexical comparisons when its vector build is impractical.
+   In Manticore, matching `fulltext_table` and `vector_table` names refer to one
+   physical table. Rebuilding that target as full-text-only removes its vector
+   field and data, so the CLI requires explicit confirmation when the table
+   already exists. Use the hybrid build to retain both modes, or configure
+   distinct table names.
    Each completed task prints its total elapsed indexing time, including
    engine-side synchronization or finalization after document ingestion.
 4. `run` — execute benchmark queries and write run artifacts.

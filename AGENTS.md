@@ -196,7 +196,14 @@ separate even when they write to the same physical target. A full-text-only buil
 therefore remains available for engines or datasets whose vector index is too
 expensive. Vector and hybrid profiles that share one vector-capable build are
 still deduplicated into one row; for a combined Manticore table that row executes
-the required hybrid indexing action.
+the required hybrid indexing action. When Manticore `fulltext_table` and
+`vector_table` resolve to the same existing table, a full-text-only build would
+drop the table and recreate it without the vector field. Interactive indexing
+therefore requires an explicit `yes` confirmation, and non-interactive indexing
+refuses the rebuild unless `--yes` is supplied. Use the hybrid build to recreate
+and retain the combined schema, or configure distinct table names. The indexing
+backend applies the same guard by default; programmatic callers must opt in with
+`allow_shared_manticore_fulltext_recreate=True` after handling confirmation.
 
 `prepare` also supports direct filtering:
 - `bench --config config.yaml prepare --source msmarco-passage/dev/small`
