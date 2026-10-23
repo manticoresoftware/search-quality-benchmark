@@ -14,6 +14,7 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Manticore hybrid
 - Qdrant full-text-like sparse retrieval (BM25 in Qdrant sparse vectors)
 - Qdrant dense vector retrieval (vectors sourced from the shared cache)
+- Qdrant hybrid search (native Query API prefetch + weighted reciprocal-rank fusion)
 - Meilisearch lexical search
 - Meilisearch vector search (user-provided vectors from the shared cache)
 - Meilisearch hybrid search (query text + cached query vector)
@@ -212,15 +213,22 @@ files (excluding templates). It keeps full-text and vector-capable build actions
 separate even when they write to the same physical target. A full-text-only build
 therefore remains available for engines or datasets whose vector index is too
 expensive. Vector and hybrid profiles that share one vector-capable build are
-still deduplicated into one row; for a combined Manticore table that row executes
-the required hybrid indexing action. When Manticore `fulltext_table` and
-`vector_table` resolve to the same existing table, a full-text-only build would
-drop the table and recreate it without the vector field. Interactive indexing
-therefore requires an explicit `yes` confirmation, and non-interactive indexing
-refuses the rebuild unless `--yes` is supplied. Use the hybrid build to recreate
-and retain the combined schema, or configure distinct table names. The indexing
-backend applies the same guard by default; programmatic callers must opt in with
-`allow_shared_manticore_fulltext_recreate=True` after handling confirmation.
+still deduplicated into one row; for combined Manticore and Qdrant targets that
+row executes the required hybrid indexing action.
+
+When Manticore `fulltext_table`/`vector_table` or Qdrant
+`bm25_collection`/`dense_collection` resolve to the same existing target, a
+full-text-only build would drop the target and recreate it without the dense
+vector field. Manticore interactive indexing requires an explicit `yes`.
+Qdrant interactive indexing offers `yes`, `skip`, or `cancel`, so a selected
+full-text-only action can be omitted while other builds continue. Non-interactive
+indexing refuses either destructive rebuild unless `--yes` is supplied. Use the
+hybrid build to recreate and retain the combined schema, or configure distinct
+target names for isolated full-text/vector indexes; Qdrant native hybrid is not
+available with separate collections. The indexing backend applies the same guard by default;
+programmatic callers must opt in with
+`allow_shared_manticore_fulltext_recreate=True` or
+`allow_shared_qdrant_fulltext_recreate=True` after handling confirmation.
 
 `prepare` also supports direct filtering:
 - `bench --config config.yaml prepare --source msmarco-passage/dev/small`
@@ -298,7 +306,12 @@ embedding:
 - `manticore.vector_search_oversampling`: KNN query oversampling factor
 - `manticore.vector_search_rescore`: `1`/`0` to enable/disable rescoring
 
-### Qdrant Dense Quantization/Search Config
+### Qdrant Index, Hybrid, and Dense Search Config
+- `qdrant.index_layout`: `combined` makes the index selector represent the shared dense+sparse build as a hybrid indexing action
+- `qdrant.bm25_collection` / `qdrant.dense_collection`: use the same name for native hybrid search
+- `qdrant.hybrid_rrf_k`: native Qdrant RRF constant; bundled value `61` preserves the former client RRF denominators (`60 + one-based rank`)
+- `qdrant.hybrid_sparse_weight` / `qdrant.hybrid_dense_weight`: weights passed to native Qdrant RRF in sparse/dense prefetch order
+- `qdrant.hybrid_candidates`: candidate limit for each native hybrid prefetch branch
 - `qdrant.dense_binary_quantization`: enable binary quantization for dense collection
 - `qdrant.dense_binary_always_ram`: keep quantized vectors in RAM
 - `qdrant.dense_binary_query_encoding`: `default|binary|scalar4bits|scalar8bits`
@@ -414,11 +427,14 @@ manticore_bm25:
   search_options: "ranker=bm25"
 
 qdrant:
-  dense_collection: "trec_covid_qdrant_dense"
+  index_layout: "combined"
+  bm25_collection: "trec_covid_qdrant"
+  dense_collection: "trec_covid_qdrant"
 
 qdrant_bq:
   base: "qdrant"
-  dense_collection: "trec_covid_qdrant_dense_bq"
+  bm25_collection: "trec_covid_qdrant_bq"
+  dense_collection: "trec_covid_qdrant_bq"
   dense_binary_quantization: true
 
 manticore_vector_only:
@@ -436,21 +452,20 @@ manticore_vector_only:
   - `HNSW_SIMILARITY` from config (`manticore.vector_similarity`)
   - optional `quantization` from config (`vector_quantization`)
   - indexing is cache-first; cache misses are an error until you run `bench prepare`
-- Qdrant collections:
-  - sparse BM25 collection name: `qdrant.bm25_collection`
-  - dense collection name: `qdrant.dense_collection`
-- Qdrant BM25 collection defaults (`qdrant.bm25_collection`):
+- Qdrant combined collection defaults:
+  - `qdrant.bm25_collection` and `qdrant.dense_collection` name the same physical collection in bundled profiles
   - points keyed by document `id`
-  - native Qdrant sparse BM25 model (`Qdrant/bm25`) is used for indexing/querying
-  - sparse vector field is handled by Qdrant server-side inference
-  - payload fields: `doc_id`, `title`, `abstract`, `doi`, `date`
-- Qdrant dense collection defaults (`qdrant.dense_collection`):
-  - points keyed by document `id`
+  - the Qdrant client FastEmbed integration uses the `Qdrant/bm25` model to generate sparse vectors for indexing/querying
+  - Qdrant stores and scores those sparse vectors natively; the IDF modifier is applied from collection statistics
   - dense vector field from `qdrant.dense_vector_name` (default `dense`)
   - distance metric: cosine
   - vector dimensionality inferred from cached vectors
   - payload fields: `doc_id`, `title`, `abstract`, `doi`, `date`
   - vectors are loaded from local vector cache
+  - hybrid indexing writes the sparse and dense named vectors on every point
+  - hybrid querying sends sparse and dense prefetches in one Query API request and applies native weighted RRF in Qdrant
+  - the hybrid build supports all three run modes; a vector-only build is rejected for a shared collection because it would remove BM25
+  - a full-text-only build is still available, but recreates the collection without dense vectors and is protected by CLI and backend guards
 - Meilisearch indexes:
   - combined index name: `meilisearch.index_name`
   - lexical, vector, and hybrid all use the same physical index
@@ -596,9 +611,10 @@ Behavior:
   - uses cache only,
   - fails on cache misses,
   - reuses the same cached document/query vectors as the other engines for fair comparison.
-- Qdrant vector indexing:
+- Qdrant vector-capable indexing:
   - uses cache only,
-  - fails on cache misses.
+  - fails on cache misses,
+  - uses the hybrid build for bundled combined collections, populating both native BM25 sparse vectors and cached dense vectors.
 - Meilisearch vector indexing:
   - uses cache only,
   - fails on cache misses,

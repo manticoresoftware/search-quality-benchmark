@@ -109,8 +109,9 @@ qdrant:
   timeout_seconds: 60
   batch_size: 2000
   index_concurrency: 8
-  dense_collection: "trec_covid_qdrant_vector"
-  bm25_collection: "trec_covid_qdrant_fulltext"
+  index_layout: "combined"
+  dense_collection: "trec_covid_qdrant"
+  bm25_collection: "trec_covid_qdrant"
   dense_vector_name: "dense"
   sparse_vector_name: "bm25"
   dense_binary_quantization: false
@@ -119,6 +120,10 @@ qdrant:
   dense_search_quantization_rescore:
   dense_search_quantization_oversampling:
   dense_search_quantization_ignore: false
+  hybrid_rrf_k: 61
+  hybrid_sparse_weight: 1.0
+  hybrid_dense_weight: 1.0
+  hybrid_candidates: 200
 
 qdrant_vector_1bit:
   base: "qdrant"
@@ -382,18 +387,20 @@ trec_covid_columnar_hybrid:
 trec_covid_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
-  bm25_collection: "trec_covid_qdrant_fulltext"
+  bm25_collection: "trec_covid_qdrant"
+  dense_collection: "trec_covid_qdrant"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 trec_covid_qdrant_vector:
   base: "qdrant_vector_1bit"
-  dense_collection: "trec_covid_qdrant_vector"
+  dense_collection: "trec_covid_qdrant"
+  bm25_collection: "trec_covid_qdrant"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 trec_covid_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
-  bm25_collection: "trec_covid_qdrant_fulltext"
-  dense_collection: "trec_covid_qdrant_vector"
+  bm25_collection: "trec_covid_qdrant"
+  dense_collection: "trec_covid_qdrant"
   vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
 
 trec_covid_meilisearch_fulltext:
@@ -600,20 +607,22 @@ msmarco_passage_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "msmarco-passage/dev/small"
-  bm25_collection: "msmarco_passage_qdrant_fulltext"
+  bm25_collection: "msmarco_passage_qdrant"
+  dense_collection: "msmarco_passage_qdrant"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "msmarco-passage/dev/small"
-  dense_collection: "msmarco_passage_qdrant_vector"
+  dense_collection: "msmarco_passage_qdrant"
+  bm25_collection: "msmarco_passage_qdrant"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "msmarco-passage/dev/small"
-  bm25_collection: "msmarco_passage_qdrant_fulltext"
-  dense_collection: "msmarco_passage_qdrant_vector"
+  bm25_collection: "msmarco_passage_qdrant"
+  dense_collection: "msmarco_passage_qdrant"
   vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
 
 msmarco_passage_meilisearch_fulltext:
@@ -870,20 +879,22 @@ msmarco_lite_qdrant_fulltext:
   base: "msmarco_passage_qdrant_fulltext"
   max_docs: 250000
   keep_qrels_docs: true
-  bm25_collection: "msmarco_lite_qdrant_fulltext"
+  bm25_collection: "msmarco_lite_qdrant"
+  dense_collection: "msmarco_lite_qdrant"
 
 msmarco_lite_qdrant_vector:
   base: "msmarco_passage_qdrant_vector"
   max_docs: 250000
   keep_qrels_docs: true
-  dense_collection: "msmarco_lite_qdrant_vector"
+  dense_collection: "msmarco_lite_qdrant"
+  bm25_collection: "msmarco_lite_qdrant"
 
 msmarco_lite_qdrant_hybrid:
   base: "msmarco_passage_qdrant_hybrid"
   max_docs: 250000
   keep_qrels_docs: true
-  bm25_collection: "msmarco_lite_qdrant_fulltext"
-  dense_collection: "msmarco_lite_qdrant_vector"
+  bm25_collection: "msmarco_lite_qdrant"
+  dense_collection: "msmarco_lite_qdrant"
 
 msmarco_lite_meilisearch_fulltext:
   base: "msmarco_passage_meilisearch_fulltext"
@@ -1575,20 +1586,22 @@ nfcorpus_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "beir/nfcorpus/test"
-  bm25_collection: "nfcorpus_qdrant_fulltext"
+  bm25_collection: "nfcorpus_qdrant"
+  dense_collection: "nfcorpus_qdrant"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "beir/nfcorpus/test"
-  dense_collection: "nfcorpus_qdrant_vector"
+  dense_collection: "nfcorpus_qdrant"
+  bm25_collection: "nfcorpus_qdrant"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "beir/nfcorpus/test"
-  bm25_collection: "nfcorpus_qdrant_fulltext"
-  dense_collection: "nfcorpus_qdrant_vector"
+  bm25_collection: "nfcorpus_qdrant"
+  dense_collection: "nfcorpus_qdrant"
   vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
 
 nfcorpus_meilisearch_fulltext:
@@ -1838,20 +1851,22 @@ acord_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "hf-beir:theatticusproject/acord:test"
-  bm25_collection: "acord_qdrant_fulltext"
+  bm25_collection: "acord_qdrant"
+  dense_collection: "acord_qdrant"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "hf-beir:theatticusproject/acord:test"
-  dense_collection: "acord_qdrant_vector"
+  dense_collection: "acord_qdrant"
+  bm25_collection: "acord_qdrant"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "hf-beir:theatticusproject/acord:test"
-  bm25_collection: "acord_qdrant_fulltext"
-  dense_collection: "acord_qdrant_vector"
+  bm25_collection: "acord_qdrant"
+  dense_collection: "acord_qdrant"
   vector_cache_path: "vector_cache/acord-openai.sqlite"
 
 acord_meilisearch_fulltext:
@@ -2101,20 +2116,22 @@ scifact_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "beir/scifact/test"
-  bm25_collection: "scifact_qdrant_fulltext"
+  bm25_collection: "scifact_qdrant"
+  dense_collection: "scifact_qdrant"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
 scifact_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "beir/scifact/test"
-  dense_collection: "scifact_qdrant_vector"
+  dense_collection: "scifact_qdrant"
+  bm25_collection: "scifact_qdrant"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
 scifact_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "beir/scifact/test"
-  bm25_collection: "scifact_qdrant_fulltext"
-  dense_collection: "scifact_qdrant_vector"
+  bm25_collection: "scifact_qdrant"
+  dense_collection: "scifact_qdrant"
   vector_cache_path: "vector_cache/scifact-openai.sqlite"
 
 scifact_meilisearch_fulltext:
@@ -2364,20 +2381,22 @@ arguana_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "beir/arguana"
-  bm25_collection: "arguana_qdrant_fulltext"
+  bm25_collection: "arguana_qdrant"
+  dense_collection: "arguana_qdrant"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "beir/arguana"
-  dense_collection: "arguana_qdrant_vector"
+  dense_collection: "arguana_qdrant"
+  bm25_collection: "arguana_qdrant"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "beir/arguana"
-  bm25_collection: "arguana_qdrant_fulltext"
-  dense_collection: "arguana_qdrant_vector"
+  bm25_collection: "arguana_qdrant"
+  dense_collection: "arguana_qdrant"
   vector_cache_path: "vector_cache/arguana-openai.sqlite"
 
 arguana_meilisearch_fulltext:
@@ -2627,20 +2646,22 @@ scidocs_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "beir/scidocs"
-  bm25_collection: "scidocs_qdrant_fulltext"
+  bm25_collection: "scidocs_qdrant"
+  dense_collection: "scidocs_qdrant"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "beir/scidocs"
-  dense_collection: "scidocs_qdrant_vector"
+  dense_collection: "scidocs_qdrant"
+  bm25_collection: "scidocs_qdrant"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "beir/scidocs"
-  bm25_collection: "scidocs_qdrant_fulltext"
-  dense_collection: "scidocs_qdrant_vector"
+  bm25_collection: "scidocs_qdrant"
+  dense_collection: "scidocs_qdrant"
   vector_cache_path: "vector_cache/scidocs-openai.sqlite"
 
 scidocs_meilisearch_fulltext:
@@ -2890,20 +2911,22 @@ fiqa_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "beir/fiqa/test"
-  bm25_collection: "fiqa_qdrant_fulltext"
+  bm25_collection: "fiqa_qdrant"
+  dense_collection: "fiqa_qdrant"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
 fiqa_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "beir/fiqa/test"
-  dense_collection: "fiqa_qdrant_vector"
+  dense_collection: "fiqa_qdrant"
+  bm25_collection: "fiqa_qdrant"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
 fiqa_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "beir/fiqa/test"
-  bm25_collection: "fiqa_qdrant_fulltext"
-  dense_collection: "fiqa_qdrant_vector"
+  bm25_collection: "fiqa_qdrant"
+  dense_collection: "fiqa_qdrant"
   vector_cache_path: "vector_cache/fiqa-openai.sqlite"
 
 fiqa_meilisearch_fulltext:
@@ -3153,20 +3176,22 @@ cqadupstack_webmasters_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "beir/cqadupstack/webmasters"
-  bm25_collection: "cqadupstack_webmasters_qdrant_fulltext"
+  bm25_collection: "cqadupstack_webmasters_qdrant"
+  dense_collection: "cqadupstack_webmasters_qdrant"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "beir/cqadupstack/webmasters"
-  dense_collection: "cqadupstack_webmasters_qdrant_vector"
+  dense_collection: "cqadupstack_webmasters_qdrant"
+  bm25_collection: "cqadupstack_webmasters_qdrant"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "beir/cqadupstack/webmasters"
-  bm25_collection: "cqadupstack_webmasters_qdrant_fulltext"
-  dense_collection: "cqadupstack_webmasters_qdrant_vector"
+  bm25_collection: "cqadupstack_webmasters_qdrant"
+  dense_collection: "cqadupstack_webmasters_qdrant"
   vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
 
 cqadupstack_webmasters_meilisearch_fulltext:
@@ -3416,20 +3441,22 @@ wands_qdrant_fulltext:
   base: "qdrant"
   type: "fulltext"
   source: "wands"
-  bm25_collection: "wands_qdrant_fulltext"
+  bm25_collection: "wands_qdrant"
+  dense_collection: "wands_qdrant"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
 wands_qdrant_vector:
   base: "qdrant_vector_1bit"
   source: "wands"
-  dense_collection: "wands_qdrant_vector"
+  dense_collection: "wands_qdrant"
+  bm25_collection: "wands_qdrant"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
 wands_qdrant_hybrid:
   base: "qdrant_hybrid_1bit"
   source: "wands"
-  bm25_collection: "wands_qdrant_fulltext"
-  dense_collection: "wands_qdrant_vector"
+  bm25_collection: "wands_qdrant"
+  dense_collection: "wands_qdrant"
   vector_cache_path: "vector_cache/wands-openai.sqlite"
 
 wands_meilisearch_fulltext:

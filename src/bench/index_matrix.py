@@ -202,6 +202,13 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
             return f"{model} [alpha:{float(cfg.weaviate.hybrid_alpha):.2f}]"
         if engine == "vespa":
             return f"{model} [alpha:{float(cfg.vespa.hybrid_alpha):.2f}]"
+        if engine == "qdrant":
+            return (
+                f"{model} [native-rrf k={int(cfg.qdrant.hybrid_rrf_k)} "
+                f"weights={float(cfg.qdrant.hybrid_sparse_weight):g}:"
+                f"{float(cfg.qdrant.hybrid_dense_weight):g} "
+                f"candidates={int(cfg.qdrant.hybrid_candidates)}]"
+            )
         return f"{model} [fusion=rrf]"
     if is_manticore_like_type(engine):
         return _manticore_table_options_label(cfg) or "(none)"
@@ -266,6 +273,11 @@ def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
         # The plain base Manticore config normally has different full-text/vector tables,
         # which should not synthesize a fake hybrid row in `bench index`.
         return False
+    if engine == "qdrant":
+        return (
+            str(cfg.qdrant.index_layout or "").strip().lower() == "combined"
+            and str(cfg.qdrant.bm25_collection) == str(cfg.qdrant.dense_collection)
+        )
     hybrid_target = _index_target_name(cfg, engine, "hybrid")
     vector_target = _index_target_name(cfg, engine, "vector")
     return bool(hybrid_target) and hybrid_target != vector_target
@@ -273,6 +285,12 @@ def _show_hybrid_index_target(cfg: AppConfig, engine: str) -> bool:
 
 def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
     if is_manticore_like_type(engine) and str(cfg.manticore.index_layout or "").strip().lower() == "combined":
+        return "hybrid"
+    if (
+        engine == "qdrant"
+        and str(cfg.qdrant.index_layout or "").strip().lower() == "combined"
+        and str(cfg.qdrant.bm25_collection) == str(cfg.qdrant.dense_collection)
+    ):
         return "hybrid"
     if engine == "meilisearch" and str(cfg.meilisearch.index_layout or "").strip().lower() == "combined":
         return "vector"
@@ -446,8 +464,14 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
                 client.close()
         elif v.engine == "qdrant":
             backend = QdrantBackend(v.cfg.qdrant)
-            collection_exists = getattr(backend.client, "collection_exists", None)
-            if callable(collection_exists) and not bool(collection_exists(v.target)):
+            required_mode = (
+                "fulltext"
+                if v.mode == "fulltext"
+                else "hybrid"
+                if v.mode == "hybrid"
+                else "vector"
+            )
+            if not backend.collection_supports(v.target, required_mode):
                 return TargetStatus("pending", None, expected)
             actual = int(backend._count_points(v.target))
         elif v.engine == "opensearch":
@@ -578,7 +602,7 @@ def _draw_row(
             color_mode = curses.color_pair(3)
         elif v.mode == "vector":
             color_mode = curses.color_pair(4)
-        elif v.mode == "both":
+        elif v.mode in ("hybrid", "both"):
             color_mode = curses.color_pair(5)
         if target_status.state == "pending":
             color_target = curses.color_pair(7)

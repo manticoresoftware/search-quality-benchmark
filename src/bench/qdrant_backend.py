@@ -54,6 +54,32 @@ class QdrantBackend:
             quantization_config=quantization_config,
         )
 
+    def recreate_hybrid_collection(self, size: int) -> None:
+        if str(self.cfg.bm25_collection) != str(self.cfg.dense_collection):
+            raise ValueError(
+                "Native Qdrant hybrid search requires bm25_collection and "
+                "dense_collection to name the same combined collection."
+            )
+        quantization_config = None
+        if bool(self.cfg.dense_binary_quantization):
+            quantization_config = self._build_dense_binary_quantization_config()
+        self.client.recreate_collection(
+            collection_name=self.cfg.dense_collection,
+            vectors_config={
+                self.cfg.dense_vector_name: self.models.VectorParams(
+                    size=size,
+                    distance=self.models.Distance.COSINE,
+                ),
+            },
+            sparse_vectors_config={
+                self.cfg.sparse_vector_name: self.models.SparseVectorParams(
+                    index=self.models.SparseIndexParams(on_disk=False),
+                    modifier=self.models.Modifier.IDF,
+                ),
+            },
+            quantization_config=quantization_config,
+        )
+
     def recreate_bm25_collection(self) -> None:
         sparse_params = {
             self.cfg.sparse_vector_name: self.models.SparseVectorParams(
@@ -83,6 +109,44 @@ class QdrantBackend:
             for row in batch
             if row.get("vector")
         ]
+        if not points:
+            return 0
+        self._upsert_points_with_auto_split(
+            collection_name=self.cfg.dense_collection,
+            points=points,
+            wait=wait,
+        )
+        return len(points)
+
+    def upsert_hybrid_batch(
+        self, batch: list[dict[str, Any]], wait: bool = False
+    ) -> int:
+        if not batch:
+            return 0
+        points: list[Any] = []
+        for row in batch:
+            if not row.get("vector"):
+                continue
+            text = f"{row.get('title', '')} {row.get('abstract', '')}".strip()
+            points.append(
+                self.models.PointStruct(
+                    id=int(row["id"]),
+                    vector={
+                        self.cfg.dense_vector_name: row["vector"],
+                        self.cfg.sparse_vector_name: self.models.Document(
+                            text=text,
+                            model="Qdrant/bm25",
+                        ),
+                    },
+                    payload={
+                        "doc_id": row["doc_id"],
+                        "title": row.get("title", ""),
+                        "abstract": row.get("abstract", ""),
+                        "doi": row.get("doi", ""),
+                        "date": row.get("date", ""),
+                    },
+                )
+            )
         if not points:
             return 0
         self._upsert_points_with_auto_split(
@@ -153,6 +217,53 @@ class QdrantBackend:
         if isinstance(response, dict):
             return int(response.get("count", 0))
         return int(getattr(response, "count", 0))
+
+    def collection_vector_names(self, collection_name: str) -> tuple[set[str], set[str]]:
+        info = self.client.get_collection(collection_name=collection_name)
+        config = (
+            info.get("config", {})
+            if isinstance(info, dict)
+            else getattr(info, "config", None)
+        )
+        params = (
+            config.get("params", {})
+            if isinstance(config, dict)
+            else getattr(config, "params", None)
+        )
+        if params is None:
+            return set(), set()
+        vectors = (
+            params.get("vectors", {})
+            if isinstance(params, dict)
+            else getattr(params, "vectors", {})
+        )
+        sparse = (
+            params.get("sparse_vectors", {})
+            if isinstance(params, dict)
+            else getattr(params, "sparse_vectors", {})
+        )
+        dense_names = (
+            set(vectors.keys())
+            if isinstance(vectors, dict)
+            else ({""} if vectors else set())
+        )
+        sparse_names = set(sparse.keys()) if isinstance(sparse, dict) else set()
+        return dense_names, sparse_names
+
+    def collection_supports(self, collection_name: str, mode: str) -> bool:
+        collection_exists = getattr(self.client, "collection_exists", None)
+        if callable(collection_exists) and not bool(collection_exists(collection_name)):
+            return False
+        dense_names, sparse_names = self.collection_vector_names(collection_name)
+        has_dense = self.cfg.dense_vector_name in dense_names
+        has_sparse = self.cfg.sparse_vector_name in sparse_names
+        if mode == "fulltext":
+            return has_sparse
+        if mode == "vector":
+            return has_dense
+        if mode == "hybrid":
+            return has_dense and has_sparse
+        raise ValueError(f"Unsupported Qdrant collection mode: {mode}")
 
     def wait_for_points_count(
         self,
@@ -247,19 +358,51 @@ class QdrantBackend:
             out.append({"doc_id": str(payload.get("doc_id", "")), "score": float(getattr(r, "score", 0.0))})
         return out
 
-    def query_hybrid(self, query_text: str, vector: list[float], limit: int) -> list[dict[str, Any]]:
-        bm25_rows = self.query_bm25_text(query_text, limit=limit)
-        dense_rows = self.query_dense(vector, limit=limit)
-        # Reciprocal Rank Fusion over separate sparse and dense collections.
-        k = 60.0
-        fused: dict[str, float] = {}
-        for rank, row in enumerate(bm25_rows, start=1):
-            doc_id = str(row.get("doc_id", "") or "")
-            if doc_id:
-                fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (k + rank)
-        for rank, row in enumerate(dense_rows, start=1):
-            doc_id = str(row.get("doc_id", "") or "")
-            if doc_id:
-                fused[doc_id] = fused.get(doc_id, 0.0) + 1.0 / (k + rank)
-        ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))
-        return [{"doc_id": doc_id, "score": float(score)} for doc_id, score in ranked[:limit]]
+    def query_hybrid(
+        self, query_text: str, vector: list[float], limit: int
+    ) -> list[dict[str, Any]]:
+        if str(self.cfg.bm25_collection) != str(self.cfg.dense_collection):
+            raise RuntimeError(
+                "Native Qdrant hybrid search requires one combined collection; "
+                "configure bm25_collection and dense_collection with the same name and rebuild it."
+            )
+        candidates = max(int(limit), int(self.cfg.hybrid_candidates))
+        sparse_prefetch = self.models.Prefetch(
+            query=self.models.Document(text=query_text, model="Qdrant/bm25"),
+            using=self.cfg.sparse_vector_name,
+            limit=candidates,
+        )
+        dense_kwargs: dict[str, Any] = {
+            "query": [float(x) for x in vector],
+            "using": self.cfg.dense_vector_name,
+            "limit": candidates,
+        }
+        dense_search_params = self._build_dense_search_params()
+        if dense_search_params is not None:
+            dense_kwargs["params"] = dense_search_params
+        dense_prefetch = self.models.Prefetch(**dense_kwargs)
+        rows = self.client.query_points(
+            collection_name=self.cfg.dense_collection,
+            prefetch=[sparse_prefetch, dense_prefetch],
+            query=self.models.RrfQuery(
+                rrf=self.models.Rrf(
+                    k=max(1, int(self.cfg.hybrid_rrf_k)),
+                    weights=[
+                        float(self.cfg.hybrid_sparse_weight),
+                        float(self.cfg.hybrid_dense_weight),
+                    ],
+                )
+            ),
+            limit=int(limit),
+            with_payload=True,
+        ).points
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            payload = getattr(row, "payload", None) or {}
+            out.append(
+                {
+                    "doc_id": str(payload.get("doc_id", "")),
+                    "score": float(getattr(row, "score", 0.0)),
+                }
+            )
+        return out

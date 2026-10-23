@@ -25,6 +25,7 @@ from .prepare_matrix import (
     build_prepare_variants_from_config_paths,
     select_prepare_variants_interactive,
 )
+from .qdrant_backend import QdrantBackend
 from .query_policy import (
     TREC_COVID_BENCHMARKS,
     TREC_COVID_FAMILY,
@@ -276,6 +277,76 @@ def _confirm_manticore_reindex_plans(
     )
     answer = input(message).strip().lower()
     return answer == "yes"
+
+
+def _is_shared_qdrant_fulltext_plan(cfg: AppConfig, mode: str) -> bool:
+    return mode == "fulltext" and str(cfg.qdrant.bm25_collection) == str(
+        cfg.qdrant.dense_collection
+    )
+
+
+def _existing_qdrant_fulltext_reindex_plans(
+    plans: list[tuple[AppConfig, str]],
+) -> list[tuple[str, str]]:
+    existing: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for cfg, mode in plans:
+        if not _is_shared_qdrant_fulltext_plan(cfg, mode):
+            continue
+        backend = QdrantBackend(cfg.qdrant)
+        target = str(cfg.qdrant.bm25_collection)
+        endpoint = backend.connection_target()
+        key = (endpoint, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        if backend.collection_supports(target, "vector"):
+            existing.append(key)
+    return existing
+
+
+def _confirm_qdrant_fulltext_reindex_plans(
+    plans: list[tuple[AppConfig, str]], *, auto_yes: bool = False
+) -> str:
+    """Return not-needed, yes, skip, or cancel for destructive Qdrant full-text builds."""
+    existing = _existing_qdrant_fulltext_reindex_plans(plans)
+    if not existing:
+        return "not-needed"
+    if auto_yes:
+        return "yes"
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Refusing to replace an existing combined Qdrant collection with a "
+            "full-text-only collection in non-interactive mode because that removes "
+            "its dense vector index and data. Omit the full-text-only action, use "
+            "mode=hybrid, configure distinct collection names for isolated "
+            "full-text/vector indexes, or re-run with "
+            "`bench index --yes ...` to confirm the destructive rebuild."
+        )
+
+    target_lines = "\n".join(
+        f"- {endpoint} collection={target} (removes dense vector index/data)"
+        for endpoint, target in existing
+    )
+    answer = input(
+        "\nExisting combined Qdrant collection(s) would be replaced by a "
+        "full-text-only build:\n"
+        f"{target_lines}\n\n"
+        "Options:\n"
+        "- 'yes': continue and delete the dense vectors/native hybrid index\n"
+        "- 'skip': skip all selected Qdrant full-text-only builds and continue "
+        "with the other selections\n"
+        "- 'cancel': cancel the indexing command\n\n"
+        "Alternatively, use the hybrid build (it serves full-text, vector, and "
+        "hybrid runs), or configure distinct bm25_collection/dense_collection "
+        "names for isolated indexes (native hybrid requires one collection).\n"
+        "Choice [yes/skip/cancel]: "
+    ).strip().lower()
+    if answer == "yes":
+        return "yes"
+    if answer == "skip":
+        return "skip"
+    return "cancel"
 
 
 @dataclass
@@ -757,6 +828,30 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                     f"bench --config {v.config_path} index --engine {v.engine} "
                     f"--mode {v.mode} --entry {v.entry}"
                 )
+            qdrant_decision = _confirm_qdrant_fulltext_reindex_plans(
+                [(v.cfg, v.mode) for v in selected if v.engine == "qdrant"],
+                auto_yes=bool(args.yes),
+            )
+            if qdrant_decision == "cancel":
+                print("Index canceled: Qdrant destructive reindex not confirmed.")
+                return 0
+            if qdrant_decision == "skip":
+                before = len(selected)
+                selected = [
+                    v
+                    for v in selected
+                    if not (
+                        v.engine == "qdrant"
+                        and _is_shared_qdrant_fulltext_plan(v.cfg, v.mode)
+                    )
+                ]
+                print(
+                    f"Skipped {before - len(selected)} Qdrant "
+                    "full-text-only index action(s)."
+                )
+                if not selected:
+                    print("Index completed: all selected actions were skipped.")
+                    return 0
             vector_variants = [v for v in selected if v.target_kind == "vector"]
             for v in vector_variants:
                 if not _confirm_vector_cache_coverage(
@@ -789,6 +884,9 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                     resume=bool(args.resume),
                     progress_callback=_progress,
                     allow_shared_manticore_fulltext_recreate=is_manticore_like_type(v.engine),
+                    allow_shared_qdrant_fulltext_recreate=(
+                        v.engine == "qdrant" and qdrant_decision == "yes"
+                    ),
                 )
                 model_note = f" model={v.model}" if v.mode == "vector" else ""
                 print(f"Indexed profile={v.entry} engine={v.engine} mode={v.mode}{model_note} run_id={run_id}")
@@ -807,11 +905,28 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             entry=args.entry,
             fallback_cfg=cfg,
         )
-        if entry_mode_filter in ("fulltext", "vector") and args.mode != entry_mode_filter:
+        restrict_hybrid_mode = engine == "qdrant" and entry_mode_filter == "hybrid"
+        if (
+            entry_mode_filter in ("fulltext", "vector") or restrict_hybrid_mode
+        ) and args.mode != entry_mode_filter:
             raise ValueError(
                 f"Entry '{entry_name}' is restricted to mode '{entry_mode_filter}'. "
                 f"Requested mode '{args.mode}' is not allowed."
             )
+        qdrant_decision = "not-needed"
+        if engine == "qdrant":
+            qdrant_decision = _confirm_qdrant_fulltext_reindex_plans(
+                [(cfg_for_engine, args.mode)], auto_yes=bool(args.yes)
+            )
+            if qdrant_decision == "skip":
+                print(
+                    "Index skipped: Qdrant full-text-only build would remove "
+                    "the native hybrid index."
+                )
+                return 0
+            if qdrant_decision == "cancel":
+                print("Index canceled: Qdrant destructive reindex not confirmed.")
+                return 0
         if is_manticore_like_type(engine):
             needs_vector_cache = args.mode in ("vector", "hybrid")
             if needs_vector_cache and not _confirm_vector_cache_coverage(
@@ -847,6 +962,9 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
             resume=bool(args.resume),
             progress_callback=_progress,
             allow_shared_manticore_fulltext_recreate=is_manticore_like_type(engine),
+            allow_shared_qdrant_fulltext_recreate=(
+                engine == "qdrant" and qdrant_decision == "yes"
+            ),
         )
         model_note = f" model={resolved_embedding_model(cfg_for_engine)}" if args.mode in ("vector", "hybrid") else ""
         print(f"Indexed profile={entry_name} engine={engine} mode={args.mode}{model_note}")
@@ -1008,7 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_index.add_argument(
         "--yes",
         action="store_true",
-        help="Confirm destructive Manticore table recreation",
+        help="Confirm destructive Manticore table or Qdrant collection recreation",
     )
     p_index.add_argument(
         "--resume",

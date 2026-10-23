@@ -360,8 +360,6 @@ def _target_name_for_run(cfg: AppConfig, engine: str, mode: str) -> str:
     if engine == "qdrant":
         if mode == "fulltext":
             return cfg.qdrant.bm25_collection
-        if mode == "hybrid":
-            return f"{cfg.qdrant.bm25_collection} + {cfg.qdrant.dense_collection}"
         return cfg.qdrant.dense_collection
     if engine == "opensearch":
         base = str(cfg.opensearch.index_name or "").strip()
@@ -504,7 +502,16 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
 
 def _qdrant_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
-    extra = ["fusion=rrf", "sparse=Qdrant/bm25"]
+    extra = [
+        "fusion=native-rrf",
+        f"k={int(cfg.qdrant.hybrid_rrf_k)}",
+        (
+            f"weights={float(cfg.qdrant.hybrid_sparse_weight):g}:"
+            f"{float(cfg.qdrant.hybrid_dense_weight):g}"
+        ),
+        f"candidates={int(cfg.qdrant.hybrid_candidates)}",
+        "sparse=Qdrant/bm25",
+    ]
     if bool(cfg.qdrant.dense_binary_quantization):
         extra.append("bq")
         if cfg.qdrant.dense_search_quantization_oversampling is not None:
@@ -1935,14 +1942,6 @@ def _build_live_state_lines(cfg: AppConfig, engine: str, modes: list[str]) -> li
 
     backend = QdrantBackend(cfg.qdrant)
     for m in modes:
-        if m == "hybrid":
-            for collection in (cfg.qdrant.bm25_collection, cfg.qdrant.dense_collection):
-                try:
-                    cnt = int(backend._count_points(collection))
-                    lines.append(f"rows ({collection}): {cnt:,}")
-                except Exception as exc:
-                    lines.append(f"rows ({collection}): n/a ({exc})")
-            continue
         collection = cfg.qdrant.bm25_collection if m == "fulltext" else cfg.qdrant.dense_collection
         try:
             cnt = int(backend._count_points(collection))

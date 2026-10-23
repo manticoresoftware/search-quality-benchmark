@@ -288,8 +288,9 @@ class QdrantConfig:
     timeout_seconds: int = 60
     batch_size: int = 2000
     index_concurrency: int = 1
-    dense_collection: str = "trec_covid_qdrant_dense"
-    bm25_collection: str = "trec_covid_qdrant_bm25"
+    index_layout: str = "combined"
+    dense_collection: str = "trec_covid_qdrant"
+    bm25_collection: str = "trec_covid_qdrant"
     dense_vector_name: str = "dense"
     sparse_vector_name: str = "bm25"
     dense_binary_quantization: bool = False
@@ -298,6 +299,10 @@ class QdrantConfig:
     dense_search_quantization_rescore: bool | None = None
     dense_search_quantization_oversampling: float | None = None
     dense_search_quantization_ignore: bool = False
+    hybrid_rrf_k: int = 61
+    hybrid_sparse_weight: float = 1.0
+    hybrid_dense_weight: float = 1.0
+    hybrid_candidates: int = 200
     # Deprecated/ignored with native Qdrant BM25, kept for backward compatibility.
     bm25_k1: float = 1.2
     bm25_b: float = 0.75

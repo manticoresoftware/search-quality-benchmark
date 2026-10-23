@@ -101,3 +101,39 @@ manticore_hybrid:
     ]
     assert rows[0].used_by == ("manticore_fulltext",)
     assert rows[1].used_by == ("manticore_hybrid", "manticore_vector")
+
+
+def test_combined_qdrant_target_has_fulltext_and_native_hybrid_builds(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+qdrant:
+  type: qdrant
+  index_layout: combined
+  bm25_collection: docs
+  dense_collection: docs
+qdrant_fulltext:
+  base: qdrant
+  type: fulltext
+qdrant_vector:
+  base: qdrant
+  type: vector
+qdrant_hybrid:
+  base: qdrant
+  type: hybrid
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = build_index_variants_from_config_paths([config_path])
+
+    assert [(row.mode, row.target_kind, row.entry) for row in rows] == [
+        ("fulltext", "fulltext", "qdrant_fulltext"),
+        ("hybrid", "vector", "qdrant_hybrid"),
+    ]
+    assert rows[0].used_by == ("qdrant_fulltext",)
+    assert rows[1].used_by == ("qdrant_hybrid", "qdrant_vector")
+    assert "native-rrf" in rows[1].model

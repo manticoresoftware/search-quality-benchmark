@@ -458,7 +458,36 @@ def _run_index_qdrant(
     cfg: AppConfig,
     mode: str,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    allow_shared_fulltext_recreate: bool = False,
 ) -> list[ModeIndexResult]:
+    if mode not in ("fulltext", "vector", "hybrid"):
+        raise ValueError("For engine=qdrant, mode must be one of: fulltext, vector, hybrid")
+
+    qdrant = QdrantBackend(cfg.qdrant)
+    qdrant.ensure_accessible()
+    shared_collection = str(cfg.qdrant.bm25_collection) == str(
+        cfg.qdrant.dense_collection
+    )
+    if mode == "fulltext" and shared_collection and not allow_shared_fulltext_recreate:
+        if qdrant.collection_supports(cfg.qdrant.bm25_collection, "vector"):
+            raise RuntimeError(
+                "Refusing to recreate an existing shared Qdrant BM25/dense collection "
+                "as full-text-only because that removes its dense vector field, index, and data. "
+                "Use mode=hybrid, skip the full-text-only build, configure distinct collection "
+                "names for isolated indexes, or explicitly allow the destructive rebuild. "
+                "Native hybrid search requires a shared collection."
+            )
+    if mode == "vector" and shared_collection:
+        raise ValueError(
+            "Refusing Qdrant vector-only indexing when bm25_collection and dense_collection "
+            "share the same collection. Use mode=hybrid so the combined collection keeps BM25."
+        )
+    if mode == "hybrid" and not shared_collection:
+        raise ValueError(
+            "Native Qdrant hybrid indexing requires bm25_collection and dense_collection "
+            "to point to the same combined collection."
+        )
+
     docs_path = f"{cfg.dataset.prepared_dir}/docs.jsonl"
     if progress_callback is not None:
         progress_callback(
@@ -474,12 +503,7 @@ def _run_index_qdrant(
             }
         )
     docs = read_jsonl(docs_path)
-    qdrant = QdrantBackend(cfg.qdrant)
-    qdrant.ensure_accessible()
     out: list[ModeIndexResult] = []
-
-    if mode not in ("fulltext", "vector"):
-        raise ValueError("For engine=qdrant, mode must be one of: fulltext, vector")
 
     if mode == "fulltext":
         qdrant.recreate_bm25_collection()
@@ -551,19 +575,19 @@ def _run_index_qdrant(
             )
         )
 
-    if mode == "vector":
+    if mode in ("vector", "hybrid"):
         docs_cached, missing_total, missing_keys = _collect_cached_docs(
             docs=docs,
             cfg=cfg,
             engine="qdrant",
-            mode="vector",
+            mode=mode,
             progress_callback=progress_callback,
         )
         if missing_keys:
             raise RuntimeError(
-                "Vector cache miss during Qdrant vector indexing. "
+                f"Vector cache miss during Qdrant {mode} indexing. "
                 f"Missing keys={missing_total} sample={missing_keys}. "
-                "Build the corresponding Manticore vector index first so the cache is populated."
+                "Run `bench prepare` to build embeddings first."
             )
         if not docs_cached:
             raise RuntimeError("No vector documents available in cache (all missing/null).")
@@ -576,10 +600,14 @@ def _run_index_qdrant(
             cache2.close()
         if dim <= 0:
             raise RuntimeError("Cached vectors have invalid dimension.")
-        qdrant.recreate_dense_collection(size=dim)
+        if mode == "hybrid":
+            qdrant.recreate_hybrid_collection(size=dim)
+        else:
+            qdrant.recreate_dense_collection(size=dim)
         started = perf_counter()
         inserted = 0
         processed = 0
+        worker_state = local()
         cache3 = VectorCache(cfg.manticore.vector_cache_path)
         try:
             total_cached = len(docs_cached)
@@ -602,7 +630,15 @@ def _run_index_qdrant(
                     prepared_batches.append([batch, len(chunk)])
 
                 def _worker(item: list[Any]) -> int:
-                    return qdrant.upsert_dense_batch(item[0], wait=False)
+                    if mode == "vector":
+                        return qdrant.upsert_dense_batch(item[0], wait=False)
+                    backend = getattr(worker_state, "backend", None)
+                    if backend is None:
+                        # Qdrant's BM25 auto-embedder keeps mutable per-client state and
+                        # is not safe to share across indexing threads.
+                        backend = QdrantBackend(cfg.qdrant)
+                        worker_state.backend = backend
+                    return backend.upsert_hybrid_batch(item[0], wait=False)
 
                 def _on_result(item: list[Any], count: int) -> None:
                     nonlocal inserted, processed
@@ -612,7 +648,7 @@ def _run_index_qdrant(
                         progress_callback(
                             {
                                 "engine": "qdrant",
-                                "mode": "vector",
+                                "mode": mode,
                                 "stage": "ingest",
                                 "processed": processed,
                                 "total": total_cached,
@@ -639,7 +675,7 @@ def _run_index_qdrant(
             progress_callback(
                 {
                     "engine": "qdrant",
-                    "mode": "vector",
+                    "mode": mode,
                     "stage": "sync",
                     "processed": min(visible, inserted),
                     "total": inserted,
@@ -651,7 +687,7 @@ def _run_index_qdrant(
         elapsed = perf_counter() - started
         out.append(
             ModeIndexResult(
-                mode="vector",
+                mode=mode,
                 duration_seconds=elapsed,
                 rows_inserted=inserted,
                 docs_per_second=(inserted / elapsed) if elapsed > 0 else 0.0,
@@ -2625,6 +2661,7 @@ def run_index(
     resume: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     allow_shared_manticore_fulltext_recreate: bool = False,
+    allow_shared_qdrant_fulltext_recreate: bool = False,
 ) -> list[ModeIndexResult]:
     if is_manticore_like_type(engine):
         return _run_index_manticore(
@@ -2634,7 +2671,12 @@ def run_index(
             allow_shared_fulltext_recreate=allow_shared_manticore_fulltext_recreate,
         )
     if engine == "qdrant":
-        return _run_index_qdrant(cfg, mode=mode, progress_callback=progress_callback)
+        return _run_index_qdrant(
+            cfg,
+            mode=mode,
+            progress_callback=progress_callback,
+            allow_shared_fulltext_recreate=allow_shared_qdrant_fulltext_recreate,
+        )
     if engine == "meilisearch":
         return _run_index_meilisearch(cfg, mode=mode, progress_callback=progress_callback)
     if engine == "opensearch":

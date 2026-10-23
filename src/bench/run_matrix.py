@@ -205,7 +205,16 @@ def _qdrant_vector_label(cfg: AppConfig) -> str:
 
 def _qdrant_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
-    extra = ["fusion=rrf", "sparse=Qdrant/bm25"]
+    extra = [
+        "fusion=native-rrf",
+        f"k={int(cfg.qdrant.hybrid_rrf_k)}",
+        (
+            f"weights={float(cfg.qdrant.hybrid_sparse_weight):g}:"
+            f"{float(cfg.qdrant.hybrid_dense_weight):g}"
+        ),
+        f"candidates={int(cfg.qdrant.hybrid_candidates)}",
+        "sparse=Qdrant/bm25",
+    ]
     if bool(cfg.qdrant.dense_binary_quantization):
         extra.append("bq")
         if cfg.qdrant.dense_search_quantization_oversampling is not None:
@@ -658,8 +667,6 @@ def _variant_target_name(v: RunVariant) -> str:
     if v.engine == "qdrant":
         if v.mode == "fulltext":
             return v.cfg.qdrant.bm25_collection
-        if v.mode == "hybrid":
-            return f"{v.cfg.qdrant.bm25_collection} + {v.cfg.qdrant.dense_collection}"
         return v.cfg.qdrant.dense_collection
     if v.engine == "opensearch":
         base = str(v.cfg.opensearch.index_name or "").strip()
@@ -693,18 +700,11 @@ def is_variant_runnable(v: RunVariant) -> bool:
                 client.close()
         if v.engine == "qdrant":
             backend = QdrantBackend(v.cfg.qdrant)
-            collection_exists = getattr(backend.client, "collection_exists", None)
-            if v.mode == "hybrid":
-                names = [v.cfg.qdrant.bm25_collection, v.cfg.qdrant.dense_collection]
-                if callable(collection_exists):
-                    return all(bool(collection_exists(name)) for name in names)
-                for name in names:
-                    backend._count_points(name)
-                return True
-            if callable(collection_exists):
-                return bool(collection_exists(target))
-            backend._count_points(target)
-            return True
+            if v.mode == "hybrid" and str(v.cfg.qdrant.bm25_collection) != str(
+                v.cfg.qdrant.dense_collection
+            ):
+                return False
+            return backend.collection_supports(target, v.mode)
         if v.engine == "opensearch":
             backend = OpenSearchBackend(v.cfg.opensearch)
             backend.ensure_accessible()
@@ -781,10 +781,6 @@ def _resolve_row_count(v: RunVariant) -> tuple[int | None, str | None]:
                 client.close()
         if v.engine == "qdrant":
             backend = QdrantBackend(v.cfg.qdrant)
-            if v.mode == "hybrid":
-                bm25_cnt = int(backend._count_points(v.cfg.qdrant.bm25_collection))
-                dense_cnt = int(backend._count_points(v.cfg.qdrant.dense_collection))
-                return min(bm25_cnt, dense_cnt), None
             collection = _variant_target_name(v)
             return int(backend._count_points(collection)), None
         if v.engine == "opensearch":
