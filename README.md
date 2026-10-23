@@ -123,8 +123,17 @@ The report provides:
 - latency distribution and slow-query inspection;
 - a searchable table of measured runs with CSV and JSON export.
 
-Dataset, engine, and search-mode filters can select any subset. Filter state is
-stored in the URL, so a view can be bookmarked or shared.
+Dataset, engine, and search-mode filters can select any subset. Hybrid mode is
+split into `Hybrid · native` and `Hybrid · non-native`. Selecting both makes
+each engine/dataset cell use the better of its eligible hybrid runs, while
+selecting exactly one restricts comparison to engines supporting that
+implementation; their selected full-text/vector runs remain eligible on
+datasets where no hybrid run was completed. Selecting neither hybrid variant
+applies no hybrid constraint.
+Selecting both applies no hybrid eligibility constraint either: the better
+native/non-native hybrid is used where available, while selected
+full-text/vector-only results remain eligible. Filter state is stored in the
+URL, so a view can be bookmarked or shared.
 
 Only artifacts with a concrete `engine_version` are admitted to the complete
 report. Runs with a missing, unknown, or floating `latest` version are omitted;
@@ -159,7 +168,9 @@ is hidden with a filter.
 
 When several search modes are selected, each matrix cell uses the best result
 among those modes and labels the winning mode. Select exactly one mode for a
-fixed-mode comparison.
+fixed-mode comparison. The two hybrid choices follow the same rule: when both
+native and non-native hybrid are selected, the better hybrid result is used for
+each engine and dataset.
 
 TREC-COVID is exposed as three logical datasets over the same physical corpus
 and qrels: `trec-covid-query` (short keyword query), `trec-covid-question`

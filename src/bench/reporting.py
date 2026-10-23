@@ -67,6 +67,11 @@ def build_summary_markdown(metrics: dict[str, Any]) -> str:
     if query_field:
         lines.append(f"- Query field: `{query_field}`")
     lines.append(f"- Mode: `{_display_mode(str(metrics.get('mode', '')))}`")
+    hybrid_implementation = str(
+        metrics.get("hybrid_implementation", "") or ""
+    ).strip()
+    if hybrid_implementation:
+        lines.append(f"- Hybrid implementation: `{hybrid_implementation}`")
     query_variant = str(metrics.get("query_variant", "") or "").strip().lower()
     query_variant_requested = str(metrics.get("query_variant_requested", "") or "").strip().lower()
     variants_distinct = metrics.get("query_variants_distinct")

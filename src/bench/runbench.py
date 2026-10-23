@@ -521,6 +521,12 @@ def _qdrant_hybrid_label(cfg: AppConfig) -> str:
     return f"{model} [{' '.join(extra)}]"
 
 
+def _hybrid_implementation(engine: str, mode: str) -> str:
+    if mode != "hybrid":
+        return ""
+    return "non-native" if engine in {"mariadb", "serenedb"} else "native"
+
+
 def _meilisearch_fulltext_label(cfg: AppConfig) -> str:
     extras: list[str] = []
     if cfg.meilisearch.searchable_attributes:
@@ -2671,6 +2677,9 @@ def run_benchmark(
         "performance": perf_metrics,
         "runtime_seconds": total_runtime,
     }
+    hybrid_implementation = _hybrid_implementation(engine, mode)
+    if hybrid_implementation:
+        metrics["hybrid_implementation"] = hybrid_implementation
     if is_trec_covid(cfg.dataset.source) and selected_query_field:
         metrics.update(
             {

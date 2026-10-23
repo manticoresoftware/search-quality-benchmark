@@ -26,6 +26,8 @@ def _write_metrics(
     mode: str = "vector",
     dataset: str = "beir/scifact/test",
     query_variant: str | None = None,
+    model: str | None = None,
+    hybrid_implementation: str | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir()
@@ -40,6 +42,10 @@ def _write_metrics(
     }
     if version is not None:
         payload["engine_version"] = version
+    if model is not None:
+        payload["model"] = model
+    if hybrid_implementation is not None:
+        payload["hybrid_implementation"] = hybrid_implementation
     if query_variant is not None:
         payload.update(
             {
@@ -124,6 +130,7 @@ def test_report_includes_serenedb_only_when_it_has_a_versioned_run(
             "version": "26.10.1",
             "image": "unknown",
             "imageCreatedAt": "",
+            "hybridImplementations": ["non-native"],
         }
     }
     assert data["runs"][0]["engine"] == "serenedb"
@@ -150,6 +157,7 @@ def test_report_discovers_engines_not_named_in_the_generator(
             "version": "1.0.0",
             "image": "unknown",
             "imageCreatedAt": "",
+            "hybridImplementations": [],
         }
     }
     assert data["runs"][0]["engine"] == "future_search"
@@ -161,6 +169,94 @@ def test_report_template_assigns_engine_colors_from_embedded_data() -> None:
     assert "const ALL_ENGINE_KEYS = Object.keys(DATA.systems);" in generator.HTML_TEMPLATE
     assert "Object.fromEntries(ALL_ENGINE_KEYS.map((engine, index)" in generator.HTML_TEMPLATE
     assert "columnar: '#895af8'" not in generator.HTML_TEMPLATE
+
+
+def test_hybrid_implementation_classifies_legacy_and_recorded_runs() -> None:
+    generator = _load_report_generator()
+
+    assert generator.hybrid_implementation(
+        {"model": "embedding [fusion=rrf sparse=Qdrant/bm25]"},
+        "qdrant",
+        "hybrid",
+    ) == "non-native"
+    assert generator.hybrid_implementation(
+        {"model": "embedding [fusion=native-rrf k=61]"},
+        "qdrant",
+        "hybrid",
+    ) == "native"
+    assert generator.hybrid_implementation({}, "mariadb", "hybrid") == "non-native"
+    assert generator.hybrid_implementation({}, "serenedb", "hybrid") == "non-native"
+    assert generator.hybrid_implementation({}, "milvus", "hybrid") == "native"
+    assert generator.hybrid_implementation(
+        {"hybrid_implementation": "native"}, "mariadb", "hybrid"
+    ) == "native"
+    assert generator.hybrid_implementation({}, "qdrant", "vector") == ""
+    assert generator.engine_hybrid_implementations("qdrant") == [
+        "native",
+        "non-native",
+    ]
+    assert generator.engine_hybrid_implementations("mariadb") == ["non-native"]
+    assert generator.engine_hybrid_implementations("serenedb") == ["non-native"]
+    assert generator.engine_hybrid_implementations("elasticsearch") == ["native"]
+    assert generator.engine_hybrid_implementations("future_search") == []
+
+
+def test_report_splits_hybrid_mode_variants_and_defaults(tmp_path: Path, monkeypatch) -> None:
+    generator = _load_report_generator()
+    run_date = datetime(2026, 10, 1, tzinfo=UTC)
+    _write_metrics(
+        tmp_path,
+        "qdrant-client",
+        run_date,
+        "1.19.1",
+        engine="qdrant",
+        mode="hybrid",
+        model="embedding [fusion=rrf sparse=Qdrant/bm25]",
+    )
+    _write_metrics(
+        tmp_path,
+        "qdrant-native",
+        run_date,
+        "1.19.1",
+        engine="qdrant",
+        mode="hybrid",
+        model="embedding [fusion=native-rrf k=61]",
+    )
+    _write_metrics(
+        tmp_path,
+        "mariadb-client",
+        run_date,
+        "11.8.9",
+        engine="mariadb",
+        mode="hybrid",
+    )
+    monkeypatch.setattr(generator, "ARTIFACTS_DIR", tmp_path)
+    monkeypatch.setattr(generator, "PREPARED_DIR", tmp_path / "missing-prepared")
+
+    data = generator.collect_data(
+        default_run_ids={"qdrant-client", "qdrant-native"}
+    )
+    by_id = {run["runId"]: run for run in data["runs"]}
+
+    assert by_id["qdrant-client"]["modeVariant"] == "hybrid-non-native"
+    assert by_id["qdrant-native"]["modeVariant"] == "hybrid-native"
+    assert by_id["mariadb-client"]["modeVariant"] == "hybrid-non-native"
+    assert data["meta"]["defaultModes"] == [
+        "hybrid-native",
+        "hybrid-non-native",
+    ]
+
+
+def test_report_template_filters_hybrid_variants_but_groups_best_by_base_mode() -> None:
+    generator = _load_report_generator()
+
+    assert "'hybrid-native', 'hybrid-non-native'" in generator.HTML_TEMPLATE
+    assert "state.modes.includes(run.modeVariant)" in generator.HTML_TEMPLATE
+    assert "function engineMatchesHybridFilter(engine)" in generator.HTML_TEMPLATE
+    assert "DATA.systems[engine]?.hybridImplementations" in generator.HTML_TEMPLATE
+    assert "filteredRuns({ respectEngineFilter: false })" in generator.HTML_TEMPLATE
+    assert "!restrictToOneHybridCohort || eligibleEngines.has(engine)" in generator.HTML_TEMPLATE
+    assert "`${run.engine}|${run.mode}|${run.datasetKey}`" in generator.HTML_TEMPLATE
 
 
 def test_legacy_query_variants_split_only_when_topic_texts_differ() -> None:

@@ -941,7 +941,7 @@ Note:
 ## Output Paths
 
 Per benchmark run:
-- `artifacts/<run_id>/metrics.json`: aggregated run-level metrics (quality + latency/QPS/error), query-variant identity, plus the engine version, configured image, image creation timestamp, and—when Docker exposes them—the immutable image ID and registry digest captured for that run.
+- `artifacts/<run_id>/metrics.json`: aggregated run-level metrics (quality + latency/QPS/error), query-variant identity, `hybrid_implementation: native|non-native` for new hybrid runs, plus the engine version, configured image, image creation timestamp, and—when Docker exposes them—the immutable image ID and registry digest captured for that run.
 - `artifacts/<run_id>/per_query.csv`: one row per evaluated query with per-query quality and timing fields.
 - `artifacts/<run_id>/summary.md`: human-readable single-run report.
 - `artifacts/<run_id>/diagnostics.json`: sampled query diagnostics (query plans/profiles or backend debug details).
@@ -968,6 +968,24 @@ Combined report (`bench report`):
 - Golden UI reference: `reports/search-benchmark/reference.html`.
 - Inputs: individual `artifacts/*/metrics.json` and
   `artifacts/*/per_query.csv` files; combined Markdown reports are never inputs.
+- Search-mode filtering exposes `fulltext`, `vector`, `hybrid-native`, and
+  `hybrid-non-native`. Filtering uses each run's derived `modeVariant`, while
+  best-run grouping continues to use the base `mode`; selecting both hybrid
+  variants therefore chooses the better native/non-native result separately
+  for every engine and dataset. Hybrid filtering has three states: selecting no
+  hybrid variant imposes no hybrid constraint; selecting exactly one restricts
+  the engine cohort to engines supporting that implementation, after which
+  selected full-text/vector runs may compete on every dataset where they exist;
+  selecting both imposes no eligibility constraint, collapses
+  native/non-native hybrid to the better result, and retains selected
+  full-text/vector-only cells. Engine capabilities are explicit in the report
+  data: Qdrant supports both classes, MariaDB and SereneDB are non-native, and
+  the other bundled hybrid engines are native.
+- New hybrid artifacts record `hybrid_implementation`. For legacy artifacts,
+  classify MariaDB and SereneDB hybrid as non-native; classify Qdrant by its
+  model label (`fusion=native-rrf` is native, older `fusion=rrf` is non-native);
+  the other bundled hybrid engines are native. A recorded field takes priority
+  over legacy inference.
 - TREC-COVID comparison cohorts use the logical dataset IDs
   `trec-covid-query`, `trec-covid-question`, and `trec-covid-narrative`.
   Full-text, vector, and hybrid results can share a logical dataset cell only

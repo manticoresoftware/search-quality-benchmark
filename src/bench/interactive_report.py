@@ -44,6 +44,18 @@ TREC_COVID_BENCHMARKS = {
     "trec-covid-question": "question",
     "trec-covid-narrative": "narrative",
 }
+NATIVE_HYBRID_ENGINES = {
+    "columnar",
+    "elasticsearch",
+    "manticore",
+    "meilisearch",
+    "milvus",
+    "opensearch",
+    "typesense",
+    "vespa",
+    "weaviate",
+}
+NON_NATIVE_HYBRID_ENGINES = {"mariadb", "serenedb"}
 
 # These are presentation overrides, not an allowlist. Engines without an
 # override are still included and receive a readable name derived from their
@@ -91,6 +103,45 @@ def extract_doc_count(payload: dict[str, Any]) -> int | None:
 
 def canonical_metric(dataset: str) -> str:
     return "mrr@10" if dataset.lower().startswith("msmarco-passage/") else "ndcg@10"
+
+
+def hybrid_implementation(payload: dict[str, Any], engine: str, mode: str) -> str:
+    """Return native/non-native, including classification of legacy artifacts."""
+    if mode != "hybrid":
+        return ""
+    recorded = str(payload.get("hybrid_implementation") or "").strip().lower()
+    if recorded in {"native", "server", "server-side"}:
+        return "native"
+    if recorded in {"non-native", "client", "client-side", "emulated"}:
+        return "non-native"
+
+    model = str(payload.get("model") or "").strip().lower()
+    if engine == "qdrant":
+        return "native" if "fusion=native-rrf" in model else "non-native"
+    if engine in NON_NATIVE_HYBRID_ENGINES:
+        return "non-native"
+    if engine in NATIVE_HYBRID_ENGINES or "native" in model:
+        return "native"
+    # The known non-native implementations are enumerated above. Preserve
+    # future engine discovery by treating an otherwise unmarked hybrid API as native.
+    return "native"
+
+
+def mode_variant(mode: str, implementation: str) -> str:
+    if mode != "hybrid":
+        return mode
+    return f"hybrid-{implementation or 'native'}"
+
+
+def engine_hybrid_implementations(engine: str) -> list[str]:
+    """Return implementation classes supported by a bundled engine."""
+    if engine == "qdrant":
+        return ["native", "non-native"]
+    if engine in NON_NATIVE_HYBRID_ENGINES:
+        return ["non-native"]
+    if engine in NATIVE_HYBRID_ENGINES:
+        return ["native"]
+    return []
 
 
 def query_variant_label(query_variant: str) -> str:
@@ -279,6 +330,8 @@ def slow_queries(csv_path: Path, run: dict[str, Any]) -> list[dict[str, Any]]:
                 "version": run["version"],
                 "imageCreatedAt": run["imageCreatedAt"],
                 "mode": run["mode"],
+                "modeVariant": run["modeVariant"],
+                "hybridImplementation": run["hybridImplementation"],
                 "queryVariant": run["queryVariant"],
                 "topicId": str(row.get("topic_id", "")),
                 "query": str(row.get("query", "")),
@@ -342,6 +395,7 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         metric = canonical_metric(dataset)
         run_id = str(payload.get("run_id") or metrics_path.parent.name)
         settings = payload.get("benchmark_settings", {}) or {}
+        implementation = hybrid_implementation(payload, engine, mode)
         run = {
             "runId": run_id,
             "runAt": run_at,
@@ -351,6 +405,8 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "image": str(payload.get("engine_image") or "").strip() or "unknown",
             "imageCreatedAt": str(payload.get("engine_image_created_at") or "").strip(),
             "mode": mode,
+            "modeVariant": mode_variant(mode, implementation),
+            "hybridImplementation": implementation,
             "dataset": dataset,
             "physicalDataset": physical_dataset,
             "datasetFamily": dataset_family,
@@ -411,6 +467,13 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         system["version"] = ", ".join(versions) or "unknown"
         system["image"] = ", ".join(images) or "unknown"
         system["imageCreatedAt"] = image_dates[0] if len(image_dates) == 1 else ""
+        hybrid_implementations = set(engine_hybrid_implementations(engine))
+        hybrid_implementations.update(
+            run["hybridImplementation"]
+            for run in engine_runs
+            if run["hybridImplementation"]
+        )
+        system["hybridImplementations"] = sorted(hybrid_implementations)
 
     slowest: list[dict[str, Any]] = []
     for run in runs:
@@ -446,7 +509,7 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "source": "Individual artifacts/*/metrics.json and artifacts/*/per_query.csv files",
             "defaultDatasets": sorted({run["datasetKey"] for run in default_runs}),
             "defaultEngines": sorted({run["engine"] for run in default_runs}),
-            "defaultModes": sorted({run["mode"] for run in default_runs}),
+            "defaultModes": sorted({run["modeVariant"] for run in default_runs}),
         },
         "systems": systems,
         "datasets": datasets,
@@ -1368,13 +1431,20 @@ HTML_TEMPLATE = r'''<!doctype html>
       engine,
       ENGINE_PALETTE[index] || `hsl(${Math.round((index - ENGINE_PALETTE.length) * 137.508) % 360} 70% 65%)`
     ]));
-    const ALL_MODE_KEYS = ['fulltext', 'vector', 'hybrid'];
-    const MODE_NAMES = { fulltext: 'Full text', vector: 'Vector', hybrid: 'Hybrid' };
+    const ALL_MODE_KEYS = ['fulltext', 'vector', 'hybrid-native', 'hybrid-non-native'];
+    const MODE_NAMES = {
+      fulltext: 'Full text',
+      vector: 'Vector',
+      hybrid: 'Hybrid',
+      'hybrid-native': 'Hybrid · native',
+      'hybrid-non-native': 'Hybrid · non-native',
+    };
     const ALL_FILTER_VALUES = { datasets: ALL_DATASET_KEYS, engines: ALL_ENGINE_KEYS, modes: ALL_MODE_KEYS };
+    const expandLegacyModes = values => [...new Set((values || []).flatMap(value => value === 'hybrid' ? ['hybrid-native', 'hybrid-non-native'] : [value]))];
     const validDefaults = (values, allowed) => (values || []).filter(value => allowed.includes(value));
     const DEFAULT_DATASET_KEYS = validDefaults(DATA.meta.defaultDatasets, ALL_DATASET_KEYS);
     const DEFAULT_ENGINE_KEYS = validDefaults(DATA.meta.defaultEngines, ALL_ENGINE_KEYS);
-    const DEFAULT_MODE_KEYS = validDefaults(DATA.meta.defaultModes, ALL_MODE_KEYS);
+    const DEFAULT_MODE_KEYS = validDefaults(expandLegacyModes(DATA.meta.defaultModes), ALL_MODE_KEYS);
     if (!DEFAULT_DATASET_KEYS.length) DEFAULT_DATASET_KEYS.push(...ALL_DATASET_KEYS);
     if (!DEFAULT_ENGINE_KEYS.length) DEFAULT_ENGINE_KEYS.push(...ALL_ENGINE_KEYS);
     if (!DEFAULT_MODE_KEYS.length) DEFAULT_MODE_KEYS.push(...ALL_MODE_KEYS);
@@ -1398,7 +1468,27 @@ HTML_TEMPLATE = r'''<!doctype html>
     const versionWithDate = (version, createdAt) => `${version || 'unknown'}${imageDate(createdAt) ? ` (${imageDate(createdAt)})` : ''}`;
     const systemVersionLabel = engine => versionWithDate(systemVersion(engine), DATA.systems[engine]?.imageCreatedAt);
     const runVersionLabel = run => versionWithDate(runVersion(run), run?.imageCreatedAt);
-    const modeBadge = mode => `<span class="mode-badge mode-${escapeHtml(mode)}">${escapeHtml(mode === 'fulltext' ? 'FT' : mode[0])}</span>`;
+    const modeBase = mode => String(mode || '').startsWith('hybrid-') ? 'hybrid' : mode;
+    const modeKey = item => typeof item === 'string' ? item : item?.modeVariant || item?.mode || '';
+    const modeName = item => {
+      const key = modeKey(item);
+      if (key === 'hybrid') {
+        const nativeSelected = state.modes.includes('hybrid-native');
+        const nonNativeSelected = state.modes.includes('hybrid-non-native');
+        if (nativeSelected && !nonNativeSelected) return MODE_NAMES['hybrid-native'];
+        if (!nativeSelected && nonNativeSelected) return MODE_NAMES['hybrid-non-native'];
+        if (nativeSelected && nonNativeSelected) return 'Hybrid · best native/non-native';
+      }
+      return MODE_NAMES[key] || MODE_NAMES[modeBase(key)] || key;
+    };
+    const modeShort = item => {
+      const key = modeKey(item);
+      return key === 'fulltext' ? 'FT' : key === 'vector' ? 'V' : key === 'hybrid-native' ? 'HN' : key === 'hybrid-non-native' ? 'HC' : 'H';
+    };
+    const modeBadge = item => {
+      const key = modeKey(item), base = modeBase(key);
+      return `<span class="mode-badge mode-${escapeHtml(base)}">${escapeHtml(modeShort(item))}</span>`;
+    };
     const queryVariantText = run => run?.queryField
       ? `${String(run.queryField).replace(/^./, value => value.toUpperCase())} field`
       : run?.queryVariant === 'same'
@@ -1406,14 +1496,14 @@ HTML_TEMPLATE = r'''<!doctype html>
       : run?.queryVariant === 'short'
         ? `Short text (${run?.queryVariantExplicit ? 'recorded' : 'legacy inferred'})`
         : `${String(run?.queryVariant || 'unknown').replace(/^./, value => value.toUpperCase())} text`;
-    const variantName = item => `${systemName(item.engine)} / ${item.mode}`;
+    const variantName = item => `${systemName(item.engine)} / ${modeName(item)}`;
     const METRIC_LABELS = { canonical: 'Canonical', ndcg10: 'NDCG@10', ndcg20: 'NDCG@20', mrr10: 'MRR@10', map10: 'MAP@10', p20: 'P@20', recall100: 'Recall@100' };
     const METRIC_DETAILS = {
       'Coverage': ['Dataset/query-set coverage', 'Completed results for this engine out of all dataset/query-set cohorts selected in the filter. Missing any selected cohort makes the engine incomplete and therefore unranked.'],
       'Mean relative': ['Average relative score', 'Engine score ÷ best observed score is averaged within each dataset family first, then across families. The three TREC-COVID query formulations therefore do not give that corpus triple weight. The best reference includes hidden engines.'],
       'Mean raw': ['Average metric value', 'Arithmetic mean of the displayed metric values. With “Recommended for each dataset”, this can combine NDCG@10 and MRR@10, so use it only as a quick orientation.'],
       'Dataset wins': ['Best results', 'Number of selected datasets where this engine matches the best observed score. Ties count as wins.'],
-      'Chosen modes': ['Modes behind the scores', 'Counts of the modes supplying each displayed result: FT = full text, V = vector, H = hybrid. The highest-quality result among the selected search modes is chosen separately for every engine and dataset.'],
+      'Chosen modes': ['Modes behind the scores', 'Counts of the modes supplying each displayed result: FT = full text, V = vector, HN = native hybrid, HC = client-side/non-native hybrid. The highest-quality result among the selected search modes is chosen separately for every engine and dataset.'],
       'NDCG@10': ['Ranking quality · top 10', 'Rewards highly relevant documents near the top of the first 10 results and respects graded relevance.'],
       'NDCG@20': ['Ranking quality · top 20', 'The same ranking-quality measure over the first 20 results. Higher is better.'],
       'MRR@10': ['First useful result · top 10', 'Measures how quickly the first relevant result appears. Best when users usually need one answer.'],
@@ -1446,12 +1536,24 @@ HTML_TEMPLATE = r'''<!doctype html>
       return [...grouped.values()].map(mean);
     }
 
-    function visibleRuns({ ignoreMode = false } = {}) {
-      return DATA.runs.filter(run =>
+    function engineMatchesHybridFilter(engine) {
+      const selectedHybridVariants = state.modes.filter(mode => mode.startsWith('hybrid-'));
+      if (selectedHybridVariants.length !== 1) return true;
+      const required = selectedHybridVariants[0] === 'hybrid-native' ? 'native' : 'non-native';
+      return (DATA.systems[engine]?.hybridImplementations || []).includes(required);
+    }
+
+    function filteredRuns({ respectEngineFilter = true, ignoreMode = false } = {}) {
+      const candidates = DATA.runs.filter(run =>
         state.datasets.includes(run.datasetKey) &&
-        state.engines.includes(run.engine) &&
-        (ignoreMode || state.modes.includes(run.mode))
+        (!respectEngineFilter || state.engines.includes(run.engine)) &&
+        engineMatchesHybridFilter(run.engine)
       );
+      return candidates.filter(run => ignoreMode || state.modes.includes(run.modeVariant));
+    }
+
+    function visibleRuns({ ignoreMode = false } = {}) {
+      return filteredRuns({ respectEngineFilter: true, ignoreMode });
     }
 
     function selectedDatasetKeys() {
@@ -1491,10 +1593,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     }
 
     function runsForReference() {
-      return DATA.runs.filter(run =>
-        selectedDatasetKeys().includes(run.datasetKey) &&
-        state.modes.includes(run.mode)
-      );
+      return filteredRuns({ respectEngineFilter: false });
     }
 
     function selectedRunsByEngineDataset({ respectEngineFilter = true } = {}) {
@@ -1516,8 +1615,14 @@ HTML_TEMPLATE = r'''<!doctype html>
       }
       const result = [...grouped].map(([engine, runs]) => {
         const relatives = runs.map(run => metricValue(run) / Math.max(winners.get(run.datasetKey) || 0, 1e-12));
-        const counts = { fulltext: 0, vector: 0, hybrid: 0 };
-        runs.forEach(run => counts[run.mode]++);
+        const counts = { fulltext: 0, vector: 0, hybridNative: 0, hybridNonNative: 0 };
+        runs.forEach(run => {
+          if (run.mode === 'hybrid') {
+            counts[run.hybridImplementation === 'non-native' ? 'hybridNonNative' : 'hybridNative']++;
+          } else {
+            counts[run.mode]++;
+          }
+        });
         const complete = runs.length === total;
         const relativeByRun = runs.map((run, index) => ({ run, value: relatives[index] * 100 }));
         const familyRelatives = familyMeans(relativeByRun, entry => entry.value / 100);
@@ -1556,7 +1661,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       const modeParams = params.getAll('mode');
       if (datasetParams.length) state.datasets = datasetParams.includes('none') ? [] : datasetParams.includes('all') ? [...ALL_DATASET_KEYS] : datasetParams.filter(key => ALL_DATASET_KEYS.includes(key));
       if (engineParams.length) state.engines = engineParams.includes('none') ? [] : engineParams.includes('all') ? [...ALL_ENGINE_KEYS] : engineParams.filter(key => ALL_ENGINE_KEYS.includes(key));
-      if (modeParams.length) state.modes = modeParams.includes('none') ? [] : modeParams.includes('all') || modeParams.includes('best') ? [...ALL_MODE_KEYS] : modeParams.filter(key => ALL_MODE_KEYS.includes(key));
+      if (modeParams.length) state.modes = modeParams.includes('none') ? [] : modeParams.includes('all') || modeParams.includes('best') ? [...ALL_MODE_KEYS] : expandLegacyModes(modeParams).filter(key => ALL_MODE_KEYS.includes(key));
       for (const key of ['metric','value','performance','scatterMode','focus']) {
         const value = params.get(key);
         const node = key === 'focus' ? $('#focus-dataset') : key === 'scatterMode' ? $('#scatter-mode-filter') : $(`#${key}-filter`);
@@ -1581,10 +1686,12 @@ HTML_TEMPLATE = r'''<!doctype html>
       const modeNames = state.modes.map(mode => MODE_NAMES[mode]);
       const datasetText = state.datasets.length === ALL_DATASET_KEYS.length ? `All ${ALL_DATASET_KEYS.length} datasets` : state.datasets.length === 0 ? 'No datasets selected' : state.datasets.length === 1 ? datasetNames[0] : `${state.datasets.length} of ${ALL_DATASET_KEYS.length} datasets`;
       const engineText = state.engines.length === ALL_ENGINE_KEYS.length ? `All ${ALL_ENGINE_KEYS.length} engines` : state.engines.length === 0 ? 'No engines selected' : state.engines.length === 1 ? engineNames[0] : `${state.engines.length} of ${ALL_ENGINE_KEYS.length} engines`;
-      const modeText = state.modes.length === ALL_MODE_KEYS.length ? 'All modes · best available' : state.modes.length === 0 ? 'No modes selected' : state.modes.length === 1 ? modeNames[0] : `${state.modes.length} of ${ALL_MODE_KEYS.length} modes · best`;
+      const bothHybrid = state.modes.length === 2 && state.modes.includes('hybrid-native') && state.modes.includes('hybrid-non-native');
+      const modeText = state.modes.length === ALL_MODE_KEYS.length ? 'All modes · best available' : state.modes.length === 0 ? 'No modes selected' : state.modes.length === 1 ? modeNames[0] : bothHybrid ? 'Hybrid · best native/non-native' : `${state.modes.length} of ${ALL_MODE_KEYS.length} modes · best`;
       $('#dataset-summary').textContent = datasetText; $('#dataset-summary').title = datasetNames.join('\n');
       $('#engine-summary').textContent = engineText; $('#engine-summary').title = engineNames.join(', ');
-      $('#mode-summary').textContent = modeText; $('#mode-summary').title = modeNames.join(', ');
+      const hybridEligibilityNote = state.modes.filter(mode => mode.startsWith('hybrid-')).length === 1 ? '\nRestricts the engine cohort to this hybrid implementation; selected full-text/vector runs then compete for every dataset where they exist.' : '';
+      $('#mode-summary').textContent = modeText; $('#mode-summary').title = modeNames.join(', ') + hybridEligibilityNote;
     }
 
     function updateFocusOptions() {
@@ -1646,7 +1753,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       if (!saved || typeof saved !== 'object') return false;
       state.datasets = Array.isArray(saved.datasets) ? saved.datasets.filter(key => ALL_DATASET_KEYS.includes(key)) : [...DEFAULT_DATASET_KEYS];
       state.engines = Array.isArray(saved.engines) ? saved.engines.filter(key => ALL_ENGINE_KEYS.includes(key)) : [...DEFAULT_ENGINE_KEYS];
-      state.modes = Array.isArray(saved.modes) ? saved.modes.filter(key => ALL_MODE_KEYS.includes(key)) : [...DEFAULT_MODE_KEYS];
+      state.modes = Array.isArray(saved.modes) ? expandLegacyModes(saved.modes).filter(key => ALL_MODE_KEYS.includes(key)) : [...DEFAULT_MODE_KEYS];
       const metricOptions = [...$('#metric-filter').options].map(option => option.value);
       const valueOptions = [...$('#value-filter').options].map(option => option.value);
       const performanceOptions = [...$('#performance-filter').options].map(option => option.value);
@@ -1765,7 +1872,7 @@ HTML_TEMPLATE = r'''<!doctype html>
         <td class="num ${item.complete && Math.abs(item.relative - bestRelative) < 1e-10 ? 'best' : ''}">${dec(item.relative, 2)}%</td>
         <td class="num quality-floor ${item.complete && Math.abs(item.floor - bestFloor) < 1e-10 ? 'best' : ''}"><strong>${dec(item.floor, 2)}%</strong><small>${escapeHtml(item.floorRun ? (datasetByKey[item.floorRun.datasetKey]?.label || item.floorRun.dataset).split(' · ')[0] : '—')}</small></td>
         ${state.metric === 'canonical' ? '' : `<td class="num">${dec(item.raw, 4)}</td>`}<td class="num ${item.complete && item.wins === bestWins ? 'best' : ''}">${item.wins}</td>
-        <td class="subtle">${modeBadge('fulltext')} ${item.counts.fulltext} · ${modeBadge('vector')} ${item.counts.vector} · ${modeBadge('hybrid')} ${item.counts.hybrid}</td>
+        <td class="subtle">${modeBadge('fulltext')} ${item.counts.fulltext} · ${modeBadge('vector')} ${item.counts.vector} · ${modeBadge('hybrid-native')} ${item.counts.hybridNative} · ${modeBadge('hybrid-non-native')} ${item.counts.hybridNonNative}</td>
       </tr>`;
       }).join('');
       const rawHeader = state.metric === 'canonical' ? '' : `<th class="num">${metricNameHtml('Mean raw')}</th>`;
@@ -1832,11 +1939,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 
     function renderScatter() {
       if (!state.datasets.includes(state.focus)) { $('#scatter').innerHTML = '<div class="empty">Select at least one dataset to open the dataset explorer.</div>'; return; }
-      const scoped = DATA.runs.filter(run =>
-        run.datasetKey === state.focus &&
-        state.engines.includes(run.engine) &&
-        state.modes.includes(run.mode)
-      );
+      const scoped = visibleRuns().filter(run => run.datasetKey === state.focus);
       const items = bestBy(scoped, run => state.scatterMode === 'all' ? `${run.engine}|${run.mode}` : run.engine).filter(run => metricValue(run) > 0 && run[state.performance] > 0);
       if (!items.length) { $('#scatter').innerHTML = '<div class="empty">No chartable runs match this dataset and filter selection.</div>'; return; }
       const width = 1160, height = 440, left = 76, right = 30, top = 28, bottom = 58;
@@ -1873,7 +1976,7 @@ HTML_TEMPLATE = r'''<!doctype html>
         if (item.mode === 'fulltext') mark = `<rect x="${x-radius}" y="${y-radius}" width="${radius*2}" height="${radius*2}" rx="1.5" fill="${color}" fill-opacity=".88" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
         else if (item.mode === 'hybrid') mark = `<path d="M ${x} ${y-radius-1} L ${x+radius+1} ${y} L ${x} ${y+radius+1} L ${x-radius-1} ${y} Z" fill="${color}" fill-opacity=".88" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
         else mark = `<circle cx="${x}" cy="${y}" r="${radius}" fill="${color}" fill-opacity=".88" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
-        svg += `<g data-run-id="${escapeHtml(item.runId)}" tabindex="0" style="cursor:pointer"><title>${escapeHtml(tooltip)}</title>${mark}<text class="point-label" x="${x + 10}" y="${y + 3}">${escapeHtml(systemName(item.engine))} · ${escapeHtml(item.mode === 'fulltext' ? 'FT' : item.mode === 'vector' ? 'V' : 'H')}</text></g>`;
+        svg += `<g data-run-id="${escapeHtml(item.runId)}" tabindex="0" style="cursor:pointer"><title>${escapeHtml(tooltip)}</title>${mark}<text class="point-label" x="${x + 10}" y="${y + 3}">${escapeHtml(systemName(item.engine))} · ${escapeHtml(modeShort(item))}</text></g>`;
       }
       svg += '</svg>';
       $('#scatter').innerHTML = svg;
@@ -1895,8 +1998,10 @@ HTML_TEMPLATE = r'''<!doctype html>
 
     function renderHeatmap() {
       let datasets = matrixOrder.datasets.map(key => datasetByKey[key]).filter(d => d && state.datasets.includes(d.key));
-      let engines = matrixOrder.engines.filter(engine => state.engines.includes(engine));
-      if (!datasets.length || !engines.length) { $('#heatmap').innerHTML = '<div class="empty">Select at least one dataset and one engine to build the comparison matrix.</div>'; return; }
+      const restrictToOneHybridCohort = state.modes.filter(mode => mode.startsWith('hybrid-')).length === 1;
+      const eligibleEngines = new Set(visibleRuns().map(run => run.engine));
+      let engines = matrixOrder.engines.filter(engine => state.engines.includes(engine) && (!restrictToOneHybridCohort || eligibleEngines.has(engine)));
+      if (!datasets.length || !engines.length) { $('#heatmap').innerHTML = '<div class="empty">No engine/dataset results match the selected datasets, engines, and search modes.</div>'; return; }
       const best = new Map(selectedRunsByEngineDataset().map(run => [`${run.engine}|${run.datasetKey}`, run]));
       const winners = referenceWinners();
       const relativeScore = (engine,datasetKey) => {
@@ -1929,11 +2034,11 @@ HTML_TEMPLATE = r'''<!doctype html>
           const ratio = reference > 0 ? metricValue(run) / reference : 0;
           const color = qualityHeatColor(ratio);
           const bg = color.bg;
-          const title = `${systemName(engine)} ${runVersionLabel(run)}\n${dataset.label}\n${MODE_NAMES[run.mode]}: ${dec(metricValue(run),4)}\n${dec(ratio*100,1)}% of the best observed result in this dataset`;
+          const title = `${systemName(engine)} ${runVersionLabel(run)}\n${dataset.label}\n${modeName(run)}: ${dec(metricValue(run),4)}\n${dec(ratio*100,1)}% of the best observed result in this dataset`;
           const main = state.value === 'relative' ? `${dec(ratio*100,1)}%` : dec(metricValue(run),4);
           const sub = state.value === 'relative' ? dec(metricValue(run),4) : `${dec(ratio*100,1)}%`;
           const winnerClass = ratio >= 0.9995 ? ' matrix-winner' : '';
-          return `<td class="heat-cell"><button type="button" class="matrix-cell-button${winnerClass}" data-run-id="${escapeHtml(run.runId)}" style="--cell-bg:${bg};--cell-fg:${color.fg}" title="${escapeHtml(title)}"><strong>${main}</strong><small>${modeBadge(run.mode)}${sub}</small></button></td>`;
+          return `<td class="heat-cell"><button type="button" class="matrix-cell-button${winnerClass}" data-run-id="${escapeHtml(run.runId)}" style="--cell-bg:${bg};--cell-fg:${color.fg}" title="${escapeHtml(title)}"><strong>${main}</strong><small>${modeBadge(run)}${sub}</small></button></td>`;
         }).join('');
         rows += `<tr><td><div class="matrix-row-actions"><button class="matrix-sort-button" type="button" data-sort-dataset="${escapeHtml(dataset.key)}" title="Sort engines by this dataset">${escapeHtml(dataset.label.replace(/ · .*/, ''))}${arrow('engines',dataset.key)}</button><button class="matrix-explore" type="button" data-dataset-key="${escapeHtml(dataset.key)}" title="Open Dataset explorer">Explore →</button></div><span class="subtle">${dataset.docs == null ? '' : fmt.format(dataset.docs) + ' docs · '}${metricNameHtml(state.metric === 'canonical' ? dataset.metric.toUpperCase() : METRIC_LABELS[state.metric])}</span></td>${cells}</tr>`;
       }
@@ -1991,7 +2096,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     function modeProfileRows() {
       const references = allModeReferenceWinners();
       const total = selectedDatasetKeys().length;
-      const runs = DATA.runs.filter(run => state.datasets.includes(run.datasetKey) && state.engines.includes(run.engine) && state.modes.includes(run.mode));
+      const runs = visibleRuns();
       const best = bestBy(runs, run => `${run.engine}|${run.mode}|${run.datasetKey}`);
       const grouped = new Map();
       for (const run of best) {
@@ -2037,7 +2142,7 @@ HTML_TEMPLATE = r'''<!doctype html>
         }
         for(const point of points){
           const complete=point.covered===point.total;
-          const title=`${systemName(row.engine)} · ${MODE_NAMES[point.mode]}\nMean relative quality ${dec(point.value,2)}%\nCoverage ${point.covered}/${point.total} datasets`;
+          const title=`${systemName(row.engine)} · ${modeName(point)}\nMean relative quality ${dec(point.value,2)}%\nCoverage ${point.covered}/${point.total} datasets`;
           svg+=marker(point.mode,sx(point.value),y,color,complete,title);
         }
       });
@@ -2047,7 +2152,7 @@ HTML_TEMPLATE = r'''<!doctype html>
 
     function renderLatency() {
       if (!state.datasets.includes(state.focus)) { $('#latency').innerHTML = '<div class="empty">Select a dataset to inspect latency.</div>'; return; }
-      const scoped = DATA.runs.filter(run => run.datasetKey === state.focus && state.engines.includes(run.engine) && state.modes.includes(run.mode));
+      const scoped = visibleRuns().filter(run => run.datasetKey === state.focus);
       const items = bestBy(scoped, run => `${run.engine}|${run.mode}`).filter(v => v.p99 > 0).sort((a,b) => a.p99-b.p99).slice(0,20);
       if (!items.length) { $('#latency').innerHTML = '<div class="empty">No latency data for this selection.</div>'; return; }
       const width=1160, rowH=27, top=24, bottom=32, left=190, right=64, height=top+bottom+items.length*rowH, plotW=width-left-right;
@@ -2055,7 +2160,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       const sx=value=>left+(Math.log10(Math.max(min,value))-lmin)/(lmax-lmin)*plotW;
       let svg=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="P50 P95 and P99 latency ranges">`;
       for(let i=0;i<=4;i++){const lv=lmin+(lmax-lmin)*i/4,v=10**lv,x=sx(v);svg+=`<line class="gridline" x1="${x}" y1="${top-7}" x2="${x}" y2="${height-bottom}"/><text class="axis-label" x="${x}" y="${height-8}" text-anchor="middle">${v>=100?v.toFixed(0):v.toFixed(1)} ms</text>`;}
-      items.forEach((item,index)=>{const y=top+index*rowH+6,x50=sx(item.p50),x95=sx(item.p95),x99=sx(item.p99),color=COLORS[item.engine];svg+=`<text class="axis-label" x="${left-9}" y="${y+4}" text-anchor="end">${escapeHtml(systemName(item.engine))} · ${escapeHtml(item.mode === 'fulltext' ? 'FT' : item.mode[0].toUpperCase())}</text><line x1="${x50}" y1="${y}" x2="${x99}" y2="${y}" stroke="${color}" stroke-width="1.5" stroke-opacity=".7"><title>P50 ${ms(item.p50)} · P95 ${ms(item.p95)} · P99 ${ms(item.p99)}</title></line><circle cx="${x50}" cy="${y}" r="2.5" fill="${color}"/><circle cx="${x95}" cy="${y}" r="2.5" fill="${color}" fill-opacity=".72"/><circle cx="${x99}" cy="${y}" r="3" fill="${color}" stroke="#e8eef4" stroke-width=".8"/>`;});
+      items.forEach((item,index)=>{const y=top+index*rowH+6,x50=sx(item.p50),x95=sx(item.p95),x99=sx(item.p99),color=COLORS[item.engine];svg+=`<text class="axis-label" x="${left-9}" y="${y+4}" text-anchor="end">${escapeHtml(systemName(item.engine))} · ${escapeHtml(modeShort(item))}</text><line x1="${x50}" y1="${y}" x2="${x99}" y2="${y}" stroke="${color}" stroke-width="1.5" stroke-opacity=".7"><title>P50 ${ms(item.p50)} · P95 ${ms(item.p95)} · P99 ${ms(item.p99)}</title></line><circle cx="${x50}" cy="${y}" r="2.5" fill="${color}"/><circle cx="${x95}" cy="${y}" r="2.5" fill="${color}" fill-opacity=".72"/><circle cx="${x99}" cy="${y}" r="3" fill="${color}" stroke="#e8eef4" stroke-width=".8"/>`;});
       svg+='</svg>'; $('#latency').innerHTML=svg;
     }
 
@@ -2070,7 +2175,8 @@ HTML_TEMPLATE = r'''<!doctype html>
       const rows = DATA.slowQueries.filter(item =>
         item.datasetKey === state.focus &&
         state.engines.includes(item.engine) &&
-        state.modes.includes(item.mode)
+        engineMatchesHybridFilter(item.engine) &&
+        state.modes.includes(item.modeVariant)
       ).sort((a,b) => b.latency-a.latency || a.engine.localeCompare(b.engine) || a.mode.localeCompare(b.mode) || a.query.localeCompare(b.query));
       $('#query-count').textContent = `${fmt.format(Math.min(rows.length,60))} of ${fmt.format(rows.length)} samples · 8/run`;
       if (!rows.length) { $('#slow-queries').innerHTML='<div class="empty">No slow-query samples match these filters.</div>'; return; }
@@ -2080,7 +2186,7 @@ HTML_TEMPLATE = r'''<!doctype html>
         const expandable=item.query.length > 60 || item.query.includes('\n');
         const toggle=expandable ? `<button type="button" class="query-toggle" data-query-toggle aria-expanded="false" aria-controls="${queryId}">… Show full query</button>` : '';
         const datasetCell = showDataset ? `<td>${escapeHtml(datasetByKey[item.datasetKey]?.label || item.datasetKey)}</td>` : '';
-        return `<tr><td class="query"><div id="${queryId}" class="query-text">${escapeHtml(item.query)}</div>${toggle}</td>${datasetCell}<td class="engine-cell"><b style="color:${COLORS[item.engine]}">${escapeHtml(systemName(item.engine))}</b><small>${escapeHtml(runVersionLabel(item))}</small></td><td>${modeBadge(item.mode)} ${escapeHtml(MODE_NAMES[item.mode])}</td><td class="num">${ms(item.latency)}</td></tr>`;
+        return `<tr><td class="query"><div id="${queryId}" class="query-text">${escapeHtml(item.query)}</div>${toggle}</td>${datasetCell}<td class="engine-cell"><b style="color:${COLORS[item.engine]}">${escapeHtml(systemName(item.engine))}</b><small>${escapeHtml(runVersionLabel(item))}</small></td><td>${modeBadge(item)} ${escapeHtml(modeName(item))}</td><td class="num">${ms(item.latency)}</td></tr>`;
       }).join('');
       const datasetHeader = showDataset ? '<th>Dataset</th>' : '';
       $('#slow-queries').innerHTML=`<div class="table-wrap"><table><thead><tr><th>Query</th>${datasetHeader}<th>Engine</th><th>Mode</th><th class="num">Latency</th></tr></thead><tbody>${body}</tbody></table></div>`;
@@ -2094,14 +2200,14 @@ HTML_TEMPLATE = r'''<!doctype html>
     const SORT_LABELS = {date:'Date',engine:'Engine',mode:'Mode',dataset:'Dataset',queryVariant:'Query set',docs:'Docs',quality:'Quality',p50:'P50',p95:'P95',p99:'P99',qps:'QPS'};
     function renderRunTable() {
       const needle = state.search.trim().toLowerCase();
-      const rows=visibleRuns().filter(run => !needle || [run.engine, systemName(run.engine), run.mode, run.dataset, datasetByKey[run.datasetKey]?.label, run.queryField, run.queryVariant, run.queryVariantRequested, run.profile, run.model].join(' ').toLowerCase().includes(needle));
+      const rows=visibleRuns().filter(run => !needle || [run.engine, systemName(run.engine), run.mode, run.modeVariant, run.hybridImplementation, run.dataset, datasetByKey[run.datasetKey]?.label, run.queryField, run.queryVariant, run.queryVariantRequested, run.profile, run.model].join(' ').toLowerCase().includes(needle));
       const key=state.sort, direction=state.direction==='asc'?1:-1;
-      rows.sort((a,b)=>{let av=key==='quality'?metricValue(a):a[key],bv=key==='quality'?metricValue(b):b[key];if(key==='date'){av=a.runAt;bv=b.runAt;}if(key==='engine'){av=systemName(a.engine);bv=systemName(b.engine);}if(key==='dataset'){av=datasetByKey[a.datasetKey]?.label||a.datasetKey;}return (typeof av==='string'?av.localeCompare(bv):(av||0)-(bv||0))*direction;});
+      rows.sort((a,b)=>{let av=key==='quality'?metricValue(a):a[key],bv=key==='quality'?metricValue(b):b[key];if(key==='date'){av=a.runAt;bv=b.runAt;}if(key==='engine'){av=systemName(a.engine);bv=systemName(b.engine);}if(key==='mode'){av=a.modeVariant;bv=b.modeVariant;}if(key==='dataset'){av=datasetByKey[a.datasetKey]?.label||a.datasetKey;}return (typeof av==='string'?av.localeCompare(bv):(av||0)-(bv||0))*direction;});
       $('#run-count').textContent=`${fmt.format(rows.length)} runs`;
       const header=Object.entries(SORT_LABELS).map(([key,label])=>{const metricKey=label==='Quality'?(state.metric==='canonical'?'NDCG@10 / MRR@10':METRIC_LABELS[state.metric]):label.toUpperCase();const help=label==='Quality'?'The selected quality metric; canonical uses the recommended metric for each dataset.':metricDescription(metricKey);return `<th class="${['docs','quality','qps','p50','p95','p99'].includes(key)?'num':''}"><button class="sort-button" data-sort="${key}" title="${escapeHtml(help)}">${label}${state.sort===key?(state.direction==='asc'?' ↑':' ↓'):''}</button></th>`;}).join('');
       const pageSize=50, pages=Math.max(1,Math.ceil(rows.length/pageSize)); state.page=Math.min(state.page,pages);
       const visible=rows.slice((state.page-1)*pageSize,state.page*pageSize);
-      const body=visible.map(run=>`<tr><td><button type="button" class="sort-button" data-run-id="${escapeHtml(run.runId)}" title="Open run details">${escapeHtml(run.date.replace(' UTC',''))}</button></td><td class="engine-cell"><b style="color:${COLORS[run.engine]}">${escapeHtml(systemName(run.engine))}</b><small>${escapeHtml(runVersionLabel(run))}</small></td><td>${modeBadge(run.mode)} ${escapeHtml(MODE_NAMES[run.mode])}</td><td title="${escapeHtml(run.dataset)}">${escapeHtml((datasetByKey[run.datasetKey]?.label||run.dataset).replace(/ · .*/,''))}</td><td>${escapeHtml(queryVariantText(run))}</td><td class="num">${run.docs==null?'—':fmt.format(run.docs)}</td><td class="num" title="${escapeHtml(metricLabel(run))}">${dec(metricValue(run),4)}</td><td class="num">${ms(run.p50)}</td><td class="num">${ms(run.p95)}</td><td class="num">${ms(run.p99)}</td><td class="num">${dec(run.qps,1)}</td></tr>`).join('');
+      const body=visible.map(run=>`<tr><td><button type="button" class="sort-button" data-run-id="${escapeHtml(run.runId)}" title="Open run details">${escapeHtml(run.date.replace(' UTC',''))}</button></td><td class="engine-cell"><b style="color:${COLORS[run.engine]}">${escapeHtml(systemName(run.engine))}</b><small>${escapeHtml(runVersionLabel(run))}</small></td><td>${modeBadge(run)} ${escapeHtml(modeName(run))}</td><td title="${escapeHtml(run.dataset)}">${escapeHtml((datasetByKey[run.datasetKey]?.label||run.dataset).replace(/ · .*/,''))}</td><td>${escapeHtml(queryVariantText(run))}</td><td class="num">${run.docs==null?'—':fmt.format(run.docs)}</td><td class="num" title="${escapeHtml(metricLabel(run))}">${dec(metricValue(run),4)}</td><td class="num">${ms(run.p50)}</td><td class="num">${ms(run.p95)}</td><td class="num">${ms(run.p99)}</td><td class="num">${dec(run.qps,1)}</td></tr>`).join('');
       $('#run-table').innerHTML=`<div class="table-wrap" style="max-height:680px"><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div><div class="pagination"><span>Page ${state.page} of ${pages} · ${fmt.format(rows.length)} results</span><div class="button-row"><button type="button" data-page="prev" ${state.page===1?'disabled':''}>Previous</button><button type="button" data-page="next" ${state.page===pages?'disabled':''}>Next</button></div></div>`;
       document.querySelectorAll('[data-sort]').forEach(button=>button.addEventListener('click',()=>{const next=button.dataset.sort;if(state.sort===next)state.direction=state.direction==='asc'?'desc':'asc';else{state.sort=next;state.direction=['engine','mode','dataset','queryVariant','date'].includes(next)?'asc':'desc';}renderRunTable();}));
       document.querySelectorAll('#run-table [data-run-id]').forEach(button=>button.addEventListener('click',()=>showRun(button.dataset.runId)));
@@ -2115,13 +2221,14 @@ HTML_TEMPLATE = r'''<!doctype html>
         ['NDCG@10',run.ndcg10],['NDCG@20',run.ndcg20],['MRR@10',run.mrr10],['MAP@10',run.map10],['P@20',run.p20],['Recall@100',run.recall100],
         ['P50',ms(run.p50)],['P95',ms(run.p95)],['P99',ms(run.p99)],['QPS',run.qps]
       ];
-      $('#run-dialog-content').innerHTML=`<div class="dialog-head"><div><h2>${escapeHtml(systemName(run.engine))} / ${escapeHtml(MODE_NAMES[run.mode])}</h2><div class="subtle">${escapeHtml(runVersionLabel(run))}</div></div><button class="dialog-close" type="button" aria-label="Close">×</button></div><div class="dialog-body"><div class="detail-hero"><div class="detail-score"><span>${metricNameHtml(metricLabel(run))}</span><strong>${dec(metricValue(run),4)}</strong><small>${escapeHtml(METRIC_DETAILS[metricLabel(run)]?.[0] || '')} · ${escapeHtml(dataset.label)}</small></div><div class="detail-score"><span>${metricNameHtml('P50')}</span><strong>${ms(run.p50)}</strong><small>Tail ${metricNameHtml('P99')} ${ms(run.p99)} · ${metricNameHtml('QPS')} ${dec(run.qps,1)}</small></div></div><div class="performance-disclaimer"><strong>Performance note.</strong> This benchmark is designed primarily to compare search quality. Latency and QPS were measured with a lightweight methodology and may be noisy; use them only as directional context, not as an authoritative performance comparison.</div><div class="detail-grid">${metrics.map(([name,value])=>`<div class="detail-tile"><span>${METRIC_DETAILS[name] ? metricNameHtml(name) : escapeHtml(name)}</span><strong>${typeof value==='number'?dec(value,4):value}</strong></div>`).join('')}</div><dl class="detail-kv"><dt>Run date</dt><dd>${escapeHtml(run.date)}</dd><dt>Dataset</dt><dd>${escapeHtml(dataset.label)}</dd><dt>Query set</dt><dd>${escapeHtml(queryVariantText(run))}</dd><dt>Profile</dt><dd>${escapeHtml(run.profile)}</dd><dt>Model/options</dt><dd>${escapeHtml(run.model)}</dd><dt>Settings</dt><dd>concurrency ${escapeHtml(run.concurrency)} · limit ${escapeHtml(run.limit)} · warmup ${escapeHtml(run.warmup)} · repeats ${escapeHtml(run.repeats)}</dd></dl></div>`;
+      const implementationRow = run.mode === 'hybrid' ? `<dt>Hybrid implementation</dt><dd>${escapeHtml(run.hybridImplementation === 'native' ? 'Native / server-side' : 'Non-native / client-side')}</dd>` : '';
+      $('#run-dialog-content').innerHTML=`<div class="dialog-head"><div><h2>${escapeHtml(systemName(run.engine))} / ${escapeHtml(modeName(run))}</h2><div class="subtle">${escapeHtml(runVersionLabel(run))}</div></div><button class="dialog-close" type="button" aria-label="Close">×</button></div><div class="dialog-body"><div class="detail-hero"><div class="detail-score"><span>${metricNameHtml(metricLabel(run))}</span><strong>${dec(metricValue(run),4)}</strong><small>${escapeHtml(METRIC_DETAILS[metricLabel(run)]?.[0] || '')} · ${escapeHtml(dataset.label)}</small></div><div class="detail-score"><span>${metricNameHtml('P50')}</span><strong>${ms(run.p50)}</strong><small>Tail ${metricNameHtml('P99')} ${ms(run.p99)} · ${metricNameHtml('QPS')} ${dec(run.qps,1)}</small></div></div><div class="performance-disclaimer"><strong>Performance note.</strong> This benchmark is designed primarily to compare search quality. Latency and QPS were measured with a lightweight methodology and may be noisy; use them only as directional context, not as an authoritative performance comparison.</div><div class="detail-grid">${metrics.map(([name,value])=>`<div class="detail-tile"><span>${METRIC_DETAILS[name] ? metricNameHtml(name) : escapeHtml(name)}</span><strong>${typeof value==='number'?dec(value,4):value}</strong></div>`).join('')}</div><dl class="detail-kv"><dt>Run date</dt><dd>${escapeHtml(run.date)}</dd><dt>Dataset</dt><dd>${escapeHtml(dataset.label)}</dd><dt>Query set</dt><dd>${escapeHtml(queryVariantText(run))}</dd><dt>Profile</dt><dd>${escapeHtml(run.profile)}</dd>${implementationRow}<dt>Model/options</dt><dd>${escapeHtml(run.model)}</dd><dt>Settings</dt><dd>concurrency ${escapeHtml(run.concurrency)} · limit ${escapeHtml(run.limit)} · warmup ${escapeHtml(run.warmup)} · repeats ${escapeHtml(run.repeats)}</dd></dl></div>`;
       $('#run-dialog-content .dialog-close').addEventListener('click',()=>$('#run-dialog').close());
       $('#run-dialog').showModal();
     }
 
     function exportCsv() {
-      const columns=['date','engine','version','mode','dataset','physicalDataset','datasetFamily','queryField','queryVariant','queryVariantRequested','queryVariantExplicit','queryVariantsDistinct','docs','metric','quality','qps','p50','p95','p99','profile','model'];
+      const columns=['date','engine','version','mode','modeVariant','hybridImplementation','dataset','physicalDataset','datasetFamily','queryField','queryVariant','queryVariantRequested','queryVariantExplicit','queryVariantsDistinct','docs','metric','quality','qps','p50','p95','p99','profile','model'];
       const quote=value=>`"${String(value??'').replaceAll('"','""')}"`;
       const lines=[columns.join(',')];
       for(const run of visibleRuns()) lines.push(columns.map(column=>quote(column==='version'?runVersionLabel(run):column==='engine'?systemName(run.engine):run[column])).join(','));
