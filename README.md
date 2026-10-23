@@ -84,6 +84,19 @@ embedding:
 Prepared datasets are stored below `data/prepared/`. Cached embeddings are kept
 in `vector_cache/`; generating them can take time and may incur API costs.
 
+For TREC-COVID, refresh the prepared topics and incrementally add all three
+official query formulations to the cache with:
+
+```bash
+bench --config config.yaml prepare --source beir/trec-covid
+```
+
+Do not use `--reset-embeddings` for this migration: existing document and
+narrative vectors are reusable. The `run` matrix then exposes
+`trec-covid-query`, `trec-covid-question`, and `trec-covid-narrative` for every
+available full-text, vector, and hybrid profile. A direct run selects one with
+`--benchmark-dataset trec-covid-question` (or either of the other two IDs).
+
 ## Interactive report
 
 Run `report` from the `bench` menu, or rebuild the repository’s complete report
@@ -145,23 +158,19 @@ When several search modes are selected, each matrix cell uses the best result
 among those modes and labels the winning mode. Select exactly one mode for a
 fixed-mode comparison.
 
-Query wording is also part of the comparison identity. Each run records whether
-it used the prepared `short` or `long` query text. Reports keep distinct query
-sets in separate dataset cohorts, so an older short-query TREC-COVID full-text
-run is not mixed with long-query runs. If a dataset stores identical text in
-both fields, the run is labeled `same` and all modes remain comparable. By
-default, report generation includes the `same` cohort when available and
-otherwise the `long` cohort. A `short` cohort is included only when its run is
-explicitly recorded as `short` and that recorded-short run is selected for the
-report. Selecting a legacy unmarked run that is merely inferred as `short` does
-not enable the short cohort. Once a recorded-short run is selected, matching
-legacy inferred-short runs are also available to the report.
+TREC-COVID is exposed as three logical datasets over the same physical corpus
+and qrels: `trec-covid-query` (short keyword query), `trec-covid-question`
+(natural-language question), and `trec-covid-narrative` (long description).
+Each can be run independently in full-text, vector, and hybrid mode; hybrid uses
+the same selected wording in both branches. They share document embeddings and
+engine indexes, while `prepare` incrementally fills any missing query vectors.
 
-This recorded-short gate is specific to TREC-COVID. For legacy artifacts from
-other current datasets, missing query-variant metadata resolves to `same`
-because their prepared `query_short` and `query_long` texts are identical.
-Prepared-topic inspection still takes precedence if a dataset actually contains
-different texts.
+Reports keep the three formulations in separate cells. Existing unmarked
+TREC-COVID artifacts remain usable: full-text runs are interpreted as
+`trec-covid-query`, and vector/hybrid runs as `trec-covid-narrative`. Global
+scores first average the three views within the TREC-COVID family, preventing
+that one corpus from receiving triple weight. The older `short`/`long`/`same`
+identity remains available for other prepared datasets and historical schemas.
 
 Bundled SereneDB vector and hybrid profiles use exact vector scans. SereneDB
 26.10.1's ANN path was excluded after reproducible server crashes on repeated

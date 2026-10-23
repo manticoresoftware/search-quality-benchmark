@@ -38,6 +38,12 @@ OUTPUT_PATH = ROOT / "reports" / "search-benchmark" / "index.html"
 SLOW_QUERIES_PER_RUN = 8
 UNKNOWN_VERSION_VALUES = {"", "unknown", "n/a", "na", "none", "null", "latest"}
 TREC_COVID_DATASET = "beir/trec-covid"
+TREC_COVID_FAMILY = "trec-covid"
+TREC_COVID_BENCHMARKS = {
+    "trec-covid-query": "query",
+    "trec-covid-question": "question",
+    "trec-covid-narrative": "narrative",
+}
 
 # These are presentation overrides, not an allowlist. Engines without an
 # override are still included and receive a readable name derived from their
@@ -64,6 +70,9 @@ DATASET_NAMES = {
     "beir/scidocs": "SCIDOCS",
     "beir/scifact/test": "SciFact",
     "beir/trec-covid": "TREC-COVID",
+    "trec-covid-query": "TREC-COVID / query",
+    "trec-covid-question": "TREC-COVID / question",
+    "trec-covid-narrative": "TREC-COVID / narrative",
     "dl-typo": "DL-Typo",
     "hf-beir:theatticusproject/acord:test": "ACORD",
     "msmarco-passage/trec-dl-2019/judged": "TREC-DL 2019",
@@ -95,7 +104,21 @@ def dataset_label(dataset: str, docs: int | None, query_variant: str) -> str:
         base = DATASET_NAMES.get(dataset, dataset)
     if docs is not None:
         base = f"{base} · {docs:,} docs"
+    if dataset in TREC_COVID_BENCHMARKS:
+        return base
     return f"{base} · {query_variant_label(query_variant)} queries"
+
+
+def trec_covid_artifact_identity(payload: dict[str, Any], mode: str) -> tuple[str, str]:
+    benchmark_id = str(payload.get("benchmark_dataset_id") or "").strip().lower()
+    field = TREC_COVID_BENCHMARKS.get(benchmark_id, "")
+    if not field:
+        field = str(payload.get("query_field") or "").strip().lower()
+    if field not in {"query", "question", "narrative"}:
+        field = "query" if mode == "fulltext" else "narrative"
+    if benchmark_id not in TREC_COVID_BENCHMARKS:
+        benchmark_id = f"trec-covid-{field}"
+    return benchmark_id, field
 
 
 def prepared_query_variant_stats() -> dict[tuple[str, int | None], bool]:
@@ -115,11 +138,16 @@ def prepared_query_variant_stats() -> dict[tuple[str, int | None], bool]:
             with topics_path.open("r", encoding="utf-8") as handle:
                 for line in handle:
                     topic = json.loads(line)
-                    short_query = str(topic.get("query_short") or "").strip()
-                    long_query = str(topic.get("query_long") or "").strip()
-                    short_query = short_query or long_query
-                    long_query = long_query or short_query
-                    if short_query != long_query:
+                    values = {
+                        str(topic.get(field) or "").strip()
+                        for field in ("query", "question", "narrative")
+                        if str(topic.get(field) or "").strip()
+                    }
+                    if not values:
+                        short_query = str(topic.get("query_short") or "").strip()
+                        long_query = str(topic.get("query_long") or "").strip()
+                        values = {value for value in (short_query, long_query) if value}
+                    if len(values) > 1:
                         distinct = True
                         break
             if source:
@@ -289,14 +317,23 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         if not engine:
             continue
         mode = str(payload.get("mode", "")).strip().lower()
-        dataset = str(payload.get("dataset_source", "")).strip()
+        physical_dataset = str(payload.get("dataset_source", "")).strip()
+        dataset = physical_dataset
         docs = extract_doc_count(payload)
         query_variant_requested, query_variant, query_variants_distinct = artifact_query_variant(
             payload,
             mode,
-            inferred_variants_distinct(prepared_variant_stats, dataset, docs),
+            inferred_variants_distinct(prepared_variant_stats, physical_dataset, docs),
         )
         recorded_query_variant = str(payload.get("query_variant") or "").strip().lower()
+        dataset_family = str(payload.get("dataset_family") or dataset).strip()
+        query_field = str(payload.get("query_field") or "").strip().lower()
+        if physical_dataset == TREC_COVID_DATASET:
+            dataset, query_field = trec_covid_artifact_identity(payload, mode)
+            dataset_family = TREC_COVID_FAMILY
+            query_variant_requested = query_field
+            query_variant = "same"
+            query_variants_distinct = True
         dataset_key = f"{dataset}|{docs if docs is not None else 'unknown'}|queries:{query_variant}"
         relevance = payload.get("relevance", {}) or {}
         performance = payload.get("performance", {}) or {}
@@ -315,11 +352,18 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "imageCreatedAt": str(payload.get("engine_image_created_at") or "").strip(),
             "mode": mode,
             "dataset": dataset,
+            "physicalDataset": physical_dataset,
+            "datasetFamily": dataset_family,
+            "queryField": query_field,
             "datasetKey": dataset_key,
             "queryVariantRequested": query_variant_requested,
             "queryVariant": query_variant,
             "queryVariantsDistinct": query_variants_distinct,
-            "queryVariantExplicit": recorded_query_variant == query_variant,
+            "queryVariantExplicit": (
+                bool(payload.get("benchmark_dataset_id"))
+                if physical_dataset == TREC_COVID_DATASET
+                else recorded_query_variant == query_variant
+            ),
             "docs": docs,
             "metric": metric,
             "quality": safe_number(rel.get(metric)),
@@ -378,6 +422,9 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
         dataset_map[run["datasetKey"]] = {
             "key": run["datasetKey"],
             "source": run["dataset"],
+            "physicalSource": run["physicalDataset"],
+            "family": run["datasetFamily"],
+            "queryField": run["queryField"],
             "docs": run["docs"],
             "queryVariant": run["queryVariant"],
             "label": dataset_label(run["dataset"], run["docs"], run["queryVariant"]),
@@ -1352,7 +1399,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     const systemVersionLabel = engine => versionWithDate(systemVersion(engine), DATA.systems[engine]?.imageCreatedAt);
     const runVersionLabel = run => versionWithDate(runVersion(run), run?.imageCreatedAt);
     const modeBadge = mode => `<span class="mode-badge mode-${escapeHtml(mode)}">${escapeHtml(mode === 'fulltext' ? 'FT' : mode[0])}</span>`;
-    const queryVariantText = run => run?.queryVariant === 'same'
+    const queryVariantText = run => run?.queryField
+      ? `${String(run.queryField).replace(/^./, value => value.toUpperCase())} field`
+      : run?.queryVariant === 'same'
       ? `Same text (requested ${run?.queryVariantRequested || 'unknown'})`
       : run?.queryVariant === 'short'
         ? `Short text (${run?.queryVariantExplicit ? 'recorded' : 'legacy inferred'})`
@@ -1361,7 +1410,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     const METRIC_LABELS = { canonical: 'Canonical', ndcg10: 'NDCG@10', ndcg20: 'NDCG@20', mrr10: 'MRR@10', map10: 'MAP@10', p20: 'P@20', recall100: 'Recall@100' };
     const METRIC_DETAILS = {
       'Coverage': ['Dataset/query-set coverage', 'Completed results for this engine out of all dataset/query-set cohorts selected in the filter. Missing any selected cohort makes the engine incomplete and therefore unranked.'],
-      'Mean relative': ['Average relative score', 'Arithmetic mean of engine score ÷ best observed score for every completed selected dataset/query-set cohort. The best reference includes hidden engines, so filtering engines does not move it.'],
+      'Mean relative': ['Average relative score', 'Engine score ÷ best observed score is averaged within each dataset family first, then across families. The three TREC-COVID query formulations therefore do not give that corpus triple weight. The best reference includes hidden engines.'],
       'Mean raw': ['Average metric value', 'Arithmetic mean of the displayed metric values. With “Recommended for each dataset”, this can combine NDCG@10 and MRR@10, so use it only as a quick orientation.'],
       'Dataset wins': ['Best results', 'Number of selected datasets where this engine matches the best observed score. Ties count as wins.'],
       'Chosen modes': ['Modes behind the scores', 'Counts of the modes supplying each displayed result: FT = full text, V = vector, H = hybrid. The highest-quality result among the selected search modes is chosen separately for every engine and dataset.'],
@@ -1386,6 +1435,16 @@ HTML_TEMPLATE = r'''<!doctype html>
     const friendlyMetric = name => METRIC_DETAILS[name] ? `${METRIC_DETAILS[name][0]} (${name})` : name;
 
     function mean(values) { return values.length ? values.reduce((a,b) => a + b, 0) / values.length : 0; }
+
+    function familyMeans(entries, valueFn) {
+      const grouped = new Map();
+      for (const entry of entries) {
+        const family = datasetByKey[entry.run.datasetKey]?.family || entry.run.dataset;
+        if (!grouped.has(family)) grouped.set(family, []);
+        grouped.get(family).push(valueFn(entry));
+      }
+      return [...grouped.values()].map(mean);
+    }
 
     function visibleRuns({ ignoreMode = false } = {}) {
       return DATA.runs.filter(run =>
@@ -1422,7 +1481,7 @@ HTML_TEMPLATE = r'''<!doctype html>
         mode: item.mode,
         covered: new Set(item.runs.map(run => run.datasetKey)).size,
         total: groups.length,
-        quality: mean(item.runs.map(metricValue)),
+        quality: mean(familyMeans(item.runs.map(run => ({run})), entry => metricValue(entry.run))),
         qps: mean(item.runs.map(run => run.qps)),
         p50: mean(item.runs.map(run => run.p50)),
         p95: mean(item.runs.map(run => run.p95)),
@@ -1461,15 +1520,17 @@ HTML_TEMPLATE = r'''<!doctype html>
         runs.forEach(run => counts[run.mode]++);
         const complete = runs.length === total;
         const relativeByRun = runs.map((run, index) => ({ run, value: relatives[index] * 100 }));
+        const familyRelatives = familyMeans(relativeByRun, entry => entry.value / 100);
+        const familyRaw = familyMeans(runs.map(run => ({run})), entry => metricValue(entry.run));
         const floorEntry = relativeByRun.reduce((worst, entry) => !worst || entry.value < worst.value ? entry : worst, null);
         return {
           engine, runs, counts, complete, covered: runs.length, total,
-          relative: mean(relatives) * 100,
+          relative: mean(familyRelatives) * 100,
           relatives: relativeByRun,
           floor: floorEntry ? floorEntry.value : 0,
           floorRun: floorEntry ? floorEntry.run : null,
-          raw: mean(runs.map(metricValue)),
-          wins: relatives.filter(value => Math.abs(value - 1) < 1e-10).length,
+          raw: mean(familyRaw),
+          wins: familyRelatives.filter(value => Math.abs(value - 1) < 1e-10).length,
         };
       });
       const sortValue = item => state.leaderboardSort === 'floor' ? item.floor : state.leaderboardSort === 'wins' ? item.wins : item.relative;
@@ -2033,7 +2094,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     const SORT_LABELS = {date:'Date',engine:'Engine',mode:'Mode',dataset:'Dataset',queryVariant:'Query set',docs:'Docs',quality:'Quality',p50:'P50',p95:'P95',p99:'P99',qps:'QPS'};
     function renderRunTable() {
       const needle = state.search.trim().toLowerCase();
-      const rows=visibleRuns().filter(run => !needle || [run.engine, systemName(run.engine), run.mode, run.dataset, datasetByKey[run.datasetKey]?.label, run.queryVariant, run.queryVariantRequested, run.profile, run.model].join(' ').toLowerCase().includes(needle));
+      const rows=visibleRuns().filter(run => !needle || [run.engine, systemName(run.engine), run.mode, run.dataset, datasetByKey[run.datasetKey]?.label, run.queryField, run.queryVariant, run.queryVariantRequested, run.profile, run.model].join(' ').toLowerCase().includes(needle));
       const key=state.sort, direction=state.direction==='asc'?1:-1;
       rows.sort((a,b)=>{let av=key==='quality'?metricValue(a):a[key],bv=key==='quality'?metricValue(b):b[key];if(key==='date'){av=a.runAt;bv=b.runAt;}if(key==='engine'){av=systemName(a.engine);bv=systemName(b.engine);}if(key==='dataset'){av=datasetByKey[a.datasetKey]?.label||a.datasetKey;}return (typeof av==='string'?av.localeCompare(bv):(av||0)-(bv||0))*direction;});
       $('#run-count').textContent=`${fmt.format(rows.length)} runs`;
@@ -2060,7 +2121,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     }
 
     function exportCsv() {
-      const columns=['date','engine','version','mode','dataset','queryVariant','queryVariantRequested','queryVariantExplicit','queryVariantsDistinct','docs','metric','quality','qps','p50','p95','p99','profile','model'];
+      const columns=['date','engine','version','mode','dataset','physicalDataset','datasetFamily','queryField','queryVariant','queryVariantRequested','queryVariantExplicit','queryVariantsDistinct','docs','metric','quality','qps','p50','p95','p99','profile','model'];
       const quote=value=>`"${String(value??'').replaceAll('"','""')}"`;
       const lines=[columns.join(',')];
       for(const run of visibleRuns()) lines.push(columns.map(column=>quote(column==='version'?runVersionLabel(run):column==='engine'?systemName(run.engine):run[column])).join(','));

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+from copy import deepcopy
 from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass
 import json
@@ -18,6 +19,12 @@ from .meilisearch_backend import MeilisearchBackend
 from .milvus_backend import MilvusBackend, suppress_pymilvus_probe_logs
 from .opensearch_backend import OpenSearchBackend
 from .qdrant_backend import QdrantBackend
+from .query_policy import (
+    TREC_COVID_FAMILY,
+    benchmark_views,
+    is_trec_covid,
+    trec_covid_artifact_identity,
+)
 from .runbench import run_benchmark, write_run_artifacts
 from .search_options import normalize_search_options
 from .serenedb_backend import SereneDBBackend
@@ -65,6 +72,8 @@ def _visible_profile_names(path: Path, targets: list[Any] | None = None) -> set[
     for name, ent in entry_defs.items():
         mode = resolved_mode.get(name) or str(ent.get("type", "")).strip().lower()
         if mode not in {"fulltext", "vector", "hybrid"}:
+            if name not in referenced_bases:
+                visible.add(name)
             continue
         target_keys = _ENGINE_TARGET_KEYS.get(
             "manticore"
@@ -109,6 +118,8 @@ class RunVariant:
     default_concurrency: int
     cfg: AppConfig
     base_entry: str = ""
+    benchmark_dataset_id: str = ""
+    query_field: str = ""
 
 
 @dataclass
@@ -441,19 +452,28 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
                     if not bool(cfg.meilisearch.typo_tolerance):
                         extras.append("typo:off")
                     model_or_ranker = f"[{' '.join(extras)}]" if extras else "(meilisearch lexical)"
-                variants.append(
-                    RunVariant(
-                        config_path=str(p),
-                        entry=target.name,
-                        base_entry=target.base_name,
-                        engine=engine,
-                        mode=mode,
-                        model=model_or_ranker,
-                        default_concurrency=int(cfg.benchmark.concurrency),
-                        cfg=cfg,
+                for benchmark_dataset_id, query_field in benchmark_views(cfg.dataset.source):
+                    view_cfg = deepcopy(cfg)
+                    view_cfg.dataset.benchmark_dataset_id = benchmark_dataset_id
+                    view_cfg.dataset.query_field = query_field
+                    view_cfg.dataset.dataset_family = (
+                        TREC_COVID_FAMILY if is_trec_covid(cfg.dataset.source) else benchmark_dataset_id
                     )
-                )
-    dedup: dict[tuple[str, str, str, str, str, int], RunVariant] = {}
+                    variants.append(
+                        RunVariant(
+                            config_path=str(p),
+                            entry=target.name,
+                            base_entry=target.base_name,
+                            engine=engine,
+                            mode=mode,
+                            model=model_or_ranker,
+                            default_concurrency=int(cfg.benchmark.concurrency),
+                            cfg=view_cfg,
+                            benchmark_dataset_id=benchmark_dataset_id,
+                            query_field=query_field,
+                        )
+                    )
+    dedup: dict[tuple[str, str, str, str, str, int, str], RunVariant] = {}
     for v in variants:
         key = (
             v.engine,
@@ -462,6 +482,7 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
             _variant_target_name(v),
             str(v.cfg.dataset.source or ""),
             int(v.cfg.dataset.max_docs or 0),
+            v.benchmark_dataset_id,
         )
         prev = dedup.get(key)
         if prev is None:
@@ -474,10 +495,13 @@ def build_variants_from_config_paths(paths: list[Path]) -> list[RunVariant]:
             continue
 
     mode_order = {"fulltext": 0, "vector": 1, "hybrid": 2}
+    query_field_order = {"query": 0, "question": 1, "narrative": 2}
     return sorted(
         list(dedup.values()),
         key=lambda v: (
             v.entry.lower(),
+            query_field_order.get(v.query_field, 0),
+            v.benchmark_dataset_id.lower(),
             mode_order.get(v.mode, 99),
             v.model.lower(),
             v.engine.lower(),
@@ -492,19 +516,27 @@ def _history_key(
     mode: str,
     model: str,
     target: str,
-) -> tuple[str, str, str, str, str]:
-    return (profile, engine.lower(), mode.lower(), model, target)
+    benchmark_dataset_id: str,
+) -> tuple[str, str, str, str, str, str]:
+    return (profile, engine.lower(), mode.lower(), model, target, benchmark_dataset_id)
 
 
-def _variant_history_key(v: RunVariant) -> tuple[str, str, str, str, str]:
-    return _history_key(v.entry, v.engine, v.mode, v.model, _variant_target_name(v))
+def _variant_history_key(v: RunVariant) -> tuple[str, str, str, str, str, str]:
+    return _history_key(
+        v.entry,
+        v.engine,
+        v.mode,
+        v.model,
+        _variant_target_name(v),
+        v.benchmark_dataset_id,
+    )
 
 
 def _load_run_history_status() -> tuple[
-    dict[tuple[str, str, str, str, str], RunHistoryStatus],
+    dict[tuple[str, str, str, str, str, str], RunHistoryStatus],
     dict[tuple[str, str, str, str], RunHistoryStatus],
 ]:
-    out_exact: dict[tuple[str, str, str, str, str], RunHistoryStatus] = {}
+    out_exact: dict[tuple[str, str, str, str, str, str], RunHistoryStatus] = {}
     out_legacy: dict[tuple[str, str, str, str], RunHistoryStatus] = {}
     artifacts_dir = Path("artifacts")
     if not artifacts_dir.exists():
@@ -519,13 +551,24 @@ def _load_run_history_status() -> tuple[
         mode = str(payload.get("mode", "") or "").strip().lower()
         model = str(payload.get("model", "") or "").strip()
         target = str(payload.get("target", "") or "").strip()
+        dataset_source = str(payload.get("dataset_source", "") or "").strip()
+        benchmark_dataset_id = str(payload.get("benchmark_dataset_id", "") or "").strip()
+        if is_trec_covid(dataset_source):
+            benchmark_dataset_id, _ = trec_covid_artifact_identity(
+                mode=mode,
+                benchmark_dataset_id=benchmark_dataset_id,
+                query_field=payload.get("query_field"),
+                recorded_variant=payload.get("query_variant"),
+            )
+        elif not benchmark_dataset_id:
+            benchmark_dataset_id = dataset_source
         if not profile or not engine or not mode or not model:
             continue
         legacy_key = _legacy_history_key(profile, engine, mode, model)
         legacy_prev = out_legacy.get(legacy_key)
         out_legacy[legacy_key] = RunHistoryStatus(True, (legacy_prev.run_count if legacy_prev else 0) + 1)
         if target:
-            key = _history_key(profile, engine, mode, model, target)
+            key = _history_key(profile, engine, mode, model, target, benchmark_dataset_id)
             prev = out_exact.get(key)
             out_exact[key] = RunHistoryStatus(True, (prev.run_count if prev else 0) + 1)
     return out_exact, out_legacy
@@ -595,6 +638,7 @@ def _draw_row(
     columns: list[tuple[str, int, int]] = [
         ("[x]" if selected else "[ ]", attrs, widths["sel"]),
         (v.entry, attrs | color_entry, widths["entry"]),
+        (v.benchmark_dataset_id, attrs, widths["dataset"]),
         (v.engine, attrs | color_engine, widths["engine"]),
         (_display_mode(v.mode), attrs | color_mode, widths["mode"]),
         (_variant_target_name(v), attrs | color_target, widths["target"]),
@@ -852,6 +896,8 @@ def _details_lines(
     lines: list[str] = ["Resolved Config"]
     meta = [
         f"profile: {v.entry}",
+        f"benchmark dataset: {v.benchmark_dataset_id}",
+        f"query field: {v.query_field or 'default'}",
         f"engine: {v.engine}",
         f"mode: {_display_mode(v.mode)}",
         f"target: {_variant_target_name(v)}",
@@ -963,6 +1009,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
         preferred_widths = {
             "sel": 3,
             "entry": 18,
+            "dataset": 24,
             "engine": 10,
             "mode": 9,
             "target": 24,
@@ -971,31 +1018,35 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
         minimum_widths = {
             "sel": 3,
             "entry": 12,
+            "dataset": 14,
             "engine": 8,
             "mode": 7,
             "target": 12,
             "model": 12,
         }
-        sort_cols = ["entry", "engine", "mode", "target", "model"]
+        sort_cols = ["entry", "dataset", "engine", "mode", "target", "model"]
         sort_idx = 0
         sort_key = sort_cols[sort_idx]
         sort_desc = False
         filters: dict[str, str] = {}
 
-        def _variant_id(v: RunVariant) -> tuple[str, str, str, str]:
-            return (v.entry, v.engine, v.mode, v.model)
+        def _variant_id(v: RunVariant) -> tuple[str, str, str, str, str]:
+            return (v.entry, v.benchmark_dataset_id, v.engine, v.mode, v.model)
 
         def _history_status(v: RunVariant) -> RunHistoryStatus:
             exact = history_cache.get(_variant_history_key(v))
             if exact is not None:
                 return exact
+            if is_trec_covid(v.cfg.dataset.source):
+                return RunHistoryStatus(False, 0)
             return legacy_history_cache.get(
                 _legacy_history_key(v.entry, v.engine, v.mode, v.model),
                 RunHistoryStatus(False, 0),
             )
 
         def _target_status(v: RunVariant) -> RunTargetStatus:
-            key = _variant_id(v)
+            # All logical query views share the same physical engine target.
+            key = (v.entry, v.engine, v.mode, v.model)
             if key not in target_status_cache:
                 target_status_cache[key] = _resolve_target_status(v)
             return target_status_cache[key]
@@ -1006,6 +1057,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
         def _sort_value(v: RunVariant, col: str) -> Any:
             if col == "entry":
                 return v.entry.lower()
+            if col == "dataset":
+                return v.benchmark_dataset_id.lower()
             if col == "engine":
                 return v.engine.lower()
             if col == "mode":
@@ -1019,6 +1072,8 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
         def _filter_value(v: RunVariant, col: str) -> Any:
             if col == "entry":
                 return v.entry
+            if col == "dataset":
+                return v.benchmark_dataset_id
             if col == "engine":
                 return v.engine
             if col == "mode":
@@ -1062,6 +1117,7 @@ def _select_variants_curses(variants: list[RunVariant]) -> list[RunVariant]:
                 cols=[
                     ("SEL", "sel"),
                     ("PROFILE", "entry"),
+                    ("DATASET", "dataset"),
                     ("ENGINE", "engine"),
                     ("MODE", "mode"),
                     ("TARGET", "target"),
@@ -1176,7 +1232,7 @@ def select_variants_interactive(variants: list[RunVariant]) -> list[RunVariant]:
     print("Available runs:")
     for i, v in enumerate(variants, start=1):
         print(
-            f"{i:>2}. {v.entry}\t{v.engine}\t{_display_mode(v.mode)}\t"
+            f"{i:>2}. {v.entry}\t{v.benchmark_dataset_id}\t{v.engine}\t{_display_mode(v.mode)}\t"
             f"target={_variant_target_name(v)}\t"
             f"model={v.model}"
         )
@@ -1213,16 +1269,22 @@ def run_selected_variants(
     c_reset = "\033[0m" if use_color else ""
     for v in variants:
         conc_part = f" --concurrency {concurrency_override}" if concurrency_override is not None else ""
+        benchmark_part = (
+            f" --benchmark-dataset {v.benchmark_dataset_id}"
+            if v.query_field
+            else ""
+        )
         cmd = (
             f"bench --config {v.config_path} run --engine {v.engine} "
-            f"--mode {v.mode} --entry {v.entry}{conc_part}"
+            f"--mode {v.mode} --entry {v.entry}{benchmark_part}{conc_part}"
         )
         print(
             f"{c_label}Replay command:{c_reset} {c_cmd}{cmd}{c_reset}",
             flush=True,
         )
         print(
-            f"Running: profile={v.entry} engine={v.engine} mode={_display_mode(v.mode)} model={v.model}",
+            f"Running: profile={v.entry} dataset={v.benchmark_dataset_id} "
+            f"engine={v.engine} mode={_display_mode(v.mode)} model={v.model}",
             flush=True,
         )
 

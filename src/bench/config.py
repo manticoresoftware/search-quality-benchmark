@@ -14,6 +14,9 @@ class DatasetConfig:
     prepared_dir: str = "data/prepared"
     max_docs: int = 0
     keep_qrels_docs: bool = True
+    benchmark_dataset_id: str = ""
+    dataset_family: str = ""
+    query_field: str = ""
 
 
 @dataclass

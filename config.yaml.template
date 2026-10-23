@@ -62,7 +62,8 @@ manticore:
   fulltext_options: "morphology='stem_en' index_field_lengths='1'"
   search_options: "ranker=expr('1000*bm25a(1.2,0.75)')"
   fulltext_query_mode: "or"
-  # short or long; applies to full-text runs for every engine
+  # Legacy/non-TREC query_short/query_long selector. TREC-COVID run-matrix
+  # entries use their explicit query/question/narrative logical dataset instead.
   fulltext_query_variant: "long"
   fulltext_query_quorum: 0.5
   batch_size: 2000

@@ -181,6 +181,10 @@ def test_recorded_long_fulltext_query_variant_is_preserved() -> None:
     }
 
     assert generator.artifact_query_variant(payload, "fulltext", None) == ("long", "long", True)
+    assert generator.trec_covid_artifact_identity(payload, "fulltext") == (
+        "trec-covid-query",
+        "query",
+    )
 
 
 def test_unmarked_non_trec_fulltext_is_same_when_prepared_data_is_unavailable(
@@ -204,7 +208,7 @@ def test_unmarked_non_trec_fulltext_is_same_when_prepared_data_is_unavailable(
     assert data["runs"][0]["queryVariantExplicit"] is False
 
 
-def test_selected_legacy_short_does_not_enable_short_without_recorded_short(
+def test_legacy_trec_runs_are_split_into_logical_datasets_without_gating(
     tmp_path: Path, monkeypatch
 ) -> None:
     generator = _load_report_generator()
@@ -243,16 +247,25 @@ def test_selected_legacy_short_does_not_enable_short_without_recorded_short(
         default_run_ids={"legacy-short", "recorded-short"}
     )
 
-    assert [run["runId"] for run in default_data["runs"]] == ["long"]
-    assert default_data["meta"]["excludedQueryCohortRuns"] == 2
-    assert [run["runId"] for run in mistaken_data["runs"]] == ["long"]
+    assert [run["runId"] for run in default_data["runs"]] == [
+        "legacy-short",
+        "long",
+        "recorded-short",
+    ]
+    assert default_data["meta"]["excludedQueryCohortRuns"] == 0
+    assert [run["runId"] for run in mistaken_data["runs"]] == [
+        "legacy-short",
+        "long",
+        "recorded-short",
+    ]
     assert [run["runId"] for run in enabled_data["runs"]] == [
         "legacy-short",
         "long",
         "recorded-short",
     ]
-    assert enabled_data["runs"][0]["queryVariantExplicit"] is False
-    assert enabled_data["runs"][2]["queryVariantExplicit"] is True
+    assert enabled_data["runs"][0]["dataset"] == "trec-covid-query"
+    assert enabled_data["runs"][1]["dataset"] == "trec-covid-narrative"
+    assert enabled_data["runs"][2]["dataset"] == "trec-covid-query"
 
 
 def test_only_a_selected_recorded_short_enables_inferred_short_runs() -> None:

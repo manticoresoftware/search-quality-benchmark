@@ -1,5 +1,11 @@
 from bench.runbench import query_text_for_mode
-from bench.query_policy import dataset_query_variants_distinct, query_variant_metadata
+from bench.query_policy import (
+    benchmark_views,
+    dataset_query_variants_distinct,
+    query_texts_for_embedding,
+    query_variant_metadata,
+    trec_covid_artifact_identity,
+)
 
 
 def test_query_policy_uses_long_default_for_fulltext():
@@ -78,3 +84,53 @@ def test_legacy_dataset_fallback_assumes_only_trec_covid_is_distinct():
     assert dataset_query_variants_distinct("beir/trec-covid", None) is True
     assert dataset_query_variants_distinct("beir/scifact/test", None) is False
     assert dataset_query_variants_distinct("future/distinct", True) is True
+
+
+def test_trec_covid_explicit_query_field_is_independent_of_search_mode():
+    topic = {
+        "query": "keywords",
+        "question": "natural question",
+        "narrative": "detailed information need",
+    }
+
+    for mode in ("fulltext", "vector", "hybrid"):
+        assert query_text_for_mode(topic, mode, query_field="query") == "keywords"
+        assert query_text_for_mode(topic, mode, query_field="question") == "natural question"
+        assert query_text_for_mode(topic, mode, query_field="narrative") == "detailed information need"
+
+
+def test_trec_covid_views_and_embedding_inputs_cover_all_three_fields():
+    topic = {
+        "query": "keywords",
+        "question": "natural question",
+        "narrative": "detailed information need",
+    }
+
+    assert benchmark_views("beir/trec-covid") == (
+        ("trec-covid-query", "query"),
+        ("trec-covid-question", "question"),
+        ("trec-covid-narrative", "narrative"),
+    )
+    assert query_texts_for_embedding(topic, "beir/trec-covid") == (
+        "keywords",
+        "natural question",
+        "detailed information need",
+    )
+
+
+def test_trec_covid_legacy_artifact_mapping_is_mode_based():
+    assert trec_covid_artifact_identity(
+        mode="fulltext", recorded_variant="long"
+    ) == ("trec-covid-query", "query")
+    assert trec_covid_artifact_identity(
+        mode="vector", recorded_variant="short"
+    ) == ("trec-covid-narrative", "narrative")
+    assert trec_covid_artifact_identity(
+        mode="hybrid", recorded_variant="question"
+    ) == ("trec-covid-narrative", "narrative")
+
+    assert trec_covid_artifact_identity(
+        mode="vector",
+        benchmark_dataset_id="trec-covid-question",
+        query_field="question",
+    ) == ("trec-covid-question", "question")

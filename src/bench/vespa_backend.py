@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 import json
 from pathlib import Path
@@ -161,7 +162,10 @@ class VespaBackend:
         }
         self._save_registry(registry)
         self._write_schema_files(registry)
-        self._deploy_current_package()
+        # Full-text-only builds use a one-dimensional placeholder tensor so
+        # they do not depend on the embedding cache. A later vector build must
+        # intentionally change that field to the cached embedding dimension.
+        self._deploy_current_package(allow_field_type_change=True)
         self._wait_for_schema_ready(schema)
 
     def import_documents(self, docs: list[dict[str, Any]]) -> int:
@@ -414,12 +418,25 @@ class VespaBackend:
 }}
 """
 
-    def _deploy_current_package(self) -> None:
+    def _deploy_current_package(self, *, allow_field_type_change: bool = False) -> None:
         pkg = self._package_dir()
         (pkg / "schemas").mkdir(parents=True, exist_ok=True)
         if not (pkg / "services.xml").exists():
             self._write_schema_files(self._load_registry())
-        archive = self._build_package_zip(pkg)
+        extra_files: dict[str, bytes] = {}
+        if allow_field_type_change:
+            # Vespa rejects tensor dimension changes unless the deployment
+            # explicitly acknowledges that existing values must be re-fed.
+            # Keep the narrowly scoped override ephemeral: it is included in
+            # this deployment archive but not persisted in the package dir.
+            until = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+            extra_files["validation-overrides.xml"] = (
+                "<validation-overrides>\n"
+                f'  <allow until="{until}" comment="Rebuild benchmark vector field">'
+                "field-type-change</allow>\n"
+                "</validation-overrides>\n"
+            ).encode("utf-8")
+        archive = self._build_package_zip(pkg, extra_files=extra_files)
         try:
             self._request("PUT", self.deploy_target(), "/application/v2/tenant/default")
         except Exception:
@@ -473,12 +490,16 @@ class VespaBackend:
             raise RuntimeError(f"Timed out waiting for Vespa schema '{schema}': {last_error}")
         raise RuntimeError(f"Timed out waiting for Vespa schema '{schema}'.")
 
-    def _build_package_zip(self, pkg: Path) -> bytes:
+    def _build_package_zip(self, pkg: Path, *, extra_files: dict[str, bytes] | None = None) -> bytes:
         buf = BytesIO()
         with ZipFile(buf, "w", compression=ZIP_DEFLATED) as zf:
             for path in sorted(pkg.rglob("*")):
                 if path.is_dir():
                     continue
                 rel = path.relative_to(pkg)
+                if extra_files and str(rel) in extra_files:
+                    continue
                 zf.writestr(str(rel), path.read_bytes())
+            for rel, contents in sorted((extra_files or {}).items()):
+                zf.writestr(rel, contents)
         return buf.getvalue()

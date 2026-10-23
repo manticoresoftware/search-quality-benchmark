@@ -21,7 +21,15 @@ from .milvus_backend import MilvusBackend
 from .opensearch_backend import OpenSearchBackend
 from .metrics import average_precision_at_k, ndcg_at_k, percentile, precision_at_k, recall_at_k, reciprocal_rank_at_k
 from .qdrant_backend import QdrantBackend
-from .query_policy import query_variant_metadata, resolved_topic_queries
+from .query_policy import (
+    TREC_COVID_FAMILY,
+    benchmark_id_for_query_field,
+    is_trec_covid,
+    legacy_trec_covid_query_field,
+    query_field_for_benchmark,
+    query_text_for_field,
+    query_variant_metadata,
+)
 from .search_options import normalize_search_options
 from .serenedb_backend import SereneDBBackend
 from .typesense_backend import TypesenseBackend
@@ -48,18 +56,14 @@ def query_text_for_mode(
     mode: str,
     *,
     fulltext_query_variant: str = "long",
+    query_field: str = "",
 ) -> str:
-    short_q, long_q = resolved_topic_queries(topic)
-    if not short_q and not long_q:
-        raise ValueError(
-            "Prepared topics are missing query_short/query_long. "
-            "Please rerun: bench prepare"
-        )
-    # Policy: full-text-like modes use the configured variant (long by default),
-    # while vector and hybrid modes always use the long variant.
-    if mode == "fulltext":
-        return long_q if str(fulltext_query_variant or "long").strip().lower() == "long" else short_q
-    return long_q
+    return query_text_for_field(
+        topic,
+        query_field or str(topic.get("_query_field") or ""),
+        mode=mode,
+        fulltext_query_variant=fulltext_query_variant,
+    )
 
 
 def _load_qrels_map(qrels_path: Path) -> dict[str, dict[str, int]]:
@@ -280,6 +284,10 @@ def _manticore_match_query_sql(cfg: AppConfig, query_text: str) -> str:
     if terms:
         return " ".join(terms)
     return sanitized or raw
+
+
+# Kept as the public test/helper name used by earlier benchmark revisions.
+_manticore_fulltext_match_query = _manticore_match_query_sql
 
 
 def _manticore_fulltext_option_clause(cfg: AppConfig) -> str:
@@ -1959,6 +1967,31 @@ def run_benchmark(
     run_id = generate_run_id()
     run_at_unix = int(time())
 
+    selected_query_field = str(cfg.dataset.query_field or "").strip().lower()
+    benchmark_dataset_id = str(cfg.dataset.benchmark_dataset_id or "").strip().lower()
+    if is_trec_covid(cfg.dataset.source):
+        if mode == "both" and not (
+            selected_query_field or query_field_for_benchmark(benchmark_dataset_id)
+        ):
+            raise ValueError(
+                "TREC-COVID mode=both requires an explicit logical dataset "
+                "(--benchmark-dataset) so both modes use the same query field."
+            )
+        selected_query_field = (
+            selected_query_field
+            or query_field_for_benchmark(benchmark_dataset_id)
+            or legacy_trec_covid_query_field(mode)
+        )
+        if selected_query_field:
+            benchmark_dataset_id = benchmark_id_for_query_field(
+                cfg.dataset.source,
+                selected_query_field,
+            )
+            for topic in topics:
+                topic["_query_field"] = selected_query_field
+    else:
+        benchmark_dataset_id = benchmark_dataset_id or str(cfg.dataset.source or "").strip()
+
     if is_manticore_like_type(engine):
         if mode not in ("fulltext", "vector", "hybrid", "both"):
             raise ValueError("For engine=manticore, mode must be one of: fulltext, vector, hybrid, both")
@@ -2424,6 +2457,8 @@ def run_benchmark(
         per_query_rows.append(
             {
                 "mode": r.mode,
+                "benchmark_dataset_id": benchmark_dataset_id,
+                "query_field": selected_query_field,
                 "topic_id": r.topic_id,
                 "repeat_idx": r.repeat_idx,
                 "query": r.query,
@@ -2617,6 +2652,12 @@ def run_benchmark(
         "run_at_unix": run_at_unix,
         "profile": profile_name or "",
         "dataset_source": cfg.dataset.source,
+        "benchmark_dataset_id": benchmark_dataset_id,
+        "dataset_family": (
+            str(cfg.dataset.dataset_family or "").strip()
+            or (TREC_COVID_FAMILY if is_trec_covid(cfg.dataset.source) else benchmark_dataset_id)
+        ),
+        "query_field": selected_query_field,
         "engine": report_engine,
         "mode": mode,
         "model": model_label,
@@ -2631,13 +2672,29 @@ def run_benchmark(
         "performance": perf_metrics,
         "runtime_seconds": total_runtime,
     }
-    metrics.update(
-        query_variant_metadata(
-            topics,
-            modes,
-            fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+    if is_trec_covid(cfg.dataset.source) and selected_query_field:
+        metrics.update(
+            {
+                "query_variant_requested": selected_query_field,
+                "query_variant": selected_query_field,
+                "query_variants_distinct": True,
+                "query_variants_available": ["query", "question", "narrative"],
+                "query_variants_requested_by_mode": {
+                    selected_mode: selected_query_field for selected_mode in modes
+                },
+                "query_variants_by_mode": {
+                    selected_mode: selected_query_field for selected_mode in modes
+                },
+            }
         )
-    )
+    else:
+        metrics.update(
+            query_variant_metadata(
+                topics,
+                modes,
+                fulltext_query_variant=cfg.manticore.fulltext_query_variant,
+            )
+        )
     metrics["resolved_config_lines"] = _build_resolved_config_lines(cfg, engine=report_engine, mode=mode, profile_name=profile_name)
     metrics["live_state_lines"] = _build_live_state_lines(cfg, engine=engine, modes=modes)
     metrics["diagnostics"] = diagnostics
@@ -2661,6 +2718,8 @@ def write_run_artifacts(run_id: str, metrics: dict[str, Any], per_query_rows: li
         per_query_rows,
         fieldnames=[
             "mode",
+            "benchmark_dataset_id",
+            "query_field",
             "topic_id",
             "repeat_idx",
             "query",

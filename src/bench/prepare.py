@@ -16,6 +16,7 @@ from zipfile import ZipFile
 from .config import AppConfig
 from .embedding_client import EmbeddingClient, resolved_embedding_model, resolved_embedding_similarity
 from .io_utils import ensure_dir, read_jsonl, write_json, write_jsonl, write_tsv
+from .query_policy import TREC_COVID_QUERY_FIELDS, is_trec_covid, query_texts_for_embedding
 from .vector_cache import VectorCache, cache_key_from_doc, cache_key_from_text, normalize_text, parse_vector_from_fields
 
 
@@ -123,7 +124,13 @@ def _populate_embeddings(
     cache = VectorCache(cfg.manticore.vector_cache_path)
     client = EmbeddingClient(cfg)
     doc_total = len(docs)
-    query_total = len(topics)
+    query_texts = [
+        normalize_text(text)
+        for topic in topics
+        for text in query_texts_for_embedding(topic, cfg.dataset.source)
+        if normalize_text(text)
+    ]
+    query_total = len(query_texts)
     doc_ok = 0
     query_ok = 0
     input_tokens = 0
@@ -253,10 +260,10 @@ def _populate_embeddings(
         )
 
         query_missing: list[tuple[str, str]] = []
-        keyed_topics: list[tuple[str, str]] = []
-        for topic in topics:
-            query_text = normalize_text(str(topic.get("query_long") or topic.get("query_short") or ""))
-            keyed_topics.append((cache_key_from_text(query_text, model=model, similarity=similarity), query_text))
+        keyed_topics = [
+            (cache_key_from_text(query_text, model=model, similarity=similarity), query_text)
+            for query_text in query_texts
+        ]
         for start in range(0, len(keyed_topics), scan_batch):
             topics_chunk = keyed_topics[start : start + scan_batch]
             status_map = cache.get_status_many([key for key, _ in topics_chunk])
@@ -265,13 +272,13 @@ def _populate_embeddings(
                     query_ok += 1
                 else:
                     query_missing.append((key, query_text))
-            processed = min(start + len(topics_chunk), len(topics))
-            if processed == len(topics) or processed == len(topics_chunk) or processed % 1000 == 0:
-                _emit(stage="query_cache_scan", processed=processed, total=len(topics), embedded_ok=query_ok)
+            processed = min(start + len(topics_chunk), query_total)
+            if processed == query_total or processed == len(topics_chunk) or processed % 1000 == 0:
+                _emit(stage="query_cache_scan", processed=processed, total=query_total, embedded_ok=query_ok)
 
         query_ok, _, _ = _embed_missing(
             query_missing,
-            total_items=len(topics),
+            total_items=query_total,
             ok_count=query_ok,
             stage="query_embed",
         )
@@ -320,8 +327,13 @@ def reset_embeddings(cfg: AppConfig) -> EmbeddingResetStats:
     keys: list[str] = []
     for doc in docs:
         keys.append(cache_key_from_doc(doc, fields=fields, model=model, similarity=similarity))
-    for topic in topics:
-        text = normalize_text(str(topic.get("query_long") or topic.get("query_short") or ""))
+    query_texts = [
+        normalize_text(text)
+        for topic in topics
+        for text in query_texts_for_embedding(topic, cfg.dataset.source)
+        if normalize_text(text)
+    ]
+    for text in query_texts:
         keys.append(cache_key_from_text(text, model=model, similarity=similarity))
 
     cache = VectorCache(cfg.manticore.vector_cache_path)
@@ -351,7 +363,7 @@ def reset_embeddings(cfg: AppConfig) -> EmbeddingResetStats:
         cfg=cfg,
         doc_total=len(docs),
         doc_ok=0,
-        query_total=len(topics),
+        query_total=len(query_texts),
         query_ok=0,
         input_tokens=0,
         estimated_cost_usd=0.0,
@@ -359,7 +371,7 @@ def reset_embeddings(cfg: AppConfig) -> EmbeddingResetStats:
     return EmbeddingResetStats(
         deleted=deleted,
         doc_total=len(docs),
-        query_total=len(topics),
+        query_total=len(query_texts),
     )
 
 
@@ -502,7 +514,10 @@ def _prepare_hf_beir_dataset(cfg: AppConfig, *, progress_callback: callable | No
         cfg=cfg,
         doc_total=len(docs),
         doc_ok=0,
-        query_total=len(topics),
+        query_total=sum(
+            len(query_texts_for_embedding(topic, cfg.dataset.source))
+            for topic in topics
+        ),
         query_ok=0,
         input_tokens=0,
         estimated_cost_usd=0.0,
@@ -688,7 +703,10 @@ def _prepare_dl_typo_dataset(cfg: AppConfig, *, progress_callback: callable | No
         cfg=cfg,
         doc_total=len(docs),
         doc_ok=0,
-        query_total=len(topics),
+        query_total=sum(
+            len(query_texts_for_embedding(topic, cfg.dataset.source))
+            for topic in topics
+        ),
         query_ok=0,
         input_tokens=0,
         estimated_cost_usd=0.0,
@@ -850,6 +868,33 @@ def prepare_dataset(cfg: AppConfig, *, progress_callback: callable | None = None
     topics: list[dict[str, str]] = []
     for t in ds.queries_iter():
         topic_id = _doc_attr(t, ["query_id", "topic_id", "id"])
+        if is_trec_covid(cfg.dataset.source):
+            query = _doc_attr(t, ["query"])
+            question = _doc_attr(t, ["text", "question"])
+            narrative = _doc_attr(t, ["narrative"])
+            missing = [
+                field
+                for field, value in (
+                    ("query", query),
+                    ("question", question),
+                    ("narrative", narrative),
+                )
+                if not value
+            ]
+            if not topic_id or missing:
+                raise ValueError(
+                    "TREC-COVID topic is missing required fields: "
+                    f"topic_id={topic_id or '<missing>'} fields={','.join(missing) or 'topic_id'}"
+                )
+            topics.append(
+                {
+                    "topic_id": topic_id,
+                    "query": query,
+                    "question": question,
+                    "narrative": narrative,
+                }
+            )
+            continue
         query_short = _doc_attr(t, ["title", "query", "question", "short_query", "text"])
         query_long = _doc_attr(t, ["description", "narrative", "text", "query", "title"])
         if not topic_id or not query_short:
@@ -975,13 +1020,26 @@ def prepare_dataset(cfg: AppConfig, *, progress_callback: callable | None = None
         "qrels_count": len(qrels_rows),
         "elapsed_seconds": round(perf_counter() - started, 3),
     }
+    if is_trec_covid(cfg.dataset.source):
+        manifest_payload.update(
+            {
+                "query_schema_version": 2,
+                "query_fields": list(TREC_COVID_QUERY_FIELDS),
+                "benchmark_dataset_ids": [
+                    f"trec-covid-{field}" for field in TREC_COVID_QUERY_FIELDS
+                ],
+            }
+        )
     _write_embedding_manifest(
         manifest_path,
         manifest_payload,
         cfg=cfg,
         doc_total=len(docs),
         doc_ok=0,
-        query_total=len(topics),
+        query_total=sum(
+            len(query_texts_for_embedding(topic, cfg.dataset.source))
+            for topic in topics
+        ),
         query_ok=0,
         input_tokens=0,
         estimated_cost_usd=0.0,

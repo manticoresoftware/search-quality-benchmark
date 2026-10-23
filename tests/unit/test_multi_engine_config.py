@@ -67,9 +67,15 @@ osearch:
         encoding="utf-8",
     )
     variants = build_variants_from_config_paths([cfg])
-    # 3 classic entries * 2 modes, plus 2 modern entries * 3 modes
-    assert len(variants) == 12
-    assert {v.entry for v in variants} == {"mant_a", "mant_b", "qdr", "meili", "osearch"}
+    # The referenced mant_a entry is an internal base. The remaining ten
+    # engine/mode combinations are each expanded into three TREC-COVID views.
+    assert len(variants) == 30
+    assert {v.entry for v in variants} == {"mant_b", "qdr", "meili", "osearch"}
+    assert {v.benchmark_dataset_id for v in variants} == {
+        "trec-covid-query",
+        "trec-covid-question",
+        "trec-covid-narrative",
+    }
     assert all(v.default_concurrency == 2 for v in variants)
     assert {v.mode for v in variants if v.entry == "meili"} == {"fulltext", "vector", "hybrid"}
     assert {v.mode for v in variants if v.entry == "osearch"} == {"fulltext", "vector", "hybrid"}

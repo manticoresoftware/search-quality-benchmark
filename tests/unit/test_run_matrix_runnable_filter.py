@@ -27,6 +27,11 @@ qdrant:
         lambda v: v.engine == "manticore" and v.mode == "fulltext",
     )
     filtered = filter_runnable_variants(variants)
-    assert len(filtered) == 1
-    assert filtered[0].engine == "manticore"
-    assert filtered[0].mode == "fulltext"
+    assert len(filtered) == 3
+    assert {v.engine for v in filtered} == {"manticore"}
+    assert {v.mode for v in filtered} == {"fulltext"}
+    assert {v.benchmark_dataset_id for v in filtered} == {
+        "trec-covid-query",
+        "trec-covid-question",
+        "trec-covid-narrative",
+    }

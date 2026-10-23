@@ -54,21 +54,38 @@ It produces reproducible artifacts (`metrics.json`, `per_query.csv`, `summary.md
   - [ACORD on Hugging Face](https://huggingface.co/datasets/theatticusproject/acord)
 - Corpus: COVID-19 research documents with `title` and `abstract` fields.
 - Queries: official TREC-COVID topics.
-  - TREC-COVID topics include multiple text variants (a shorter title-style query and longer descriptive text).
-  - Benchmark query policy:
-    - full-text-like modes (`manticore fulltext`, `qdrant fulltext`, `meilisearch fulltext`, `opensearch fulltext`, `elasticsearch fulltext`, `typesense fulltext`, `milvus fulltext`, `mariadb fulltext`, `serenedb fulltext`, `weaviate fulltext`, `vespa fulltext`) use `manticore.fulltext_query_variant` (`long` by default).
-    - vector/hybrid modes use the longer query variant, including Milvus vector and hybrid searches.
-    - every run records `query_variant_requested`, `query_variant`, `query_variants_distinct`, `query_variants_requested_by_mode`, and `query_variants_by_mode`. `query_variant` is the comparison identity: `short` or `long` when prepared texts differ, and `same` when both fields resolve to identical text.
-    - reports group results by dataset, document count, and effective query variant. Consequently, short-query and long-query TREC-COVID runs are not compared in the same result set, while modes remain comparable for datasets that store identical text in both fields.
-    - legacy artifacts without query-variant metadata are interpreted as `short` for full-text and `long` for vector/hybrid. Prepared topics are inspected to collapse those identities to `same` when the texts are identical.
-  - Prepared topic fields are explicit: `query_short` and `query_long`.
+  - Every topic has three official text fields: `query` (short keyword query),
+    `question` (natural-language question), and `narrative` (long description).
+  - One physical source, prepared directory, corpus, qrels set, embedding cache,
+    and engine index are shared by three logical benchmark datasets:
+    - `trec-covid-query` -> `query`
+    - `trec-covid-question` -> `question`
+    - `trec-covid-narrative` -> `narrative`
+  - The run matrix expands every TREC-COVID engine/profile/mode row into these
+    three logical datasets. Within a run, full-text, vector, and both branches
+    of hybrid retrieval all receive the selected logical dataset's same text.
+  - Every new run records the physical `dataset_source`, logical
+    `benchmark_dataset_id`, `dataset_family: trec-covid`, and `query_field`.
+    The three logical datasets are distinct report cohorts. Global aggregates
+    average them within the TREC-COVID family before averaging across dataset
+    families, so TREC-COVID does not receive triple weight.
+  - Legacy TREC-COVID artifacts without the new identity metadata are mapped as
+    requested: full-text -> `trec-covid-query`; vector/hybrid ->
+    `trec-covid-narrative`. There are no legacy `question` results.
+  - Prepared TREC-COVID topic fields are explicit: `query`, `question`, and
+    `narrative`. Prepared schema v1 files must be regenerated before the
+    `question` view can run.
+  - Direct TREC-COVID `run --mode both` calls must pass
+    `--benchmark-dataset`; the interactive run matrix always supplies it.
   - Example topics from TREC-COVID:
     - Topic `1`
-      - short: `coronavirus origin`
-      - long: `seeking range of information about the SARS-CoV-2 virus's origin, including its evolution, animal source, and first transmission into humans`
+      - query: `coronavirus origin`
+      - question: `what is the origin of COVID-19`
+      - narrative: `seeking range of information about the SARS-CoV-2 virus's origin, including its evolution, animal source, and first transmission into humans`
     - Topic `2`
-      - short: `coronavirus response to weather changes`
-      - long: `seeking range of information about the SARS-CoV-2 virus viability in different weather/climate conditions as well as information related to transmission of the virus in different climate conditions`
+      - query: `coronavirus response to weather changes`
+      - question: `how does the coronavirus respond to changes in the weather`
+      - narrative: `seeking range of information about the SARS-CoV-2 virus viability in different weather/climate conditions as well as information related to transmission of the virus in different climate conditions`
 - Judgments: official TREC-COVID qrels (query-document relevance labels) used for quality metrics.
   - Labels are graded relevance values from the dataset qrels.
   - Metric interpretation in this benchmark:
@@ -272,7 +289,9 @@ embedding:
   - `or` (default): natural disjunction / broader recall
   - `quorum`: uses Manticore quorum syntax like `"term1 term2 term3"/0.5`
 - `manticore.fulltext_query_quorum`: quorum threshold used when `fulltext_query_mode: "quorum"` (default: `0.5`)
-- `manticore.fulltext_query_variant`: prepared topic text used by full-text mode across all engines: `short` or `long` (default: `long`). Vector and hybrid modes always use `long`.
+- `manticore.fulltext_query_variant`: legacy/non-TREC compatibility setting for
+  prepared `query_short`/`query_long` topics. TREC-COVID logical datasets ignore
+  it and use their explicit `query_field` in every search mode.
 
 ### Manticore Vector Quantization/Search Config
 - `manticore.vector_quantization`: `""` (off), `8bit`, `1bit`, or `1bitsimple`
@@ -465,6 +484,7 @@ manticore_vector_only:
   - combined logical collection name: `vespa.collection_name`
   - lexical, vector, and hybrid all use the same generated Vespa schema/document type
   - indexing auto-generates and redeploys a local Vespa application package
+  - full-text-only builds use a one-dimensional placeholder tensor; a later vector build deploys the cached embedding dimension with a one-deployment `field-type-change` validation override and then re-feeds every document
   - vector and hybrid load document vectors from the local SQLite vector cache
 - Note: native BM25 mode may download model artifacts on first use.
 
@@ -561,6 +581,13 @@ Populate cache with:
 bench --config config.yaml prepare --source beir/trec-covid
 ```
 
+For TREC-COVID this command prepares all three official topic fields and checks
+all 150 query-text cache entries (50 topics x 3 fields). It is incremental:
+existing document and query vectors with the same normalized text, model, and
+similarity remain in place, and only cache misses are sent to the embedding
+provider. Adding query formulations therefore does not require document
+re-embedding or engine reindexing.
+
 Behavior:
 - cache key = `md5(normalized_text + model + hnsw_similarity)`,
 - normalized text = selected `vector_from` fields joined with single spaces,
@@ -613,21 +640,16 @@ The interactive report compares completed runs across selected engines and
 datasets. Its filters affect the leaderboard, matrix, dataset explorer, raw-run
 table, and exports.
 
-Automatic report generation selects one query-text cohort per dataset and
-document population: `same` when the prepared short/long texts are identical,
-otherwise `long`. It never falls back to `short`. A short-query cohort is
-included only when a selected run explicitly records `query_variant: short`
-(through the artifact selector or `--run-ids`). Selecting an unmarked legacy
-run that is inferred as short does not satisfy this gate. Once a recorded-short
-run is selected, selected legacy inferred-short runs are admitted too, and the
-standalone HTML makes the other inferred-short runs available. Short and long
-remain separate dataset cohorts.
+TREC-COVID appears as three separate logical dataset cohorts, one for each
+official query field. New artifacts identify the cohort explicitly. Legacy
+artifacts are migrated at read time: full-text results join
+`trec-covid-query`, while vector and hybrid results join
+`trec-covid-narrative`. Reports therefore expose the currently missing cells
+without relabeling old results. Dataset-family-weighted global aggregates give
+the three views together the same weight as one ordinary dataset family.
 
-The recorded-short selection gate applies only to `beir/trec-covid`. For legacy
-artifacts without query metadata, prepared-topic inspection determines whether
-the texts differ. When prepared topics are unavailable, TREC-COVID defaults to
-distinct variants and every other currently supported dataset defaults to
-`same`; explicit artifact metadata still takes precedence.
+The older `short`/`long`/`same` cohort logic remains for non-TREC prepared
+datasets and historical artifact compatibility.
 
 ### Search modes
 
@@ -641,11 +663,13 @@ The report first calculates a relative score for each selected dataset:
 
 ```text
 relative[dataset, engine] = engine_score / best_observed_score
-quality_index[engine] = 100 × geometric_mean(relative scores)
+family_score[family, engine] = mean(relative scores in that family)
+quality_index[engine] = 100 × mean(family scores)
 ```
 
-Every selected dataset receives equal weight. An engine is ranked only when it
-has a completed result for every selected dataset; incomplete engines remain
+Every selected dataset family receives equal weight; logical views within one
+family split that family's weight. An engine is ranked only when it has a
+completed result for every selected dataset view; incomplete engines remain
 visible with their coverage. The reference winner comes from the full report
 engine set and is not recalculated when an engine is hidden.
 
@@ -928,17 +952,14 @@ Combined report (`bench report`):
 - Golden UI reference: `reports/search-benchmark/reference.html`.
 - Inputs: individual `artifacts/*/metrics.json` and
   `artifacts/*/per_query.csv` files; combined Markdown reports are never inputs.
-- Comparison cohorts include the effective query variant. Distinct `short` and
-  `long` query sets never share a dataset cell; `query_variant: same` is shared
-  across modes because the underlying query texts are identical.
-- Default cohort selection prefers `same`, then `long`, and does not fall back
-  to `short`. A selected ID enables short only if its artifact explicitly
-  records `query_variant: short`; selecting an inferred-short legacy ID alone
-  is ignored by this gate. Once enabled, inferred-short artifacts are admitted
-  alongside the recorded-short artifact.
-- Scope the recorded-short gate to `beir/trec-covid`. Unmarked legacy artifacts
-  from other current datasets resolve to `same` when prepared-topic inspection
-  is unavailable, because those datasets use identical short/long text.
+- TREC-COVID comparison cohorts use the logical dataset IDs
+  `trec-covid-query`, `trec-covid-question`, and `trec-covid-narrative`.
+  Full-text, vector, and hybrid results can share a logical dataset cell only
+  when they used that same official field.
+- Map legacy physical `beir/trec-covid` artifacts to `query` for full-text and
+  `narrative` for vector/hybrid. Never infer a legacy `question` result.
+- Retain the `short`/`long`/`same` query-variant handling for non-TREC datasets
+  and older schemas.
 - Cohort rule: include runs with a concrete `engine_version`; reject missing,
   `unknown`, `n/a`, `none`, `null`, and floating `latest` values. Do not add a
   date window.

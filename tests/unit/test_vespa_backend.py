@@ -1,5 +1,7 @@
+from io import BytesIO
 import socket
 from urllib import error as urlerror
+from zipfile import ZipFile
 
 from bench.config import VespaConfig
 from bench.vespa_backend import VespaBackend, _sanitize_vespa_query_text, _sanitize_vespa_string
@@ -87,6 +89,35 @@ def test_search_lexical_sanitizes_query_before_user_query(monkeypatch):
             "ranking.profile": "bm25",
         }
     ]
+
+
+def test_recreate_collection_allows_placeholder_tensor_dimension_change(tmp_path, monkeypatch):
+    backend = VespaBackend(
+        VespaConfig(
+            collection_name="trec_covid_vespa",
+            package_dir=str(tmp_path),
+        )
+    )
+    deployments: list[bytes] = []
+
+    def fake_request(method, base_url, path, *, params=None, payload=None, content_type="application/json"):
+        if path.endswith("/prepareandactivate"):
+            deployments.append(payload)
+        return {}
+
+    monkeypatch.setattr(backend, "_request", fake_request)
+    monkeypatch.setattr(backend, "_wait_for_application_ready", lambda: None)
+    monkeypatch.setattr(backend, "_wait_for_schema_ready", lambda schema: None)
+
+    backend.recreate_collection(dimension=4096)
+
+    assert len(deployments) == 1
+    with ZipFile(BytesIO(deployments[0])) as archive:
+        override = archive.read("validation-overrides.xml").decode("utf-8")
+        schema = archive.read("schemas/trec_covid_vespa.sd").decode("utf-8")
+    assert "field-type-change" in override
+    assert "tensor<float>(x[4096])" in schema
+    assert not (tmp_path / "validation-overrides.xml").exists()
 
 
 def test_retryable_request_error_detects_timeouts():

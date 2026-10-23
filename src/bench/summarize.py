@@ -16,10 +16,14 @@ from urllib.parse import quote
 
 from .io_utils import read_json, read_jsonl
 from .query_policy import (
+    QUERY_VARIANT_SAME,
     TREC_COVID_DATASET,
+    TREC_COVID_FAMILY,
     dataset_query_variants_distinct,
     effective_query_variant,
+    is_trec_covid,
     query_variants_distinct,
+    trec_covid_artifact_identity,
 )
 from .reporting import metric_definitions_markdown
 from .table_filters import (
@@ -56,10 +60,15 @@ class ArtifactRow:
     query_variant: str = "unknown"
     query_variants_distinct: bool | None = None
     query_variant_explicit: bool = False
+    physical_dataset_source: str = ""
+    dataset_family: str = ""
+    query_field: str = ""
 
     @property
     def comparison_dataset_source(self) -> str:
         source = self.dataset_source or "-"
+        if self.dataset_family == TREC_COVID_FAMILY:
+            return source
         variant = self.query_variant or "unknown"
         return f"{source}\x1f{variant}"
 
@@ -72,6 +81,9 @@ class LeaderboardScope:
 
 _DATASET_URLS: dict[str, str] = {
     "beir/trec-covid": "https://ir-datasets.com/beir.html#beir/trec-covid",
+    "trec-covid-query": "https://ir-datasets.com/beir.html#beir/trec-covid",
+    "trec-covid-question": "https://ir-datasets.com/beir.html#beir/trec-covid",
+    "trec-covid-narrative": "https://ir-datasets.com/beir.html#beir/trec-covid",
     "beir/nfcorpus/test": "https://ir-datasets.com/beir.html#beir/nfcorpus/test",
     "msmarco-passage/dev/small": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/dev/small",
     "msmarco-passage/trec-dl-2019/judged": "https://ir-datasets.com/msmarco-passage.html#msmarco-passage/trec-dl-2019/judged",
@@ -92,6 +104,8 @@ def _query_variant_label(query_variant: str) -> str:
 
 
 def _query_variant_selection_label(row: ArtifactRow) -> str:
+    if row.query_field:
+        return f"{row.query_field} field"
     label = _query_variant_label(row.query_variant)
     if row.query_variant == "short":
         origin = "recorded" if row.query_variant_explicit else "legacy inferred"
@@ -393,16 +407,17 @@ def discover_artifacts() -> list[ArtifactRow]:
                 engine = "manticore_all_default"
             if engine == "manticore" and "_manticore_full_default_" in profile.lower():
                 engine = "manticore_full_default"
-            dataset_source = str(payload.get("dataset_source", "") or "")
+            physical_dataset_source = str(payload.get("dataset_source", "") or "")
+            dataset_source = physical_dataset_source
             doc_count = _extract_doc_count(payload)
-            group_stats = prepared_group_stats.get((dataset_source, doc_count), {})
+            group_stats = prepared_group_stats.get((physical_dataset_source, doc_count), {})
             recorded_distinct = payload.get("query_variants_distinct")
             variants_distinct = (
                 recorded_distinct
                 if isinstance(recorded_distinct, bool)
                 else _inferred_query_variants_distinct(
                     prepared_group_stats,
-                    dataset_source,
+                    physical_dataset_source,
                     doc_count,
                 )
             )
@@ -416,6 +431,19 @@ def discover_artifacts() -> list[ArtifactRow]:
             )
             recorded_query_variant = str(payload.get("query_variant") or "").strip().lower()
             query_variant_explicit = recorded_query_variant == query_variant
+            dataset_family = str(payload.get("dataset_family") or "").strip()
+            query_field = str(payload.get("query_field") or "").strip().lower()
+            if is_trec_covid(physical_dataset_source):
+                dataset_source, query_field = trec_covid_artifact_identity(
+                    mode=mode,
+                    benchmark_dataset_id=payload.get("benchmark_dataset_id"),
+                    query_field=query_field,
+                    recorded_variant=payload.get("query_variant"),
+                )
+                dataset_family = TREC_COVID_FAMILY
+                query_variant_requested = query_field
+                query_variant = QUERY_VARIANT_SAME
+                query_variant_explicit = bool(payload.get("benchmark_dataset_id"))
             out.append(
                 ArtifactRow(
                     run_id=run_id_val,
@@ -427,6 +455,9 @@ def discover_artifacts() -> list[ArtifactRow]:
                     mode=mode,
                     model=model,
                     dataset_source=dataset_source,
+                    physical_dataset_source=physical_dataset_source,
+                    dataset_family=dataset_family or dataset_source,
+                    query_field=query_field,
                     query_variant_requested=query_variant_requested,
                     query_variant=query_variant,
                     query_variants_distinct=variants_distinct,
@@ -1163,6 +1194,15 @@ def _row_canonical_metric_value(row: ArtifactRow) -> float:
     return float(row.relevance.get(metric, 0.0))
 
 
+def _family_weighted_average(values: list[float], families: list[str]) -> float:
+    """Average within dataset families first so logical views do not add weight."""
+    grouped: dict[str, list[float]] = {}
+    for value, family in zip(values, families, strict=True):
+        grouped.setdefault(family, []).append(float(value))
+    family_means = [sum(items) / len(items) for items in grouped.values() if items]
+    return sum(family_means) / len(family_means) if family_means else 0.0
+
+
 def _eligible_for_global_relevance(row: ArtifactRow) -> bool:
     if row.status != "ok":
         return False
@@ -1183,8 +1223,10 @@ def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     per_variant_scores: dict[tuple[str, str], list[float]] = {}
     per_variant_ndcg: dict[tuple[str, str], list[float]] = {}
     per_variant_mrr: dict[tuple[str, str], list[float]] = {}
+    per_variant_families: dict[tuple[str, str], list[str]] = {}
 
     for _, group_rows in grouped.items():
+        family = group_rows[0].dataset_family or group_rows[0].dataset_source
         best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
         for row in group_rows:
             key = (row.engine, row.mode)
@@ -1205,6 +1247,7 @@ def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
             per_variant_scores.setdefault(variant, []).append(norm)
             per_variant_ndcg.setdefault(variant, []).append(float(row.relevance.get("ndcg@10", 0.0)))
             per_variant_mrr.setdefault(variant, []).append(float(row.relevance.get("mrr@10", 0.0)))
+            per_variant_families.setdefault(variant, []).append(family)
 
     if not per_variant_scores:
         return []
@@ -1214,9 +1257,10 @@ def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     for (engine, mode), scores in per_variant_scores.items():
         groups_played = len(scores)
         coverage = groups_played / total_groups if total_groups > 0 else 0.0
-        avg_score = sum(scores) / groups_played if groups_played else 0.0
-        avg_ndcg = sum(per_variant_ndcg.get((engine, mode), [])) / max(1, len(per_variant_ndcg.get((engine, mode), [])))
-        avg_mrr = sum(per_variant_mrr.get((engine, mode), [])) / max(1, len(per_variant_mrr.get((engine, mode), [])))
+        families = per_variant_families.get((engine, mode), [])
+        avg_score = _family_weighted_average(scores, families)
+        avg_ndcg = _family_weighted_average(per_variant_ndcg.get((engine, mode), []), families)
+        avg_mrr = _family_weighted_average(per_variant_mrr.get((engine, mode), []), families)
         final_score = avg_score * coverage
         leaderboard.append((engine, mode, final_score, groups_played, avg_ndcg, avg_mrr))
 
@@ -1226,7 +1270,8 @@ def _global_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     lines.append(
         "Scoring: for each dataset/doc-count/query-set group, take the best run per engine, "
         "compute a relevance composite (`NDCG@10`, `MRR@10`, optional `MAP@10`), "
-        "normalize it within the group, then average globally. Coverage across groups is included in the final score."
+        "normalize it within the group, average logical views within each dataset family, then average families globally. "
+        "Coverage across groups is included in the final score."
     )
     lines.append("")
     lines.append("| Rank | Engine | Mode | Groups | Coverage | Avg NDCG@10 | Avg MRR@10 | Score |")
@@ -1255,8 +1300,10 @@ def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     per_engine_mrr: dict[str, list[float]] = {}
     per_engine_qps: dict[str, list[float]] = {}
     per_engine_best_modes: dict[str, dict[str, int]] = {}
+    per_engine_families: dict[str, list[str]] = {}
 
     for _, group_rows in grouped.items():
+        family = group_rows[0].dataset_family or group_rows[0].dataset_source
         best_by_engine: dict[str, ArtifactRow] = {}
         for row in group_rows:
             prev = best_by_engine.get(row.engine)
@@ -1287,6 +1334,7 @@ def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
             per_engine_ndcg.setdefault(engine, []).append(float(row.relevance.get("ndcg@10", 0.0)))
             per_engine_mrr.setdefault(engine, []).append(float(row.relevance.get("mrr@10", 0.0)))
             per_engine_qps.setdefault(engine, []).append(float(row.performance.get("qps", 0.0)))
+            per_engine_families.setdefault(engine, []).append(family)
             mode_counts = per_engine_best_modes.setdefault(engine, {})
             mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
 
@@ -1298,10 +1346,11 @@ def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     for engine, scores in per_engine_scores.items():
         groups_played = len(scores)
         coverage = groups_played / total_groups if total_groups > 0 else 0.0
-        avg_score = sum(scores) / groups_played if groups_played else 0.0
-        avg_ndcg = sum(per_engine_ndcg.get(engine, [])) / max(1, len(per_engine_ndcg.get(engine, [])))
-        avg_mrr = sum(per_engine_mrr.get(engine, [])) / max(1, len(per_engine_mrr.get(engine, [])))
-        avg_qps = sum(per_engine_qps.get(engine, [])) / max(1, len(per_engine_qps.get(engine, [])))
+        families = per_engine_families.get(engine, [])
+        avg_score = _family_weighted_average(scores, families)
+        avg_ndcg = _family_weighted_average(per_engine_ndcg.get(engine, []), families)
+        avg_mrr = _family_weighted_average(per_engine_mrr.get(engine, []), families)
+        avg_qps = _family_weighted_average(per_engine_qps.get(engine, []), families)
         mode_counts = per_engine_best_modes.get(engine, {})
         best_mode = "-"
         if mode_counts:
@@ -1314,7 +1363,8 @@ def _global_efficiency_leaderboard_lines(rows: list[ArtifactRow]) -> list[str]:
     lines = ["## Global Efficiency Leaderboard", ""]
     lines.append(
         "Scoring: for each dataset/doc-count/query-set group, take the best run per engine by "
-        "`relevance * log(1 + qps)`, normalize it within the group, then average globally. "
+        "`relevance * log(1 + qps)`, normalize it within the group, average logical views "
+        "within each dataset family, then average families globally. "
         "Coverage across groups is included in the final score."
     )
     lines.append("")
@@ -1807,6 +1857,8 @@ def _group_scope_title(
 
 def _short_dataset_name(dataset: str, doc_count: int | None) -> str:
     ds, _ = _split_comparison_dataset(dataset)
+    if ds in {"trec-covid-query", "trec-covid-question", "trec-covid-narrative"}:
+        return ds
     if ds == "beir/nfcorpus/test":
         return "nfcorpus"
     if ds == "beir/trec-covid":
@@ -1907,12 +1959,18 @@ def _engine_leaderboard_data_for_scope(
     per_engine_qps: dict[str, list[float]] = {}
     per_engine_p50: dict[str, list[float]] = {}
     per_engine_best_modes: dict[str, dict[str, int]] = {}
-    per_engine_rank_sum: dict[str, float] = {}
+    per_engine_ranks: dict[str, list[float]] = {}
     per_engine_relative_to_winner: dict[str, list[float]] = {}
+    per_engine_families: dict[str, list[str]] = {}
     per_engine_weighted_score_sum: dict[str, float] = {}
     per_engine_weight_sum: dict[str, float] = {}
     for group_key in scope:
         group_rows = grouped.get(group_key, [])
+        family = (
+            group_rows[0].dataset_family or group_rows[0].dataset_source
+            if group_rows
+            else str(group_key[0])
+        )
         if allowed_engines is not None:
             group_rows = [row for row in group_rows if row.engine in allowed_engines]
         best_by_engine: dict[str, ArtifactRow] = {}
@@ -1925,6 +1983,7 @@ def _engine_leaderboard_data_for_scope(
             per_engine_scores.setdefault(engine, []).append(score)
             per_engine_qps.setdefault(engine, []).append(float(row.performance.get("qps", 0.0) or 0.0))
             per_engine_p50.setdefault(engine, []).append(float(row.performance.get("latency_p50_ms", 0.0) or 0.0))
+            per_engine_families.setdefault(engine, []).append(family)
             mode_counts = per_engine_best_modes.setdefault(engine, {})
             mode_counts[row.mode] = mode_counts.get(row.mode, 0) + 1
             weight = float(row.qrels_count or 1)
@@ -1953,7 +2012,7 @@ def _engine_leaderboard_data_for_scope(
                 end_idx += 1
             avg_rank = (rank_idx + 1 + end_idx) / 2.0
             for engine, _ in ranked[rank_idx:end_idx]:
-                per_engine_rank_sum[engine] = per_engine_rank_sum.get(engine, 0.0) + avg_rank
+                per_engine_ranks.setdefault(engine, []).append(avg_rank)
             rank_idx = end_idx
 
     leaderboard: list[tuple[str, str, float, float, float, float, float, float]] = []
@@ -1969,15 +2028,16 @@ def _engine_leaderboard_data_for_scope(
             f"vec:{int(mode_counts.get('vector', 0))} "
             f"hyb:{int(mode_counts.get('hybrid', 0))}"
         )
+        families = per_engine_families.get(engine, [])
         leaderboard.append(
             (
                 engine,
                 mode_summary,
-                sum(scores) / groups_played,
-                sum(per_engine_qps.get(engine, [])) / groups_played,
-                sum(per_engine_p50.get(engine, [])) / groups_played,
-                per_engine_rank_sum.get(engine, 0.0),
-                sum(per_engine_relative_to_winner.get(engine, [])) / groups_played,
+                _family_weighted_average(scores, families),
+                _family_weighted_average(per_engine_qps.get(engine, []), families),
+                _family_weighted_average(per_engine_p50.get(engine, []), families),
+                _family_weighted_average(per_engine_ranks.get(engine, []), families),
+                _family_weighted_average(per_engine_relative_to_winner.get(engine, []), families),
                 (
                     per_engine_weighted_score_sum.get(engine, 0.0) / per_engine_weight_sum.get(engine, 1.0)
                     if per_engine_weight_sum.get(engine, 0.0) > 0.0
@@ -2001,8 +2061,14 @@ def _engine_mode_leaderboard_data_for_scope(
     per_variant_scores: dict[tuple[str, str], list[float]] = {}
     per_variant_qps: dict[tuple[str, str], list[float]] = {}
     per_variant_p50: dict[tuple[str, str], list[float]] = {}
+    per_variant_families: dict[tuple[str, str], list[str]] = {}
     for group_key in scope:
         group_rows = grouped.get(group_key, [])
+        family = (
+            group_rows[0].dataset_family or group_rows[0].dataset_source
+            if group_rows
+            else str(group_key[0])
+        )
         if allowed_engines is not None:
             group_rows = [row for row in group_rows if row.engine in allowed_engines]
         best_by_variant: dict[tuple[str, str], ArtifactRow] = {}
@@ -2015,6 +2081,7 @@ def _engine_mode_leaderboard_data_for_scope(
             per_variant_scores.setdefault(key, []).append(_row_canonical_metric_value(row))
             per_variant_qps.setdefault(key, []).append(float(row.performance.get("qps", 0.0) or 0.0))
             per_variant_p50.setdefault(key, []).append(float(row.performance.get("latency_p50_ms", 0.0) or 0.0))
+            per_variant_families.setdefault(key, []).append(family)
     leaderboard: list[tuple[str, str, float, float, float]] = []
     excluded: list[tuple[str, str, int]] = []
     for (engine, mode), scores in per_variant_scores.items():
@@ -2022,13 +2089,14 @@ def _engine_mode_leaderboard_data_for_scope(
         if groups_played < total_groups:
             excluded.append((engine, mode, groups_played))
             continue
+        families = per_variant_families.get((engine, mode), [])
         leaderboard.append(
             (
                 engine,
                 mode,
-                sum(scores) / groups_played,
-                sum(per_variant_qps.get((engine, mode), [])) / groups_played,
-                sum(per_variant_p50.get((engine, mode), [])) / groups_played,
+                _family_weighted_average(scores, families),
+                _family_weighted_average(per_variant_qps.get((engine, mode), []), families),
+                _family_weighted_average(per_variant_p50.get((engine, mode), []), families),
             )
         )
     leaderboard.sort(key=lambda item: (-item[2], item[0].lower(), item[1].lower()))

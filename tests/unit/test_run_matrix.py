@@ -21,14 +21,20 @@ qdrant:
         encoding="utf-8",
     )
     variants = build_variants_from_config_paths([cfg])
-    # (manticore:2 modes + qdrant:2 modes) = 4 variants
-    assert len(variants) == 4
+    # Four engine/mode rows, each expanded into the three logical TREC-COVID datasets.
+    assert len(variants) == 12
     assert all(v.config_path == str(cfg) for v in variants)
     assert all(v.entry in {"manticore", "qdrant"} for v in variants)
     assert {v.engine for v in variants} == {"manticore", "qdrant"}
     assert {v.mode for v in variants} == {"fulltext", "vector"}
+    assert {v.benchmark_dataset_id for v in variants} == {
+        "trec-covid-query",
+        "trec-covid-question",
+        "trec-covid-narrative",
+    }
+    assert {v.query_field for v in variants} == {"query", "question", "narrative"}
     assert all(v.default_concurrency == 3 for v in variants)
     assert all(v.model != "" for v in variants)
     ft_by_engine = {v.engine: v.model for v in variants if v.mode == "fulltext"}
-    assert "ranker=expr(" in ft_by_engine["manticore"]
+    assert "profile:relevance" in ft_by_engine["manticore"]
     assert ft_by_engine["qdrant"] == "Qdrant/bm25"

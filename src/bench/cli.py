@@ -25,6 +25,12 @@ from .prepare_matrix import (
     build_prepare_variants_from_config_paths,
     select_prepare_variants_interactive,
 )
+from .query_policy import (
+    TREC_COVID_BENCHMARKS,
+    TREC_COVID_FAMILY,
+    is_trec_covid,
+    query_field_for_benchmark,
+)
 from .run_matrix import (
     build_variants_from_config_paths,
     filter_runnable_variants,
@@ -878,7 +884,8 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
         for r in results:
             v = r.variant
             print(
-                f"- profile={v.entry} engine={v.engine} mode={v.mode} model={v.model} "
+                f"- profile={v.entry} dataset={v.benchmark_dataset_id} "
+                f"engine={v.engine} mode={v.mode} model={v.model} "
                 f"run_id={r.run_id} artifacts={r.artifacts_dir}"
             )
         return 0
@@ -892,6 +899,17 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
         entry=args.entry,
         fallback_cfg=cfg,
     )
+    requested_benchmark = str(args.benchmark_dataset or "").strip().lower()
+    if requested_benchmark:
+        query_field = query_field_for_benchmark(requested_benchmark)
+        if not is_trec_covid(cfg_for_engine.dataset.source) or not query_field:
+            raise ValueError(
+                f"Benchmark dataset '{requested_benchmark}' is not available for "
+                f"source '{cfg_for_engine.dataset.source}'."
+            )
+        cfg_for_engine.dataset.benchmark_dataset_id = requested_benchmark
+        cfg_for_engine.dataset.dataset_family = TREC_COVID_FAMILY
+        cfg_for_engine.dataset.query_field = query_field
     if entry_mode_filter in ("fulltext", "vector", "hybrid") and args.mode != entry_mode_filter:
         raise ValueError(
             f"Entry '{entry_name}' is restricted to mode '{entry_mode_filter}'. "
@@ -930,7 +948,11 @@ def cmd_run(cfg: AppConfig, args: argparse.Namespace) -> int:
         print(f"FATAL: {exc}")
         return 1
     out_dir = write_run_artifacts(run_id, metrics, per_query_rows)
-    print(f"Run completed. profile={entry_name} Artifacts: {out_dir}")
+    print(
+        f"Run completed. profile={entry_name} "
+        f"dataset={metrics.get('benchmark_dataset_id') or metrics.get('dataset_source')} "
+        f"Artifacts: {out_dir}"
+    )
     return 0
 
 
@@ -998,6 +1020,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--engine", default=None, choices=["manticore", "manticore_avgdl", "manticore_default_ranker", "manticore_all_default", "manticore_full_default", "columnar", "qdrant", "meilisearch", "opensearch", "elasticsearch", "typesense", "milvus", "mariadb", "serenedb", "weaviate", "vespa"])
     p_run.add_argument("--mode", default=None, choices=["fulltext", "vector", "hybrid", "both"])
     p_run.add_argument("--entry", default=None, help="Config entry name to run (for deterministic replay)")
+    p_run.add_argument(
+        "--benchmark-dataset",
+        default=None,
+        choices=sorted(TREC_COVID_BENCHMARKS),
+        help="Logical TREC-COVID benchmark dataset/query field",
+    )
     p_run.add_argument("--concurrency", type=int, default=None)
 
     p_report = sub.add_parser("report", add_help=False)

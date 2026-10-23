@@ -57,11 +57,20 @@ def build_summary_markdown(metrics: dict[str, Any]) -> str:
     dataset_source = str(metrics.get("dataset_source", "") or "").strip()
     if dataset_source:
         lines.append(f"- Dataset source: `{dataset_source}`")
+    benchmark_dataset_id = str(metrics.get("benchmark_dataset_id", "") or "").strip()
+    if benchmark_dataset_id:
+        lines.append(f"- Benchmark dataset: `{benchmark_dataset_id}`")
+    dataset_family = str(metrics.get("dataset_family", "") or "").strip()
+    if dataset_family:
+        lines.append(f"- Dataset family: `{dataset_family}`")
+    query_field = str(metrics.get("query_field", "") or "").strip()
+    if query_field:
+        lines.append(f"- Query field: `{query_field}`")
     lines.append(f"- Mode: `{_display_mode(str(metrics.get('mode', '')))}`")
     query_variant = str(metrics.get("query_variant", "") or "").strip().lower()
     query_variant_requested = str(metrics.get("query_variant_requested", "") or "").strip().lower()
     variants_distinct = metrics.get("query_variants_distinct")
-    if query_variant:
+    if query_variant and not query_field:
         if query_variant == "same":
             lines.append(
                 f"- Query variant: `same` (short and long texts are identical; requested `{query_variant_requested or 'unknown'}`)"
@@ -119,6 +128,8 @@ def compare_summaries(current: dict[str, Any], other: dict[str, Any]) -> str:
     lines.append("")
     current_dataset = str(current.get("dataset_source") or "").strip()
     other_dataset = str(other.get("dataset_source") or "").strip()
+    current_family = str(current.get("dataset_family") or current_dataset).strip()
+    other_family = str(other.get("dataset_family") or other_dataset).strip()
     _, current_variant = effective_query_variant(
         mode=str(current.get("mode") or ""),
         recorded_variant=current.get("query_variant"),
@@ -144,13 +155,19 @@ def compare_summaries(current: dict[str, Any], other: dict[str, Any]) -> str:
         or current_variant == "same"
         or other_variant == "same"
     )
-    if current_dataset != other_dataset or not variants_compatible:
+    if current_dataset != other_dataset or current_family != other_family:
         lines.append(
-            "These runs are not directly comparable because their dataset or effective query set differs "
+            "These runs are not directly comparable because their physical dataset or dataset family differs "
             f"(`{current_dataset or 'unknown'} / {current_variant}` vs "
             f"`{other_dataset or 'unknown'} / {other_variant}`)."
         )
         return "\n".join(lines).strip() + "\n"
+    if not variants_compatible:
+        lines.append(
+            "The runs use different query formulations from the same dataset family; "
+            "the comparison below measures that controlled query-field change."
+        )
+        lines.append("")
     for mode in sorted(set(current.get("performance", {}).keys()) | set(other.get("performance", {}).keys())):
         c_perf = current.get("performance", {}).get(mode, {})
         o_perf = other.get("performance", {}).get(mode, {})

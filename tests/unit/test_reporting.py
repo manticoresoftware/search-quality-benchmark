@@ -85,7 +85,7 @@ def test_write_run_artifacts_records_engine_metadata(tmp_path, monkeypatch) -> N
     assert written["engine_version_source"] == "container"
 
 
-def test_compare_summaries_rejects_distinct_query_sets() -> None:
+def test_compare_summaries_allows_query_formulations_from_same_family() -> None:
     legacy_short = {
         "run_id": "old",
         "dataset_source": "beir/trec-covid",
@@ -106,8 +106,8 @@ def test_compare_summaries_rejects_distinct_query_sets() -> None:
 
     comparison = compare_summaries(new_long, legacy_short)
 
-    assert "not directly comparable" in comparison
-    assert "delta" not in comparison
+    assert "different query formulations" in comparison
+    assert "delta" in comparison
 
 
 def test_compare_summaries_accepts_same_text_identity() -> None:
