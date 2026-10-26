@@ -49,8 +49,9 @@ The normal workflow is:
 1. `engines` — start or stop the required search engines.
 2. `prepare` — download a dataset and prepare documents, topics, judgments, and embeddings.
 3. `index` — create and populate indexes for selected engine profiles. Shared
-   targets expose separate full-text and vector-capable builds, so an engine can
+   targets expose separate full-text and hybrid builds, so an engine can
    still participate in lexical comparisons when its vector build is impractical.
+   Those two destructive alternatives are mutually exclusive in the index TUI.
    In Manticore and Qdrant, matching lexical and dense target names refer to one
    combined physical target. The hybrid build creates both representations and
    supports full-text, vector, and hybrid runs. Rebuilding that target as

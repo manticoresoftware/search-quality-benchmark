@@ -852,7 +852,11 @@ def cmd_index(cfg: AppConfig, args: argparse.Namespace) -> int:
                 if not selected:
                     print("Index completed: all selected actions were skipped.")
                     return 0
-            vector_variants = [v for v in selected if v.target_kind == "vector"]
+            vector_variants = [
+                v
+                for v in selected
+                if v.target_kind in ("vector", "hybrid", "combined")
+            ]
             for v in vector_variants:
                 if not _confirm_vector_cache_coverage(
                     cfg=v.cfg,

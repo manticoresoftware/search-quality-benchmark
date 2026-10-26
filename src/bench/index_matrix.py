@@ -142,6 +142,10 @@ def _display_target_kind(kind: str) -> str:
     return kind
 
 
+def _is_vector_capable_target_kind(kind: str) -> bool:
+    return kind in ("vector", "hybrid", "combined")
+
+
 def _manticore_table_options_label(cfg: AppConfig) -> str:
     parts: list[str] = []
     profile = str(cfg.manticore.table_profile or "").strip()
@@ -313,6 +317,14 @@ def _preferred_layout_mode(cfg: AppConfig, engine: str) -> str | None:
     return None
 
 
+def _shares_fulltext_and_vector_target(cfg: AppConfig, engine: str) -> bool:
+    if _preferred_layout_mode(cfg, engine) is None:
+        return False
+    fulltext_target = _index_target_name(cfg, engine, "fulltext")
+    vector_target = _index_target_name(cfg, engine, "vector")
+    return bool(fulltext_target) and fulltext_target == vector_target
+
+
 def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVariant]:
     raw_rows: list[IndexVariant] = []
     for path in paths:
@@ -412,6 +424,12 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
         preferred_mode = _preferred_mode(rows)
         rep = _pick_repr(rows, preferred_mode)
         used_by = tuple(sorted(r.entry for r in rows))
+        target_kind = (
+            "hybrid"
+            if build_kind == "vector"
+            and any(_shares_fulltext_and_vector_target(r.cfg, r.engine) for r in rows)
+            else build_kind
+        )
         out.append(
             IndexVariant(
                 config_path=rep.config_path,
@@ -423,13 +441,13 @@ def build_index_variants_from_config_paths(paths: list[Path]) -> list[IndexVaria
                 batch_size=rep.batch_size,
                 target=rep.target,
                 cfg=rep.cfg,
-                target_kind=build_kind,
+                target_kind=target_kind,
                 used_by=used_by,
             )
         )
 
     engine_order = {"manticore": 0, "manticore_avgdl": 1, "manticore_default_ranker": 2, "manticore_all_default": 3, "manticore_full_default": 4, "columnar": 5, "qdrant": 6, "meilisearch": 7, "opensearch": 8, "elasticsearch": 9, "typesense": 10, "milvus": 11, "mariadb": 12, "serenedb": 13, "weaviate": 14, "vespa": 15}
-    kind_order = {"fulltext": 0, "vector": 1, "combined": 2}
+    kind_order = {"fulltext": 0, "hybrid": 1, "vector": 2, "combined": 3}
     return sorted(
         out,
         key=lambda v: (engine_order.get(v.engine, 99), kind_order.get(v.target_kind or "", 99), v.target, v.entry),
@@ -496,7 +514,7 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
             backend = MilvusBackend(v.cfg.milvus)
             try:
                 backend.ensure_accessible()
-                required_mode = "vector" if v.target_kind in ("vector", "combined") else "fulltext"
+                required_mode = "vector" if _is_vector_capable_target_kind(v.target_kind) else "fulltext"
                 if not backend.collection_supports(required_mode):
                     return TargetStatus("pending", None, expected)
                 actual = int(backend.get_document_count(v.target))
@@ -510,7 +528,7 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
                     return TargetStatus("pending", None, expected)
                 if not backend.table_has_fulltext(v.target):
                     return TargetStatus("pending", None, expected)
-                if v.target_kind in ("vector", "combined") and not backend.table_has_vector(v.target):
+                if _is_vector_capable_target_kind(v.target_kind) and not backend.table_has_vector(v.target):
                     return TargetStatus("pending", None, expected)
                 actual = int(backend.get_document_count(v.target))
             finally:
@@ -521,7 +539,7 @@ def _resolve_target_status(v: IndexVariant) -> TargetStatus:
                 backend.ensure_accessible()
                 if not backend.table_exists(v.target) or not backend.table_has_fulltext(v.target):
                     return TargetStatus("pending", None, expected)
-                if v.target_kind in ("vector", "combined") and not backend.table_has_vector(v.target):
+                if _is_vector_capable_target_kind(v.target_kind) and not backend.table_has_vector(v.target):
                     return TargetStatus("pending", None, expected)
                 actual = int(backend.get_document_count(v.target))
             finally:
@@ -598,11 +616,12 @@ def _draw_row(
             color_engine = curses.color_pair(14)
         elif v.engine == "meilisearch":
             color_engine = curses.color_pair(5)
-        if v.mode == "fulltext":
+        displayed_kind = v.target_kind or v.mode
+        if displayed_kind == "fulltext":
             color_mode = curses.color_pair(3)
-        elif v.mode == "vector":
+        elif displayed_kind == "vector":
             color_mode = curses.color_pair(4)
-        elif v.mode in ("hybrid", "both"):
+        elif displayed_kind in ("hybrid", "combined", "both"):
             color_mode = curses.color_pair(5)
         if target_status.state == "pending":
             color_target = curses.color_pair(7)
@@ -764,6 +783,28 @@ def _draw_details_panel(
             y += 1
 
 
+def _toggle_index_selection(
+    variants: list[IndexVariant], selected_idx: set[int], current: int
+) -> None:
+    if current in selected_idx:
+        selected_idx.remove(current)
+        return
+
+    candidate = variants[current]
+    candidate_kind = candidate.target_kind or candidate.mode
+    if candidate_kind in ("fulltext", "hybrid"):
+        opposite_kind = "hybrid" if candidate_kind == "fulltext" else "fulltext"
+        conflicts = {
+            i
+            for i in selected_idx
+            if variants[i].engine == candidate.engine
+            and variants[i].target == candidate.target
+            and (variants[i].target_kind or variants[i].mode) == opposite_kind
+        }
+        selected_idx.difference_update(conflicts)
+    selected_idx.add(current)
+
+
 def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVariant]:
     selected_idx: set[int] = set()
     current = 0
@@ -836,7 +877,12 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
             if col == "target":
                 return v.target.lower()
             if col == "kind":
-                return (0 if v.target_kind == "fulltext" else 1 if v.target_kind == "vector" else 2)
+                return {
+                    "fulltext": 0,
+                    "hybrid": 1,
+                    "vector": 2,
+                    "combined": 3,
+                }.get(v.target_kind or v.mode, 99)
             if col == "used_by":
                 return ",".join(v.used_by).lower()
             if col == "model":
@@ -1000,10 +1046,7 @@ def _select_index_variants_curses(variants: list[IndexVariant]) -> list[IndexVar
                     _apply_sort()
             elif ch == ord(" "):
                 if variants:
-                    if current in selected_idx:
-                        selected_idx.remove(current)
-                    else:
-                        selected_idx.add(current)
+                    _toggle_index_selection(variants, selected_idx, current)
             elif ch in (10, 13, curses.KEY_ENTER):
                 return sorted(selected_idx) if variants else []
             elif ch == 27 or ch in (ord("q"),):

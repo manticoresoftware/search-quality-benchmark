@@ -213,8 +213,11 @@ files (excluding templates). It keeps full-text and vector-capable build actions
 separate even when they write to the same physical target. A full-text-only build
 therefore remains available for engines or datasets whose vector index is too
 expensive. Vector and hybrid profiles that share one vector-capable build are
-still deduplicated into one row; for combined Manticore and Qdrant targets that
-row executes the required hybrid indexing action.
+still deduplicated into one row. When the full-text and vector-capable builds
+write to the same combined physical target, that row is labeled `hybrid`, since
+it builds both representations. Selecting either the `full-text` or `hybrid`
+row in the TUI deselects the other shared-target action. For combined Manticore
+and Qdrant targets, the hybrid row executes the required hybrid indexing mode.
 
 When Manticore `fulltext_table`/`vector_table` or Qdrant
 `bm25_collection`/`dense_collection` resolve to the same existing target, a

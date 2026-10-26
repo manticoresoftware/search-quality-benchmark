@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import curses
 from typing import Any
 
 from bench.config import AppConfig
@@ -36,17 +37,17 @@ class _FakeScreen:
         return next(self._keys)
 
 
-def _variant() -> IndexVariant:
+def _variant(*, mode: str = "hybrid", target_kind: str = "hybrid") -> IndexVariant:
     return IndexVariant(
         config_path="config.yaml",
         entry="arguana_manticore_hybrid",
         engine="manticore",
-        mode="hybrid",
+        mode=mode,
         model="profile:relevance",
         batch_size=250,
         target="arguana_manticore",
         cfg=AppConfig(),
-        target_kind="combined",
+        target_kind=target_kind,
         used_by=("arguana_manticore_fulltext", "arguana_manticore_vector"),
     )
 
@@ -90,3 +91,29 @@ def test_index_picker_ignores_selection_keys_when_no_engine_is_available(monkeyp
 
     assert _select_index_variants_curses([_variant()]) == []
     assert any("No available index targets" in line for line in screen.rendered)
+
+
+def test_index_picker_selecting_hybrid_deselects_shared_fulltext(monkeypatch: Any) -> None:
+    screen = _FakeScreen([ord(" "), curses.KEY_DOWN, ord(" "), 10])
+    _install_fake_curses(monkeypatch, screen)
+    monkeypatch.setattr(
+        "bench.index_matrix._resolve_target_status",
+        lambda _variant: TargetStatus("pending", None, 8674),
+    )
+    fulltext = _variant(mode="fulltext", target_kind="fulltext")
+    hybrid = _variant()
+
+    assert _select_index_variants_curses([fulltext, hybrid]) == [hybrid]
+
+
+def test_index_picker_selecting_fulltext_deselects_shared_hybrid(monkeypatch: Any) -> None:
+    screen = _FakeScreen([curses.KEY_DOWN, ord(" "), curses.KEY_UP, ord(" "), 10])
+    _install_fake_curses(monkeypatch, screen)
+    monkeypatch.setattr(
+        "bench.index_matrix._resolve_target_status",
+        lambda _variant: TargetStatus("pending", None, 8674),
+    )
+    fulltext = _variant(mode="fulltext", target_kind="fulltext")
+    hybrid = _variant()
+
+    assert _select_index_variants_curses([fulltext, hybrid]) == [fulltext]

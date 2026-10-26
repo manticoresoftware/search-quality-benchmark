@@ -97,7 +97,7 @@ manticore_hybrid:
 
     assert [(row.mode, row.target_kind, row.entry) for row in rows] == [
         ("fulltext", "fulltext", "manticore_fulltext"),
-        ("hybrid", "vector", "manticore_hybrid"),
+        ("hybrid", "hybrid", "manticore_hybrid"),
     ]
     assert rows[0].used_by == ("manticore_fulltext",)
     assert rows[1].used_by == ("manticore_hybrid", "manticore_vector")
@@ -132,7 +132,7 @@ qdrant_hybrid:
 
     assert [(row.mode, row.target_kind, row.entry) for row in rows] == [
         ("fulltext", "fulltext", "qdrant_fulltext"),
-        ("hybrid", "vector", "qdrant_hybrid"),
+        ("hybrid", "hybrid", "qdrant_hybrid"),
     ]
     assert rows[0].used_by == ("qdrant_fulltext",)
     assert rows[1].used_by == ("qdrant_hybrid", "qdrant_vector")

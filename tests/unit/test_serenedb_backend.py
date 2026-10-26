@@ -181,7 +181,7 @@ serenedb_hybrid:
     assert {row.mode for row in run_rows} == {"fulltext", "vector", "hybrid"}
     assert [(row.mode, row.target_kind, row.target) for row in index_rows] == [
         ("fulltext", "fulltext", "docs"),
-        ("vector", "vector", "docs"),
+        ("vector", "hybrid", "docs"),
     ]
     assert index_rows[0].used_by == ("serenedb_fulltext",)
     assert index_rows[1].used_by == ("serenedb_hybrid", "serenedb_vector")
