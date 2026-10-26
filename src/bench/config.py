@@ -111,6 +111,8 @@ class OpenSearchConfig:
     space_type: str = "cosinesimil"
     hybrid_text_boost: float = 1.0
     hybrid_vector_boost: float = 1.0
+    hybrid_rrf_k: int = 60
+    hybrid_candidates: int = 200
 
 
 @dataclass

@@ -250,8 +250,13 @@ def _opensearch_vector_label(cfg: AppConfig) -> str:
 def _opensearch_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     extra = [
-        f"textBoost={float(cfg.opensearch.hybrid_text_boost):.2f}",
-        f"vectorBoost={float(cfg.opensearch.hybrid_vector_boost):.2f}",
+        "fusion=native-rrf",
+        f"k={int(cfg.opensearch.hybrid_rrf_k)}",
+        (
+            f"weights={float(cfg.opensearch.hybrid_text_boost):g}:"
+            f"{float(cfg.opensearch.hybrid_vector_boost):g}"
+        ),
+        f"candidates={int(cfg.opensearch.hybrid_candidates)}",
     ]
     return f"{model} [{' '.join(extra)}]"
 

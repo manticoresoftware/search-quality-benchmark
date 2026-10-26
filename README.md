@@ -19,6 +19,11 @@ Depending on the engine, it can compare:
 - dense vector search;
 - hybrid lexical and vector search.
 
+OpenSearch hybrid runs use native weighted reciprocal-rank fusion (RRF). Their
+run labels record the rank constant, branch weights, and candidate depth.
+This query-time implementation does not require rebuilding an existing combined
+index.
+
 Ready dataset profiles include BEIR datasets, MS MARCO Passage, TREC-DL,
 DL-Typo, WANDS, and ACORD. The available profiles live in `config.yaml`.
 

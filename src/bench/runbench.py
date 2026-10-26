@@ -573,8 +573,13 @@ def _opensearch_vector_label(cfg: AppConfig) -> str:
 def _opensearch_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     extras = [
-        f"textBoost={float(cfg.opensearch.hybrid_text_boost):.2f}",
-        f"vectorBoost={float(cfg.opensearch.hybrid_vector_boost):.2f}",
+        "fusion=native-rrf",
+        f"k={int(cfg.opensearch.hybrid_rrf_k)}",
+        (
+            f"weights={float(cfg.opensearch.hybrid_text_boost):g}:"
+            f"{float(cfg.opensearch.hybrid_vector_boost):g}"
+        ),
+        f"candidates={int(cfg.opensearch.hybrid_candidates)}",
     ]
     return f"{model} [{' '.join(extras)}]"
 
@@ -894,8 +899,14 @@ def _collect_diagnostics_opensearch(
                         "index": backend.vector_index_name(),
                         "query": qtext,
                         "vector_dim": len(qvec),
-                        "textBoost": float(cfg.opensearch.hybrid_text_boost),
-                        "vectorBoost": float(cfg.opensearch.hybrid_vector_boost),
+                        "fusion": "native-rrf",
+                        "rrfK": int(cfg.opensearch.hybrid_rrf_k),
+                        "weights": [
+                            float(cfg.opensearch.hybrid_text_boost),
+                            float(cfg.opensearch.hybrid_vector_boost),
+                        ],
+                        "candidates": int(cfg.opensearch.hybrid_candidates),
+                        "searchPipeline": backend.hybrid_pipeline_name(),
                     }
                 entry["top_hits"] = rows[:5]
             except Exception as exc:
@@ -2082,6 +2093,8 @@ def run_benchmark(
         meili_backend = MeilisearchBackend(cfg.meilisearch)
     elif engine == "opensearch":
         opensearch_backend = OpenSearchBackend(cfg.opensearch)
+        if "hybrid" in modes:
+            opensearch_backend.ensure_hybrid_pipeline()
     elif engine == "elasticsearch":
         elasticsearch_backend = ElasticsearchBackend(cfg.elasticsearch)
     elif engine == "typesense":

@@ -187,6 +187,8 @@ opensearch:
   space_type: "cosinesimil"
   hybrid_text_boost: 1.0
   hybrid_vector_boost: 1.0
+  hybrid_rrf_k: 60
+  hybrid_candidates: 200
 
 elasticsearch:
   type: "elasticsearch"

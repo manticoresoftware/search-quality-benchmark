@@ -171,8 +171,11 @@ opensearch:
   vector_index: "vector"
   vector_field: "embedding"
   space_type: "cosinesimil"
+  # Relative weights for native RRF; OpenSearch normalizes them to sum to 1.
   hybrid_text_boost: 1.0
   hybrid_vector_boost: 1.0
+  hybrid_rrf_k: 60
+  hybrid_candidates: 200
 
 elasticsearch:
   type: "elasticsearch"

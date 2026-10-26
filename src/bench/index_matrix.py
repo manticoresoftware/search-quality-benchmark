@@ -191,7 +191,12 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
                 extra.append("q=1bit")
             return f"{model} [{' '.join(extra)}]"
         if engine == "opensearch":
-            return f"{model} [textBoost:{float(cfg.opensearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.opensearch.hybrid_vector_boost):.2f}]"
+            return (
+                f"{model} [native-rrf k={int(cfg.opensearch.hybrid_rrf_k)} "
+                f"weights={float(cfg.opensearch.hybrid_text_boost):g}:"
+                f"{float(cfg.opensearch.hybrid_vector_boost):g} "
+                f"candidates={int(cfg.opensearch.hybrid_candidates)}]"
+            )
         if engine == "elasticsearch":
             return f"{model} [textBoost:{float(cfg.elasticsearch.hybrid_text_boost):.2f} vectorBoost:{float(cfg.elasticsearch.hybrid_vector_boost):.2f}]"
         if engine == "typesense":

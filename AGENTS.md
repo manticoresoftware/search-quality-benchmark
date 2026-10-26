@@ -20,7 +20,7 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Meilisearch hybrid search (query text + cached query vector)
 - OpenSearch lexical search
 - OpenSearch vector search (user-provided vectors from the shared cache)
-- OpenSearch hybrid search (query text + cached query vector)
+- OpenSearch hybrid search (native `hybrid` query + search-pipeline weighted RRF)
 - Elasticsearch lexical search
 - Elasticsearch vector search (user-provided vectors from the shared cache)
 - Elasticsearch hybrid search (query text + cached query vector)
@@ -344,8 +344,13 @@ embedding:
 - `opensearch.text_fields`: text fields used by lexical and hybrid search
 - `opensearch.vector_field`: vector field name used for kNN search
 - `opensearch.space_type`: OpenSearch kNN similarity (`cosinesimil`, etc.)
-- `opensearch.hybrid_text_boost`: lexical clause boost in hybrid search
-- `opensearch.hybrid_vector_boost`: vector clause boost in hybrid search
+- `opensearch.hybrid_text_boost` / `hybrid_vector_boost`: relative lexical and
+  vector weights for native RRF. The backend normalizes them to the `[0, 1]`
+  values summing to `1` required by OpenSearch. The legacy option names remain
+  for config compatibility.
+- `opensearch.hybrid_rrf_k`: native RRF rank constant
+- `opensearch.hybrid_candidates`: per-branch candidate depth used as the
+  hybrid query's `pagination_depth` and dense kNN `k`
 
 ### Elasticsearch Config
 - `elasticsearch.url`: server URL (default: `http://127.0.0.1:9201`)
@@ -478,6 +483,9 @@ manticore_vector_only:
   - combined index name: `opensearch.index_name`
   - lexical, vector, and hybrid all use the same physical index
   - vector and hybrid use a `knn_vector` field and load document vectors from the local SQLite vector cache
+  - hybrid queries use the native top-level `hybrid` query and a deterministic,
+    lazily created search pipeline containing `score-ranker-processor` with
+    weighted RRF; creating or changing this pipeline does not require reindexing
 - Elasticsearch indexes:
   - combined index name: `elasticsearch.index_name`
   - lexical, vector, and hybrid all use the same physical index
