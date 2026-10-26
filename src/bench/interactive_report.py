@@ -48,6 +48,7 @@ NATIVE_HYBRID_ENGINES = {
     "columnar",
     "elasticsearch",
     "manticore",
+    "mariadb",
     "meilisearch",
     "milvus",
     "opensearch",
@@ -55,7 +56,7 @@ NATIVE_HYBRID_ENGINES = {
     "vespa",
     "weaviate",
 }
-NON_NATIVE_HYBRID_ENGINES = {"mariadb", "serenedb"}
+NON_NATIVE_HYBRID_ENGINES = {"serenedb"}
 
 # These are presentation overrides, not an allowlist. Engines without an
 # override are still included and receive a readable name derived from their
@@ -118,6 +119,8 @@ def hybrid_implementation(payload: dict[str, Any], engine: str, mode: str) -> st
     model = str(payload.get("model") or "").strip().lower()
     if engine == "qdrant":
         return "native" if "fusion=native-rrf" in model else "non-native"
+    if engine == "mariadb":
+        return "native" if "fusion=server-rrf" in model else "non-native"
     if engine in NON_NATIVE_HYBRID_ENGINES:
         return "non-native"
     if engine in NATIVE_HYBRID_ENGINES or "native" in model:
@@ -135,7 +138,7 @@ def mode_variant(mode: str, implementation: str) -> str:
 
 def engine_hybrid_implementations(engine: str) -> list[str]:
     """Return implementation classes supported by a bundled engine."""
-    if engine == "qdrant":
+    if engine in {"qdrant", "mariadb"}:
         return ["native", "non-native"]
     if engine in NON_NATIVE_HYBRID_ENGINES:
         return ["non-native"]

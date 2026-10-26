@@ -24,6 +24,11 @@ run labels record the rank constant, branch weights, and candidate depth.
 This query-time implementation does not require rebuilding an existing combined
 index.
 
+MariaDB hybrid runs execute lexical retrieval, vector retrieval, ranking, and
+weighted RRF in one server-side SQL statement built from CTEs and window
+functions. Switching from the former client-side fusion does not require
+reindexing the combined table.
+
 Ready dataset profiles include BEIR datasets, MS MARCO Passage, TREC-DL,
 DL-Typo, WANDS, and ACORD. The available profiles live in `config.yaml`.
 

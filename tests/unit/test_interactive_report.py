@@ -185,6 +185,11 @@ def test_hybrid_implementation_classifies_legacy_and_recorded_runs() -> None:
         "hybrid",
     ) == "native"
     assert generator.hybrid_implementation({}, "mariadb", "hybrid") == "non-native"
+    assert generator.hybrid_implementation(
+        {"model": "embedding [fusion=server-rrf k=60]"},
+        "mariadb",
+        "hybrid",
+    ) == "native"
     assert generator.hybrid_implementation({}, "serenedb", "hybrid") == "non-native"
     assert generator.hybrid_implementation({}, "milvus", "hybrid") == "native"
     assert generator.hybrid_implementation(
@@ -195,7 +200,10 @@ def test_hybrid_implementation_classifies_legacy_and_recorded_runs() -> None:
         "native",
         "non-native",
     ]
-    assert generator.engine_hybrid_implementations("mariadb") == ["non-native"]
+    assert generator.engine_hybrid_implementations("mariadb") == [
+        "native",
+        "non-native",
+    ]
     assert generator.engine_hybrid_implementations("serenedb") == ["non-native"]
     assert generator.engine_hybrid_implementations("elasticsearch") == ["native"]
     assert generator.engine_hybrid_implementations("future_search") == []
@@ -230,6 +238,16 @@ def test_report_splits_hybrid_mode_variants_and_defaults(tmp_path: Path, monkeyp
         engine="mariadb",
         mode="hybrid",
     )
+    _write_metrics(
+        tmp_path,
+        "mariadb-server",
+        run_date,
+        "11.8.9",
+        engine="mariadb",
+        mode="hybrid",
+        model="embedding [fusion=server-rrf k=60]",
+        hybrid_implementation="native",
+    )
     monkeypatch.setattr(generator, "ARTIFACTS_DIR", tmp_path)
     monkeypatch.setattr(generator, "PREPARED_DIR", tmp_path / "missing-prepared")
 
@@ -241,6 +259,7 @@ def test_report_splits_hybrid_mode_variants_and_defaults(tmp_path: Path, monkeyp
     assert by_id["qdrant-client"]["modeVariant"] == "hybrid-non-native"
     assert by_id["qdrant-native"]["modeVariant"] == "hybrid-native"
     assert by_id["mariadb-client"]["modeVariant"] == "hybrid-non-native"
+    assert by_id["mariadb-server"]["modeVariant"] == "hybrid-native"
     assert data["meta"]["defaultModes"] == [
         "hybrid-native",
         "hybrid-non-native",

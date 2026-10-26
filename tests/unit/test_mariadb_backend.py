@@ -151,23 +151,44 @@ def test_mariadb_process_status_converts_stage_progress_to_overall_progress() ->
     assert status["database_state"] == "copy to tmp table"
 
 
-def test_mariadb_hybrid_uses_weighted_rrf(monkeypatch) -> None:
+def test_mariadb_hybrid_uses_one_server_side_weighted_rrf_query() -> None:
+    class _HybridCursor(_FakeCursor):
+        def fetchall(self) -> list[dict[str, Any]]:
+            return [
+                {"doc_id": "shared", "score": 0.0162},
+                {"doc_id": "lexical", "score": 0.0081},
+            ]
+
+    class _HybridConnection(_FakeConnection):
+        def cursor(self) -> _HybridCursor:
+            return _HybridCursor(self.statements)
+
     cfg = MariaDBConfig(hybrid_alpha=0.5, hybrid_rrf_k=60, hybrid_candidates=10)
     backend = MariaDBBackend(cfg)
-    monkeypatch.setattr(
-        backend,
-        "search_lexical",
-        lambda query_text, limit: [{"doc_id": "lexical"}, {"doc_id": "shared"}],
-    )
-    monkeypatch.setattr(
-        backend,
-        "search_vector",
-        lambda query_vector, limit: [{"doc_id": "vector"}, {"doc_id": "shared"}],
-    )
+    connection = _HybridConnection()
+    backend._conn = connection  # type: ignore[assignment]
 
     rows = backend.search_hybrid("query", [1.0, 0.0], limit=3)
 
-    assert [row["doc_id"] for row in rows] == ["shared", "lexical", "vector"]
+    assert rows == [
+        {"doc_id": "shared", "score": 0.0162},
+        {"doc_id": "lexical", "score": 0.0081},
+    ]
+    assert len(connection.statements) == 1
+    sql, params = connection.statements[0]
+    assert "vector_limit_search AS" in sql
+    assert "fulltext_limit_search AS" in sql
+    assert "vector_score AS" in sql
+    assert "fulltext_score AS" in sql
+    assert "full_outer_join_output AS" in sql
+    assert "RANK() OVER (ORDER BY distance ASC)" in sql
+    assert "RANK() OVER (ORDER BY match_score DESC)" in sql
+    assert "MATCH (`title`, `abstract`) AGAINST" in sql
+    assert "VEC_DISTANCE(`embedding`, VEC_FromText(%s))" in sql
+    assert "UNION ALL" in sql
+    assert "LIMIT 10" in sql
+    assert sql.endswith("LIMIT 3")
+    assert params == ("[1.0,0.0]", "query", "query", 0.5, 60, 0.5, 60)
 
 
 def test_mariadb_profiles_appear_in_index_and_run_matrices(tmp_path: Path) -> None:

@@ -524,7 +524,7 @@ def _qdrant_hybrid_label(cfg: AppConfig) -> str:
 def _hybrid_implementation(engine: str, mode: str) -> str:
     if mode != "hybrid":
         return ""
-    return "non-native" if engine in {"mariadb", "serenedb"} else "native"
+    return "non-native" if engine == "serenedb" else "native"
 
 
 def _meilisearch_fulltext_label(cfg: AppConfig) -> str:
@@ -664,9 +664,10 @@ def _mariadb_vector_label(cfg: AppConfig) -> str:
 def _mariadb_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     extras = [
-        "fusion=rrf",
+        "fusion=server-rrf",
         f"k={int(cfg.mariadb.hybrid_rrf_k)}",
         f"alpha={float(cfg.mariadb.hybrid_alpha):.2f}",
+        f"candidates={int(cfg.mariadb.hybrid_candidates)}",
     ]
     return f"{model} [{' '.join(extras)}]"
 
@@ -1069,6 +1070,15 @@ def _collect_diagnostics_mariadb(
                         "query": qtext,
                         "vector_dim": len(query_vector) if mode != "fulltext" else 0,
                     }
+                    if mode == "hybrid":
+                        entry["request"].update(
+                            {
+                                "fusion": "server-rrf",
+                                "rrf_k": int(cfg.mariadb.hybrid_rrf_k),
+                                "alpha": float(cfg.mariadb.hybrid_alpha),
+                                "candidates": int(cfg.mariadb.hybrid_candidates),
+                            }
+                        )
                     entry["top_hits"] = rows[:5]
                 except Exception as exc:
                     entry["error"] = str(exc)

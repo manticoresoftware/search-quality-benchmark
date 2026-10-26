@@ -253,6 +253,8 @@ mariadb:
   vector_distance: "cosine"
   vector_m: 8
   fulltext_search_mode: "natural"
+  # Hybrid fusion runs entirely in one server-side SQL statement. Alpha is the
+  # vector weight; the full-text branch uses 1-alpha.
   hybrid_alpha: 0.5
   hybrid_rrf_k: 60
   hybrid_candidates: 400

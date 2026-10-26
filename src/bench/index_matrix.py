@@ -204,7 +204,10 @@ def _model_opts_label(cfg: AppConfig, engine: str, mode: str) -> str:
         if engine == "milvus":
             return f"{model} [fusion=rrf k={int(cfg.milvus.hybrid_rrf_k)} candidates={int(cfg.milvus.hybrid_candidates)} sparse=BM25]"
         if engine == "mariadb":
-            return f"{model} [rrf:k={int(cfg.mariadb.hybrid_rrf_k)} alpha:{float(cfg.mariadb.hybrid_alpha):.2f}]"
+            return (
+                f"{model} [server-rrf:k={int(cfg.mariadb.hybrid_rrf_k)} "
+                f"alpha:{float(cfg.mariadb.hybrid_alpha):.2f}]"
+            )
         if engine == "serenedb":
             return f"{model} [rrf:k={int(cfg.serenedb.hybrid_rrf_k)} alpha:{float(cfg.serenedb.hybrid_alpha):.2f}]"
         if engine == "weaviate":

@@ -309,8 +309,9 @@ def _mariadb_vector_label(cfg: AppConfig) -> str:
 def _mariadb_hybrid_label(cfg: AppConfig) -> str:
     model = resolved_embedding_model(cfg)
     return (
-        f"{model} [fusion=rrf k={int(cfg.mariadb.hybrid_rrf_k)} "
-        f"alpha={float(cfg.mariadb.hybrid_alpha):.2f}]"
+        f"{model} [fusion=server-rrf k={int(cfg.mariadb.hybrid_rrf_k)} "
+        f"alpha={float(cfg.mariadb.hybrid_alpha):.2f} "
+        f"candidates={int(cfg.mariadb.hybrid_candidates)}]"
     )
 
 

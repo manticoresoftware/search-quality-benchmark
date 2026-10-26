@@ -32,7 +32,7 @@ This CLI benchmarks retrieval quality and performance on IR datasets across:
 - Milvus hybrid search (native reciprocal-rank fusion of BM25 and dense rankings)
 - MariaDB full-text search (`MATCH ... AGAINST`)
 - MariaDB vector search (`VECTOR INDEX` + `VEC_DISTANCE`)
-- MariaDB hybrid search (weighted reciprocal-rank fusion of full-text and vector rankings)
+- MariaDB hybrid search (one server-side CTE query with weighted reciprocal-rank fusion of full-text and vector rankings)
 - SereneDB full-text search (inverted index + BM25)
 - SereneDB vector search (exact scan over cached user-provided vectors in bundled profiles)
 - SereneDB hybrid search (weighted reciprocal-rank fusion of BM25 and exact vector rankings in bundled profiles)
@@ -383,6 +383,17 @@ embedding:
 - `milvus.sparse_vector_field`, `sparse_index_algorithm`, `bm25_k1`, and `bm25_b`: native BM25 function/index settings
 - `milvus.hybrid_rrf_k` / `milvus.hybrid_candidates`: native RRF ranker and per-branch candidate count
 
+### MariaDB Config
+
+- `mariadb.host`, `port`, `user`, `password`, and `database`: MariaDB connection settings (defaults: `127.0.0.1:3307`, `bench`, `bench`, `search_bench`)
+- `mariadb.table_name`: combined InnoDB table used for all three search modes
+- `mariadb.text_fields` / `fulltext_search_mode`: fields and `MATCH ... AGAINST` mode used by lexical retrieval
+- `mariadb.vector_field`, `vector_distance`, and `vector_m`: vector column and HNSW index settings
+- `mariadb.hybrid_alpha`: vector-branch weight; the text branch receives `1 - alpha`
+- `mariadb.hybrid_rrf_k`: weighted reciprocal-rank-fusion constant
+- `mariadb.hybrid_candidates`: top-N depth independently selected by the text and vector branches before fusion
+- MariaDB hybrid retrieval follows the [documented server-side RRF pattern](https://mariadb.com/docs/server/reference/sql-structure/vectors/optimizing-hybrid-search-query-with-reciprocal-rank-fusion-rrf): one SQL statement uses CTEs for both candidate lists, `RANK()` window functions for branch ranks, and a `UNION ALL` full-outer-join equivalent for the final weighted score. MariaDB has no dedicated RRF operator; in report terminology this is native/server-side because Python does not retrieve or fuse two result sets.
+
 ### SereneDB Config
 
 - `serenedb.host`, `port`, `user`, `password`, and `database`: PostgreSQL-wire connection settings (defaults: `127.0.0.1:7890`, `postgres`, `bench`, `postgres`)
@@ -647,7 +658,7 @@ Behavior:
   - the bundled container defaults to a 32 GiB InnoDB buffer pool and an 8 GiB per-index HNSW cache; override these with `MARIADB_INNODB_BUFFER_POOL_SIZE` and `MARIADB_MHNSW_MAX_CACHE_SIZE`,
   - creates a combined InnoDB table with FULLTEXT and VECTOR indexes,
   - uses cache only and fails on cache misses,
-  - uses weighted reciprocal-rank fusion for hybrid queries (`hybrid_rrf_k`, `hybrid_alpha`).
+  - executes hybrid retrieval and weighted reciprocal-rank fusion in one server-side SQL statement (`hybrid_candidates`, `hybrid_rrf_k`, `hybrid_alpha`); this is query-time-only and does not require reindexing.
 - SereneDB vector indexing:
   - uses the shared cache only and fails on cache misses,
   - stores the cached vectors in a fixed-size `FLOAT[N]` column,
@@ -990,13 +1001,14 @@ Combined report (`bench report`):
   selecting both imposes no eligibility constraint, collapses
   native/non-native hybrid to the better result, and retains selected
   full-text/vector-only cells. Engine capabilities are explicit in the report
-  data: Qdrant supports both classes, MariaDB and SereneDB are non-native, and
-  the other bundled hybrid engines are native.
+  data: Qdrant and MariaDB support both classes across artifact history,
+  SereneDB is non-native, and the other bundled hybrid engines are native.
 - New hybrid artifacts record `hybrid_implementation`. For legacy artifacts,
-  classify MariaDB and SereneDB hybrid as non-native; classify Qdrant by its
-  model label (`fusion=native-rrf` is native, older `fusion=rrf` is non-native);
-  the other bundled hybrid engines are native. A recorded field takes priority
-  over legacy inference.
+  classify unmarked MariaDB and SereneDB hybrid as non-native; MariaDB
+  `fusion=server-rrf` is native/server-side. Classify Qdrant by its model label
+  (`fusion=native-rrf` is native, older `fusion=rrf` is non-native); the other
+  bundled hybrid engines are native. A recorded field takes priority over
+  legacy inference.
 - TREC-COVID comparison cohorts use the logical dataset IDs
   `trec-covid-query`, `trec-covid-question`, and `trec-covid-narrative`.
   Full-text, vector, and hybrid results can share a logical dataset cell only

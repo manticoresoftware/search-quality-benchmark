@@ -381,19 +381,67 @@ class MariaDBBackend:
         ]
 
     def search_hybrid(self, query_text: str, query_vector: list[float], limit: int) -> list[dict[str, Any]]:
-        candidates = max(int(limit), int(self.cfg.hybrid_candidates))
-        lexical = self.search_lexical(query_text, candidates)
-        vector = self.search_vector(query_vector, candidates)
+        result_limit = max(1, int(limit))
+        candidates = max(result_limit, int(self.cfg.hybrid_candidates))
         rrf_k = max(1, int(self.cfg.hybrid_rrf_k))
         alpha = min(1.0, max(0.0, float(self.cfg.hybrid_alpha)))
-        scores: dict[str, float] = {}
-        for rank, row in enumerate(lexical, start=1):
-            doc_id = str(row.get("doc_id", ""))
-            if doc_id:
-                scores[doc_id] = scores.get(doc_id, 0.0) + (1.0 - alpha) / (rrf_k + rank)
-        for rank, row in enumerate(vector, start=1):
-            doc_id = str(row.get("doc_id", ""))
-            if doc_id:
-                scores[doc_id] = scores.get(doc_id, 0.0) + alpha / (rrf_k + rank)
-        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[: max(1, int(limit))]
-        return [{"doc_id": doc_id, "score": score} for doc_id, score in ranked]
+        vector_text = json.dumps([float(x) for x in query_vector], separators=(",", ":"))
+        match = f"MATCH ({self._text_fields_sql()}) AGAINST (%s {self._fulltext_modifier()})"
+        sql = f"""
+WITH
+vector_limit_search AS (
+    SELECT `id`, `doc_id`,
+           VEC_DISTANCE({self._vector_field_sql()}, VEC_FromText(%s)) AS distance
+    FROM {self._table_sql()}
+    ORDER BY distance ASC, `id` ASC
+    LIMIT {candidates}
+),
+fulltext_limit_search AS (
+    SELECT `id`, `doc_id`, {match} AS match_score
+    FROM {self._table_sql()}
+    WHERE {match}
+    ORDER BY match_score DESC, `id` ASC
+    LIMIT {candidates}
+),
+vector_score AS (
+    SELECT `id`, `doc_id`,
+           %s / (%s + RANK() OVER (ORDER BY distance ASC)) AS partial_rrf
+    FROM vector_limit_search
+),
+fulltext_score AS (
+    SELECT `id`, `doc_id`,
+           %s / (%s + RANK() OVER (ORDER BY match_score DESC)) AS partial_rrf
+    FROM fulltext_limit_search
+),
+full_outer_join_output AS (
+    SELECT vector_score.`id`, vector_score.`doc_id`,
+           vector_score.partial_rrf + COALESCE(fulltext_score.partial_rrf, 0.0) AS total_rrf
+    FROM vector_score
+    LEFT JOIN fulltext_score ON fulltext_score.`id` = vector_score.`id`
+    UNION ALL
+    SELECT fulltext_score.`id`, fulltext_score.`doc_id`, fulltext_score.partial_rrf AS total_rrf
+    FROM fulltext_score
+    LEFT JOIN vector_score ON vector_score.`id` = fulltext_score.`id`
+    WHERE vector_score.`id` IS NULL
+)
+SELECT `doc_id`, total_rrf AS score
+FROM full_outer_join_output
+ORDER BY total_rrf DESC, `id` ASC
+LIMIT {result_limit}
+""".strip()
+        params = (
+            vector_text,
+            str(query_text),
+            str(query_text),
+            alpha,
+            rrf_k,
+            1.0 - alpha,
+            rrf_k,
+        )
+        with self._connection().cursor() as cur:
+            cur.execute(sql, params)
+            rows = list(cur.fetchall())
+        return [
+            {"doc_id": str(row.get("doc_id", "")), "score": float(row.get("score") or 0.0)}
+            for row in rows
+        ]
