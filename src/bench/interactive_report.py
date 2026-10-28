@@ -57,6 +57,7 @@ NATIVE_HYBRID_ENGINES = {
     "weaviate",
 }
 NON_NATIVE_HYBRID_ENGINES = {"serenedb"}
+OPT_IN_MODE_VARIANTS = {"hybrid-non-native"}
 
 # These are presentation overrides, not an allowlist. Engines without an
 # override are still included and receive a readable name derived from their
@@ -512,7 +513,13 @@ def collect_data(default_run_ids: set[str] | None = None) -> dict[str, Any]:
             "source": "Individual artifacts/*/metrics.json and artifacts/*/per_query.csv files",
             "defaultDatasets": sorted({run["datasetKey"] for run in default_runs}),
             "defaultEngines": sorted({run["engine"] for run in default_runs}),
-            "defaultModes": sorted({run["modeVariant"] for run in default_runs}),
+            "defaultModes": sorted(
+                {
+                    run["modeVariant"]
+                    for run in default_runs
+                    if run["modeVariant"] not in OPT_IN_MODE_VARIANTS
+                }
+            ),
         },
         "systems": systems,
         "datasets": datasets,
@@ -588,6 +595,17 @@ HTML_TEMPLATE = r'''<!doctype html>
     label.multi-option:hover { background: rgba(103,166,255,.08); }
     .multi-option input { margin: 2px 0 0; accent-color: var(--accent); }
     .multi-option small { display: block; color: var(--faint); }
+    .hybrid-comparability-warning {
+      margin: -8px 0 14px;
+      padding: 9px 11px;
+      border-left: 3px solid var(--warm);
+      background: rgba(255,182,92,.08);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .hybrid-comparability-warning strong { color: var(--ink); }
+    .hybrid-comparability-warning[hidden] { display: none; }
     select, button {
       min-height: 39px; color: var(--ink); background: #132329; border: 1px solid var(--line-2);
       border-radius: 10px; padding: 8px 10px; outline: none;
@@ -1339,10 +1357,12 @@ HTML_TEMPLATE = r'''<!doctype html>
     <section class="filter-bar" aria-label="Report filters"><div class="filter-caption">FILTERS</div>
       <div class="filter-field">Dataset / query set<details class="multi-select" id="dataset-filter"><summary><span id="dataset-summary" class="multi-summary">All datasets</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="datasets" data-choice="all">All</button><button type="button" data-multi="datasets" data-choice="none">Clear</button></div><div id="dataset-options" class="multi-options"></div></div></details></div>
       <div class="filter-field">Engines<details class="multi-select" id="engine-filter"><summary><span id="engine-summary" class="multi-summary">All engines</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="engines" data-choice="all">All</button><button type="button" data-multi="engines" data-choice="none">Clear</button></div><div id="engine-options" class="multi-options"></div></div></details></div>
-      <div class="filter-field">Search modes<details class="multi-select" id="mode-filter"><summary><span id="mode-summary" class="multi-summary">All modes</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="modes" data-choice="all">All</button><button type="button" data-multi="modes" data-choice="none">Clear</button></div><div id="mode-options" class="multi-options"></div></div></details></div>
+      <div class="filter-field">Search modes<details class="multi-select" id="mode-filter"><summary><span id="mode-summary" class="multi-summary">All modes</span></summary><div class="multi-menu"><div class="multi-actions"><button type="button" data-multi="modes" data-choice="all">All incl. non-native</button><button type="button" data-multi="modes" data-choice="none">Clear</button></div><div id="mode-options" class="multi-options"></div></div></details></div>
       <select id="metric-filter" hidden aria-hidden="true"><option value="canonical">Recommended for each dataset</option><option value="ndcg10">Ranking quality · top 10 (NDCG@10)</option><option value="ndcg20">Ranking quality · top 20 (NDCG@20)</option><option value="mrr10">First useful result · top 10 (MRR@10)</option><option value="map10">Relevant results near top (MAP@10)</option><option value="p20">Useful share of top 20 (P@20)</option><option value="recall100">Relevant-result coverage (Recall@100)</option></select>
       <div class="button-row"><button id="reset-button" type="button">Reset</button><button id="export-button" type="button">Export CSV</button></div>
     </section>
+
+    <aside id="non-native-hybrid-warning" class="hybrid-comparability-warning" role="note" hidden><strong>Comparability warning:</strong> Non-native hybrid results combine separate lexical and vector result sets in the benchmark client, rather than using the engine’s own hybrid implementation. These opt-in measurements are exploratory and should not be treated as directly comparable with native engine results.</aside>
 
     <nav class="report-tabs" aria-label="Report views">
       <button type="button" data-tab="overview" class="active">Overview</button>
@@ -1440,17 +1460,22 @@ HTML_TEMPLATE = r'''<!doctype html>
       vector: 'Vector',
       hybrid: 'Hybrid',
       'hybrid-native': 'Hybrid · native',
-      'hybrid-non-native': 'Hybrid · non-native',
+      'hybrid-non-native': 'Hybrid · non-native (opt-in)',
+    };
+    const MODE_DESCRIPTIONS = {
+      'hybrid-non-native': 'Client-side fusion by the benchmark; exploratory and not directly comparable with native engine results.',
     };
     const ALL_FILTER_VALUES = { datasets: ALL_DATASET_KEYS, engines: ALL_ENGINE_KEYS, modes: ALL_MODE_KEYS };
     const expandLegacyModes = values => [...new Set((values || []).flatMap(value => value === 'hybrid' ? ['hybrid-native', 'hybrid-non-native'] : [value]))];
     const validDefaults = (values, allowed) => (values || []).filter(value => allowed.includes(value));
     const DEFAULT_DATASET_KEYS = validDefaults(DATA.meta.defaultDatasets, ALL_DATASET_KEYS);
     const DEFAULT_ENGINE_KEYS = validDefaults(DATA.meta.defaultEngines, ALL_ENGINE_KEYS);
-    const DEFAULT_MODE_KEYS = validDefaults(expandLegacyModes(DATA.meta.defaultModes), ALL_MODE_KEYS);
+    const SAFE_DEFAULT_MODE_KEYS = ALL_MODE_KEYS.filter(mode => mode !== 'hybrid-non-native');
+    const DEFAULT_MODE_KEYS = Array.isArray(DATA.meta.defaultModes)
+      ? validDefaults(expandLegacyModes(DATA.meta.defaultModes), ALL_MODE_KEYS).filter(mode => mode !== 'hybrid-non-native')
+      : [...SAFE_DEFAULT_MODE_KEYS];
     if (!DEFAULT_DATASET_KEYS.length) DEFAULT_DATASET_KEYS.push(...ALL_DATASET_KEYS);
     if (!DEFAULT_ENGINE_KEYS.length) DEFAULT_ENGINE_KEYS.push(...ALL_ENGINE_KEYS);
-    if (!DEFAULT_MODE_KEYS.length) DEFAULT_MODE_KEYS.push(...ALL_MODE_KEYS);
     const DEFAULT_FOCUS = DATA.datasets.find(d => DEFAULT_DATASET_KEYS.includes(d.key) && d.source === 'wands')?.key || DEFAULT_DATASET_KEYS[0] || DATA.datasets[0]?.key;
     const state = { datasets: [...DEFAULT_DATASET_KEYS], engines: [...DEFAULT_ENGINE_KEYS], modes: [...DEFAULT_MODE_KEYS], metric: 'canonical', value: 'relative', performance: 'p50', scatterMode: 'best', focus: DEFAULT_FOCUS, tab: 'overview', search: '', page: 1, sort: 'quality', direction: 'desc', leaderboardSort: 'relative', leaderboardDirection: 'desc' };
     let matrixSort = { axis: null, key: null, direction: 'desc' };
@@ -1657,14 +1682,14 @@ HTML_TEMPLATE = r'''<!doctype html>
     function populateControls() {
       $('#dataset-options').innerHTML = DATA.datasets.map(d => `<label class="multi-option"><input type="checkbox" data-multi-option="datasets" value="${escapeHtml(d.key)}"><span>${escapeHtml(d.label)}</span></label>`).join('');
       $('#engine-options').innerHTML = Object.entries(DATA.systems).sort((a,b) => a[1].name.localeCompare(b[1].name)).map(([key, info]) => `<label class="multi-option"><input type="checkbox" data-multi-option="engines" value="${key}"><span>${escapeHtml(info.name)}<small>${escapeHtml(systemVersionLabel(key))}</small></span></label>`).join('');
-      $('#mode-options').innerHTML = ALL_MODE_KEYS.map(mode => `<label class="multi-option"><input type="checkbox" data-multi-option="modes" value="${mode}"><span>${modeBadge(mode)} ${escapeHtml(MODE_NAMES[mode])}</span></label>`).join('');
+      $('#mode-options').innerHTML = ALL_MODE_KEYS.map(mode => `<label class="multi-option"><input type="checkbox" data-multi-option="modes" value="${mode}"><span>${modeBadge(mode)} ${escapeHtml(MODE_NAMES[mode])}${MODE_DESCRIPTIONS[mode] ? `<small>${escapeHtml(MODE_DESCRIPTIONS[mode])}</small>` : ''}</span></label>`).join('');
       const params = new URLSearchParams(location.hash.slice(1));
       const datasetParams = params.getAll('dataset');
       const engineParams = params.getAll('engine');
       const modeParams = params.getAll('mode');
       if (datasetParams.length) state.datasets = datasetParams.includes('none') ? [] : datasetParams.includes('all') ? [...ALL_DATASET_KEYS] : datasetParams.filter(key => ALL_DATASET_KEYS.includes(key));
       if (engineParams.length) state.engines = engineParams.includes('none') ? [] : engineParams.includes('all') ? [...ALL_ENGINE_KEYS] : engineParams.filter(key => ALL_ENGINE_KEYS.includes(key));
-      if (modeParams.length) state.modes = modeParams.includes('none') ? [] : modeParams.includes('all') || modeParams.includes('best') ? [...ALL_MODE_KEYS] : expandLegacyModes(modeParams).filter(key => ALL_MODE_KEYS.includes(key));
+      if (modeParams.length) state.modes = modeParams.includes('none') ? [] : modeParams.includes('all') ? [...ALL_MODE_KEYS] : modeParams.includes('best') ? [...SAFE_DEFAULT_MODE_KEYS] : expandLegacyModes(modeParams).filter(key => ALL_MODE_KEYS.includes(key));
       for (const key of ['metric','value','performance','scatterMode','focus']) {
         const value = params.get(key);
         const node = key === 'focus' ? $('#focus-dataset') : key === 'scatterMode' ? $('#scatter-mode-filter') : $(`#${key}-filter`);
@@ -1690,11 +1715,14 @@ HTML_TEMPLATE = r'''<!doctype html>
       const datasetText = state.datasets.length === ALL_DATASET_KEYS.length ? `All ${ALL_DATASET_KEYS.length} datasets` : state.datasets.length === 0 ? 'No datasets selected' : state.datasets.length === 1 ? datasetNames[0] : `${state.datasets.length} of ${ALL_DATASET_KEYS.length} datasets`;
       const engineText = state.engines.length === ALL_ENGINE_KEYS.length ? `All ${ALL_ENGINE_KEYS.length} engines` : state.engines.length === 0 ? 'No engines selected' : state.engines.length === 1 ? engineNames[0] : `${state.engines.length} of ${ALL_ENGINE_KEYS.length} engines`;
       const bothHybrid = state.modes.length === 2 && state.modes.includes('hybrid-native') && state.modes.includes('hybrid-non-native');
-      const modeText = state.modes.length === ALL_MODE_KEYS.length ? 'All modes · best available' : state.modes.length === 0 ? 'No modes selected' : state.modes.length === 1 ? modeNames[0] : bothHybrid ? 'Hybrid · best native/non-native' : `${state.modes.length} of ${ALL_MODE_KEYS.length} modes · best`;
+      const allComparableModes = state.modes.length === SAFE_DEFAULT_MODE_KEYS.length && SAFE_DEFAULT_MODE_KEYS.every(mode => state.modes.includes(mode));
+      const modeText = state.modes.length === ALL_MODE_KEYS.length ? 'All modes · incl. non-native' : allComparableModes ? 'Comparable modes · best available' : state.modes.length === 0 ? 'No modes selected' : state.modes.length === 1 ? modeNames[0] : bothHybrid ? 'Hybrid · best native/non-native' : `${state.modes.length} of ${ALL_MODE_KEYS.length} modes · best`;
       $('#dataset-summary').textContent = datasetText; $('#dataset-summary').title = datasetNames.join('\n');
       $('#engine-summary').textContent = engineText; $('#engine-summary').title = engineNames.join(', ');
       const hybridEligibilityNote = state.modes.filter(mode => mode.startsWith('hybrid-')).length === 1 ? '\nRestricts the engine cohort to this hybrid implementation; selected full-text/vector runs then compete for every dataset where they exist.' : '';
-      $('#mode-summary').textContent = modeText; $('#mode-summary').title = modeNames.join(', ') + hybridEligibilityNote;
+      const nonNativeComparabilityNote = state.modes.includes('hybrid-non-native') ? '\nWarning: non-native hybrid is fused by the benchmark client and is not directly comparable with native engine results.' : '';
+      $('#mode-summary').textContent = modeText; $('#mode-summary').title = modeNames.join(', ') + hybridEligibilityNote + nonNativeComparabilityNote;
+      $('#non-native-hybrid-warning').hidden = !state.modes.includes('hybrid-non-native');
     }
 
     function updateFocusOptions() {

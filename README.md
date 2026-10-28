@@ -181,7 +181,10 @@ When several search modes are selected, each matrix cell uses the best result
 among those modes and labels the winning mode. Select exactly one mode for a
 fixed-mode comparison. The two hybrid choices follow the same rule: when both
 native and non-native hybrid are selected, the better hybrid result is used for
-each engine and dataset.
+each engine and dataset. Non-native hybrid is excluded from the default report
+selection because its lexical and vector result sets are fused by the benchmark
+client rather than by the engine. The results remain available as an explicit
+opt-in and the report shows a comparability warning whenever they are enabled.
 
 TREC-COVID is exposed as three logical datasets over the same physical corpus
 and qrels: `trec-covid-query` (short keyword query), `trec-covid-question`

@@ -260,10 +260,10 @@ def test_report_splits_hybrid_mode_variants_and_defaults(tmp_path: Path, monkeyp
     assert by_id["qdrant-native"]["modeVariant"] == "hybrid-native"
     assert by_id["mariadb-client"]["modeVariant"] == "hybrid-non-native"
     assert by_id["mariadb-server"]["modeVariant"] == "hybrid-native"
-    assert data["meta"]["defaultModes"] == [
-        "hybrid-native",
-        "hybrid-non-native",
-    ]
+    assert data["meta"]["defaultModes"] == ["hybrid-native"]
+
+    non_native_only = generator.collect_data(default_run_ids={"qdrant-client"})
+    assert non_native_only["meta"]["defaultModes"] == []
 
 
 def test_report_template_filters_hybrid_variants_but_groups_best_by_base_mode() -> None:
@@ -276,6 +276,12 @@ def test_report_template_filters_hybrid_variants_but_groups_best_by_base_mode() 
     assert "filteredRuns({ respectEngineFilter: false })" in generator.HTML_TEMPLATE
     assert "!restrictToOneHybridCohort || eligibleEngines.has(engine)" in generator.HTML_TEMPLATE
     assert "`${run.engine}|${run.mode}|${run.datasetKey}`" in generator.HTML_TEMPLATE
+    assert "Hybrid · non-native (opt-in)" in generator.HTML_TEMPLATE
+    assert "non-native-hybrid-warning" in generator.HTML_TEMPLATE
+    assert "not directly comparable with native engine results" in generator.HTML_TEMPLATE
+    assert ".filter(mode => mode !== 'hybrid-non-native')" in generator.HTML_TEMPLATE
+    assert "Comparable modes · best available" in generator.HTML_TEMPLATE
+    assert "modeParams.includes('best') ? [...SAFE_DEFAULT_MODE_KEYS]" in generator.HTML_TEMPLATE
 
 
 def test_legacy_query_variants_split_only_when_topic_texts_differ() -> None:

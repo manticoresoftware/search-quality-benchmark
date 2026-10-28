@@ -1003,6 +1003,14 @@ Combined report (`bench report`):
   full-text/vector-only cells. Engine capabilities are explicit in the report
   data: Qdrant and MariaDB support both classes across artifact history,
   SereneDB is non-native, and the other bundled hybrid engines are native.
+- `hybrid-non-native` is an opt-in report mode. It is removed from
+  `meta.defaultModes` even when the selected default artifacts contain such a
+  run, so initial page load and `Reset` leave its checkbox unchecked. Results
+  remain in report data and can be enabled explicitly, including through URL
+  state or the `All incl. non-native` action. While enabled, the UI shows a
+  persistent comparability warning explaining that the benchmark client fused
+  separate result sets and that these measurements are exploratory rather than
+  directly comparable with native engine hybrid results.
 - New hybrid artifacts record `hybrid_implementation`. For legacy artifacts,
   classify unmarked MariaDB and SereneDB hybrid as non-native; MariaDB
   `fusion=server-rrf` is native/server-side. Classify Qdrant by its model label
