@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "trec-covid-bench"
+name = "search-bench"
 version = "0.1.0"
-description = "CLI benchmark app for TREC-COVID on Manticore Search"
+description = "Search Quality Benchmark: ranking quality of open-source search engines on public IR datasets"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

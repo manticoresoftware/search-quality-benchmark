@@ -1,4 +1,4 @@
-# Search Bench
+# Search Quality Benchmark
 
 Open-source search engines compared on ranking quality. Full-text, vector, and
 hybrid search, run on public information-retrieval datasets with relevance
@@ -8,7 +8,7 @@ judgments, reported as one standalone interactive page.
 16 dataset/query-set cohorts · updated 2026-11-02
 
 > [!NOTE]
-> Search Bench is maintained by [Manticore](https://manticoresearch.com/), the
+> Search Quality Benchmark is maintained by [Manticore](https://manticoresearch.com/), the
 > team behind Manticore Search, which is one of the benchmarked engines. Every
 > engine profile is in this repository, every run writes its per-query results,
 > and the engine images are pinned in [`compose.yaml`](compose.yaml), so any
@@ -17,7 +17,7 @@ judgments, reported as one standalone interactive page.
 
 ## Results
 
-![Overall quality leaderboard in the Search Bench report](docs/images/report-overview.png)
+![Overall quality leaderboard in the Search Quality Benchmark report](docs/images/report-overview.png)
 
 Default report view: all 16 cohorts, best available comparable mode per
 engine and cohort (full-text, vector, or engine-native hybrid), recommended
@@ -45,7 +45,7 @@ metric per dataset (NDCG@10, MRR@10 for MS MARCO and TREC-DL).
   mode is fused by the benchmark client, not by the engine, and such runs are
   an explicit opt-in in the report.
 
-![Dataset × engine quality matrix in the Search Bench report](docs/images/report-matrix.png)
+![Dataset × engine quality matrix in the Search Quality Benchmark report](docs/images/report-matrix.png)
 
 Every cell is the engine's best comparable result on that cohort, as a share of
 the best score observed there. The badge shows the winning mode: `FT`
