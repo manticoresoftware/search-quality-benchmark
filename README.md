@@ -120,10 +120,10 @@ directly:
 python3 src/bench/interactive_report.py
 ```
 
-Open [`reports/search-benchmark/index.html`](reports/search-benchmark/index.html)
-in a browser. It is a standalone file with embedded CSS, JavaScript, benchmark
-results, and slow-query samples; it does not require a web server or external
-assets.
+Open [`docs/index.html`](docs/index.html) in a browser. It is a standalone file
+with embedded CSS, fonts, JavaScript, benchmark results, and slow-query
+samples; it does not require a web server or external assets. The same file is
+the published GitHub Pages site (deployed from the `/docs` folder).
 
 The report provides:
 
