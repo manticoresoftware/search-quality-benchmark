@@ -12,8 +12,8 @@ judgments, reported as one standalone interactive page.
 > team behind Manticore Search, which is one of the benchmarked engines. Every
 > engine profile is in this repository, every run writes its per-query results,
 > and the engine images are pinned in [`compose.yaml`](compose.yaml), so any
-> number here can be checked and rerun. A copy of the report at
-> `manticoresearch.com/search-bench` is planned.
+> number here can be checked and rerun. The report will be published on a
+> manticoresearch.com subdomain; until then, open `docs/index.html` locally.
 
 ## Results
 
@@ -53,7 +53,7 @@ full-text, `V` vector, `HN` native hybrid. Filters for datasets, engines,
 search modes, and metric change every view, and the filter state lives in the
 URL, so a specific comparison can be linked.
 
-## How it is measured
+## Methodology
 
 Every engine gets identical inputs for a dataset:
 
