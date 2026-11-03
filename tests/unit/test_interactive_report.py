@@ -93,9 +93,7 @@ def test_report_cohort_uses_known_versions_instead_of_a_date_window(
     tmp_path: Path, monkeypatch
 ) -> None:
     generator = _load_report_generator()
-    assert generator.OUTPUT_PATH == (
-        Path(__file__).parents[2] / "reports" / "search-benchmark" / "index.html"
-    )
+    assert generator.OUTPUT_PATH == Path(__file__).parents[2] / "docs" / "index.html"
     _write_metrics(tmp_path, "before", datetime(2026, 8, 1, tzinfo=UTC), "1.2.3")
     _write_metrics(tmp_path, "after", datetime(2026, 10, 1, tzinfo=UTC), "1.2.4")
     _write_metrics(tmp_path, "missing", datetime(2026, 9, 1, tzinfo=UTC), None)
@@ -167,8 +165,20 @@ def test_report_template_assigns_engine_colors_from_embedded_data() -> None:
     generator = _load_report_generator()
 
     assert "const ALL_ENGINE_KEYS = Object.keys(DATA.systems);" in generator.HTML_TEMPLATE
-    assert "Object.fromEntries(ALL_ENGINE_KEYS.map((engine, index)" in generator.HTML_TEMPLATE
-    assert "columnar: '#895af8'" not in generator.HTML_TEMPLATE
+    assert "Object.fromEntries(Object.keys(DATA.systems).map((engine, index)" in generator.HTML_TEMPLATE
+    assert "ENGINE_COLORS[theme][engine] || palette[index]" in generator.HTML_TEMPLATE
+
+
+def test_write_html_inlines_data_and_fonts(tmp_path: Path) -> None:
+    generator = _load_report_generator()
+    data = {"meta": {"note": "</script>"}}
+
+    html = generator.write_html(data, tmp_path / "index.html").read_text(encoding="utf-8")
+
+    assert "__DATA_JSON__" not in html
+    assert "__POPPINS_" not in html
+    assert html.count("data:font/woff2;base64,") == len(generator.FONT_WEIGHTS)
+    assert '{"meta":{"note":"<\\/script>"}}' in html
 
 
 def test_hybrid_implementation_classifies_legacy_and_recorded_runs() -> None:

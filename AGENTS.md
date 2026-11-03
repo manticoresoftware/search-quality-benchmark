@@ -986,8 +986,26 @@ Combined report (`bench report`):
 ## Interactive report implementation
 
 - Source: `src/bench/interactive_report.py`.
-- Canonical generated output: `reports/search-benchmark/index.html`.
-- Golden UI reference: `reports/search-benchmark/reference.html`.
+- Canonical generated output: `docs/index.html`, committed and served by
+  GitHub Pages (branch deploy from the `/docs` folder; `docs/.nojekyll` skips
+  Jekyll). The custom domain is configured in the repository's Pages settings.
+- Visual design: the manticoresearch.com palette (olive accent, Poppins) with a
+  light default theme and an opt-in dark theme stored in `localStorage` under
+  `search-benchmark-theme`; an inline `<head>` script applies the saved theme
+  before first paint. No logo. Poppins is inlined from
+  `src/bench/report_fonts/` (SIL OFL, see `OFL.txt`) as base64 `woff2`, so the
+  file stays standalone.
+- Theme-dependent chart colors (heat-map cells, scatter/latency strokes,
+  uplift bars) are CSS variables, never hard-coded in the script.
+- Leaderboard rank is fixed by benchmark quality (family-weighted Mean
+  relative, then Quality floor, wins, coverage, name) among engines covering
+  every selected cohort; sorting by Rank, Engine, Mean relative, Quality floor
+  or Dataset wins reorders rows without renumbering. The default is Rank
+  ascending with unranked engines last; URL keys `qualitySort` and
+  `qualityDirection` are omitted at their defaults, and Reset restores them.
+- Visible single-value `<select>`s are hidden and driven by keyboard-accessible
+  custom dropdowns (`enhanceSelect`, `syncSingleSelects`); the native select
+  stays the source of truth and fires its usual `change` event.
 - Inputs: individual `artifacts/*/metrics.json` and
   `artifacts/*/per_query.csv` files; combined Markdown reports are never inputs.
 - Search-mode filtering exposes `fulltext`, `vector`, `hybrid-native`, and
@@ -1033,8 +1051,10 @@ Combined report (`bench report`):
 - Engine discovery is data-driven: every other non-empty engine key in an
   eligible artifact is included. Known engines may have display-name
   overrides, while unknown keys receive a title-cased fallback label. The HTML
-  assigns colors dynamically from the engines present in `DATA.systems`; do
-  not add an engine-name color allowlist to the template.
+  assigns colors from the engines present in `DATA.systems`: `ENGINE_COLORS`
+  holds optional per-theme overrides for known engines (Manticore uses the
+  brand olive), and every other engine gets a palette or generated hue, so a
+  new engine never needs a template change.
 - The report is standalone. Do not add external JavaScript, fonts, analytics,
   chart services, or runtime data requests.
 - `bench report` invokes this generator and passes selected run IDs only as the
@@ -1050,7 +1070,9 @@ Rebuild the canonical report from the repository root:
 python3 src/bench/interactive_report.py
 ```
 
-When changing the HTML template, compare the generated document with
-`reference.html` after replacing the embedded `report-data` JSON with a stable
-placeholder. Differences in `meta.generatedAt` are expected; unexplained UI,
-CSS, or JavaScript differences are not.
+The generator needs the artifacts, so run it where they live (the benchmark
+host) and commit the resulting `docs/index.html`. When changing the HTML
+template, compare the new output with the committed `docs/index.html` after
+replacing the embedded `report-data` JSON with a stable placeholder.
+Differences in `meta.generatedAt` are expected; unexplained UI, CSS, or
+JavaScript differences are not.
