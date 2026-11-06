@@ -6,6 +6,17 @@ configuration, artifact schemas, or report generation changes, update this file
 with the technical details and update `README.md` only when the user workflow or
 public methodology changes.
 
+## Licensing and distribution
+
+Original project code and documentation use the MIT License in `LICENSE`.
+Third-party exceptions are documented in `THIRD_PARTY_NOTICES.md`; bundled
+Poppins fonts retain `src/bench/report_fonts/OFL.txt` under OFL-1.1.
+Package metadata uses `MIT AND OFL-1.1` because distributions contain both
+project code and fonts. The build requires setuptools 77.0.3 or newer for
+SPDX license expressions and `project.license-files`, which includes the MIT
+license, third-party notices, and font license in distributions.
+Dependencies, engine images, datasets, and models retain their upstream terms.
+
 ## Detailed benchmark reference
 
 This CLI benchmarks retrieval quality and performance on IR datasets across:

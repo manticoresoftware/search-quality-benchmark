@@ -238,4 +238,7 @@ maintainer reference. Unit tests: `./.venv/bin/pytest -q tests/unit`.
 
 ## License
 
-This repository does not include a license file yet.
+The original code and documentation are licensed under the [MIT License](LICENSE).
+Bundled Poppins fonts retain their [SIL Open Font License 1.1](src/bench/report_fonts/OFL.txt).
+Dependencies, search engines, datasets, and models retain their own licenses and
+terms; see [third-party notices](THIRD_PARTY_NOTICES.md).
