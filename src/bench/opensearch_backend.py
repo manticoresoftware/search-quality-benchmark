@@ -170,7 +170,7 @@ class OpenSearchBackend:
             f"{text_weight:.12g}|{vector_weight:.12g}"
         )
         digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:12]
-        return f"search-bench-hybrid-rrf-{digest}"
+        return f"search-quality-benchmark-hybrid-rrf-{digest}"
 
     def ensure_hybrid_pipeline(self) -> str:
         pipeline_name = self.hybrid_pipeline_name()

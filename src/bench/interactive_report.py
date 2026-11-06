@@ -543,7 +543,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   <link rel="icon" href="data:,">
   <script>
     // Apply the saved theme before first paint; the report script keeps it in sync.
-    try { if (localStorage.getItem('search-benchmark-theme') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (_) {}
+    try { if (localStorage.getItem('search-quality-benchmark-theme') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (_) {}
   </script>
   <style>
     @font-face { font-family: 'Poppins'; font-style: normal; font-weight: 400; font-display: swap; src: url(data:font/woff2;base64,__POPPINS_400__) format('woff2'); }
@@ -1409,7 +1409,7 @@ select:focus-visible, button:focus-visible, .multi-select summary:focus-visible,
   border-width: 0 1.5px 1.5px 0; transform: rotate(45deg);
 }
 .multi-select[open] summary::after { margin-top: 3px; transform: rotate(225deg); }
-/* Single-value dropdowns (built in search-bench.js over the hidden native
+/* Single-value dropdowns (built in search-quality-benchmark.js over the hidden native
    <select>) share the multi-select look: same field, chevron and menu. */
 .native-select-source { display: none !important; }
 .single-select { position: relative; min-width: 0; text-transform: none; letter-spacing: 0; }
@@ -1600,7 +1600,7 @@ dialog::backdrop { background: rgba(20,24,10,.45); backdrop-filter: blur(2px); }
         <div class="header-links">
           <a class="byline" href="https://manticoresearch.com/" target="_blank" rel="noreferrer">by Manticore ↗</a>
           <span class="header-link-sep">·</span>
-          <a class="utility-link" href="https://github.com/manticoresoftware/search-bench" target="_blank" rel="noreferrer">GitHub ↗</a>
+          <a class="utility-link" href="https://github.com/manticoresoftware/search-quality-benchmark" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
         <div class="stamp"><span id="generated-at"></span></div>
       </div>
@@ -1630,7 +1630,7 @@ dialog::backdrop { background: rgba(20,24,10,.45); backdrop-filter: blur(2px); }
       <button type="button" data-tab="overview" class="active">Overview</button>
       <button type="button" data-tab="dataset">Dataset explorer</button>
       <button type="button" data-tab="runs">All runs</button>
-      <a href="https://github.com/manticoresoftware/search-bench#methodology" target="_blank" rel="noreferrer">Methodology ↗</a>
+      <a href="https://github.com/manticoresoftware/search-quality-benchmark#methodology" target="_blank" rel="noreferrer">Methodology ↗</a>
     </nav>
 
     <section class="dataset-switcher" data-view="dataset" hidden aria-label="Dataset navigation">
@@ -1697,8 +1697,8 @@ dialog::backdrop { background: rgba(20,24,10,.45); backdrop-filter: blur(2px); }
 
     <footer class="footer">
       <a href="https://manticoresearch.com/" target="_blank" rel="noreferrer">Manticore Search</a>
-      <a href="https://github.com/manticoresoftware/search-bench" target="_blank" rel="noreferrer">search-bench on GitHub</a>
-      <a href="https://github.com/manticoresoftware/search-bench#methodology" target="_blank" rel="noreferrer">Methodology</a>
+      <a href="https://github.com/manticoresoftware/search-quality-benchmark" target="_blank" rel="noreferrer">search-quality-benchmark on GitHub</a>
+      <a href="https://github.com/manticoresoftware/search-quality-benchmark#methodology" target="_blank" rel="noreferrer">Methodology</a>
     </footer>
   </main>
 
@@ -2572,7 +2572,7 @@ dialog::backdrop { background: rgba(20,24,10,.45); backdrop-filter: blur(2px); }
       const lines=[columns.join(',')];
       for(const run of visibleRuns()) lines.push(columns.map(column=>quote(column==='version'?runVersionLabel(run):column==='engine'?systemName(run.engine):run[column])).join(','));
       const blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');
-      anchor.href=url;anchor.download='search-benchmark-filtered.csv';anchor.click();URL.revokeObjectURL(url);
+      anchor.href=url;anchor.download='search-quality-benchmark-filtered.csv';anchor.click();URL.revokeObjectURL(url);
     }
 
     function exportJson() {
@@ -2581,7 +2581,7 @@ dialog::backdrop { background: rgba(20,24,10,.45); backdrop-filter: blur(2px); }
       const {source,excludedManticoreRuns,invalidArtifacts,...meta}=DATA.meta;
       const payload = { meta, filters: {...state}, systems, datasets: DATA.datasets.filter(dataset=>state.datasets.includes(dataset.key)), runs };
       const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');
-      anchor.href=url;anchor.download='search-benchmark-filtered.json';anchor.click();URL.revokeObjectURL(url);
+      anchor.href=url;anchor.download='search-quality-benchmark-filtered.json';anchor.click();URL.revokeObjectURL(url);
     }
 
     function renderTabs() {
@@ -2719,7 +2719,7 @@ dialog::backdrop { background: rgba(20,24,10,.45); backdrop-filter: blur(2px); }
     });
     window.addEventListener('scroll', scheduleScrollHistoryUpdate, { passive: true });
 
-    const THEME_KEY = 'search-benchmark-theme';
+    const THEME_KEY = 'search-quality-benchmark-theme';
     // Light is the site's default; the inline script in <head> applies the
     // saved choice before first paint, so this only syncs the toggle and colors.
     let reportRendered = false;

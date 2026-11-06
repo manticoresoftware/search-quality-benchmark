@@ -224,7 +224,7 @@ class MariaDBConfig:
     port: int = 3307
     user: str = "bench"
     password: str = "bench"
-    database: str = "search_bench"
+    database: str = "search_quality_benchmark"
     table_name: str = "trec_covid_mariadb"
     index_layout: str = "combined"
     text_fields: list[str] = field(default_factory=lambda: ["title", "abstract"])

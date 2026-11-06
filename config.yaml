@@ -258,7 +258,7 @@ mariadb:
   port: 3307
   user: "bench"
   password: "bench"
-  database: "search_bench"
+  database: "search_quality_benchmark"
   table_name: "trec_covid_mariadb"
   index_layout: "combined"
   text_fields: ["title", "abstract"]

@@ -396,7 +396,7 @@ embedding:
 
 ### MariaDB Config
 
-- `mariadb.host`, `port`, `user`, `password`, and `database`: MariaDB connection settings (defaults: `127.0.0.1:3307`, `bench`, `bench`, `search_bench`)
+- `mariadb.host`, `port`, `user`, `password`, and `database`: MariaDB connection settings (defaults: `127.0.0.1:3307`, `bench`, `bench`, `search_quality_benchmark`)
 - `mariadb.table_name`: combined InnoDB table used for all three search modes
 - `mariadb.text_fields` / `fulltext_search_mode`: fields and `MATCH ... AGAINST` mode used by lexical retrieval
 - `mariadb.vector_field`, `vector_distance`, and `vector_m`: vector column and HNSW index settings
@@ -597,7 +597,7 @@ Notes:
   chmod -R 755 data/milvus_data
   ```
   The Milvus container runs as user `milvus` (`999:999`), so the bind-mounted host directory must be writable by that uid/gid.
-- MariaDB uses `127.0.0.1:3307`, database `search_bench`, and local development credentials `bench`/`bench` by default.
+- MariaDB uses `127.0.0.1:3307`, database `search_quality_benchmark`, and local development credentials `bench`/`bench` by default.
 - SereneDB uses `127.0.0.1:7890`, database/user `postgres`, and the local development password `bench`; its persistent data is stored in `data/serenedb_data`.
 - Weaviate is exposed at `http://127.0.0.1:8080` by the bundled Compose service.
 - Vespa is exposed at `http://127.0.0.1:8081`, with deploy API at `http://127.0.0.1:19071`.
@@ -1002,7 +1002,7 @@ Combined report (`bench report`):
   Jekyll). The custom domain is configured in the repository's Pages settings.
 - Visual design: the manticoresearch.com palette (olive accent, Poppins) with a
   light default theme and an opt-in dark theme stored in `localStorage` under
-  `search-benchmark-theme`; an inline `<head>` script applies the saved theme
+  `search-quality-benchmark-theme`; an inline `<head>` script applies the saved theme
   before first paint. No logo. Poppins is inlined from
   `src/bench/report_fonts/` (SIL OFL, see `OFL.txt`) as base64 `woff2`, so the
   file stays standalone.

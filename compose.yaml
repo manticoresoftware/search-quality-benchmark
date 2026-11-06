@@ -102,7 +102,7 @@ services:
       - "3307:3306"
     environment:
       MARIADB_ROOT_PASSWORD: "root"
-      MARIADB_DATABASE: "search_bench"
+      MARIADB_DATABASE: "search_quality_benchmark"
       MARIADB_USER: "bench"
       MARIADB_PASSWORD: "bench"
     volumes:

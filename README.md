@@ -4,7 +4,7 @@ Open-source search engines compared on ranking quality. Full-text, vector, and
 hybrid search, run on public information-retrieval datasets with relevance
 judgments, reported as one standalone interactive page.
 
-**[Open the interactive report](docs/index.html)** · 601 runs · 11 engines ·
+**[Open the interactive report](https://search-quality-benchmark.manticoresearch.com)** · 601 runs · 11 engines ·
 16 dataset/query-set cohorts · updated 2026-11-02
 
 > [!NOTE]
@@ -169,8 +169,8 @@ key (OpenRouter for the bundled profiles; `openai` is also supported).
 key is needed even before full-text-only runs.
 
 ```bash
-git clone https://github.com/manticoresoftware/search-bench.git
-cd search-bench
+git clone https://github.com/manticoresoftware/search-quality-benchmark.git
+cd search-quality-benchmark
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'

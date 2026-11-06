@@ -9,7 +9,7 @@ from bench.summarize import _generate_interactive_report, combined_html_report_p
 
 def _load_report_generator():
     path = Path(__file__).parents[2] / "src" / "bench" / "interactive_report.py"
-    spec = importlib.util.spec_from_file_location("search_bench_report_generator", path)
+    spec = importlib.util.spec_from_file_location("search_quality_benchmark_report_generator", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

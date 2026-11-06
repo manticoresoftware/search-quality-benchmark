@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "search-bench"
+name = "search-quality-benchmark"
 version = "0.1.0"
 description = "Search Quality Benchmark: ranking quality of open-source search engines on public IR datasets"
 readme = "README.md"

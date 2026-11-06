@@ -67,7 +67,7 @@ def test_opensearch_hybrid_uses_native_weighted_rrf_pipeline() -> None:
     assert len(client.transport.calls) == 1
     method, path, pipeline = client.transport.calls[0]
     assert method == "PUT"
-    assert path.startswith("/_search/pipeline/search-bench-hybrid-rrf-")
+    assert path.startswith("/_search/pipeline/search-quality-benchmark-hybrid-rrf-")
     combination = pipeline["phase_results_processors"][0][
         "score-ranker-processor"
     ]["combination"]
