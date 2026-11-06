@@ -1,0 +1,234 @@
+# Qdrantish Manticore profile variants split out from the main config.
+
+trec_covid_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  fulltext_table: "trec_covid_manticore_qdrantish"
+  vector_table: "trec_covid_manticore_qdrantish"
+  fulltext_query_variant: "long"
+  vector_cache_path: "vector_cache/trec-covid-openai.sqlite"
+
+trec_covid_manticore_hybrid_qdrantish:
+  base: "trec_covid_manticore_fulltext_qdrantish"
+  type: "hybrid"
+  fulltext_table: "trec_covid_manticore_qdrantish"
+  vector_table: "trec_covid_manticore_qdrantish"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+msmarco_passage_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "msmarco-passage/dev/small"
+  fulltext_table: "msmarco_passage_manticore_qdrantish"
+  vector_table: "msmarco_passage_manticore_qdrantish"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  fulltext_query_variant: "long"
+
+msmarco_passage_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "msmarco-passage/dev/small"
+  type: "hybrid"
+  fulltext_table: "msmarco_passage_manticore_qdrantish"
+  vector_table: "msmarco_passage_manticore_qdrantish"
+  vector_cache_path: "vector_cache/msmarco-passage-embeddings.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+msmarco_lite_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore_qdrantish"
+  vector_table: "msmarco_lite_manticore_qdrantish"
+
+msmarco_lite_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
+  max_docs: 250000
+  keep_qrels_docs: true
+  fulltext_table: "msmarco_lite_manticore_qdrantish"
+  vector_table: "msmarco_lite_manticore_qdrantish"
+
+msmarco_trecdl_2019_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2019_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
+  source: "msmarco-passage/trec-dl-2019/judged"
+
+msmarco_trecdl_2020_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+msmarco_trecdl_2020_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
+  source: "msmarco-passage/trec-dl-2020/judged"
+
+dl_typo_manticore_fulltext_qdrantish:
+  base: "msmarco_passage_manticore_fulltext_qdrantish"
+  source: "dl-typo"
+
+dl_typo_manticore_hybrid_qdrantish:
+  base: "msmarco_passage_manticore_hybrid_qdrantish"
+  source: "dl-typo"
+
+nfcorpus_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/nfcorpus/test"
+  fulltext_table: "nfcorpus_manticore_qdrantish"
+  vector_table: "nfcorpus_manticore_qdrantish"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  fulltext_query_variant: "long"
+
+nfcorpus_manticore_hybrid_qdrantish:
+  base: "nfcorpus_manticore_fulltext_qdrantish"
+  source: "beir/nfcorpus/test"
+  type: "hybrid"
+  fulltext_table: "nfcorpus_manticore_qdrantish"
+  vector_table: "nfcorpus_manticore_qdrantish"
+  vector_cache_path: "vector_cache/nfcorpus-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+acord_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "hf-beir:theatticusproject/acord:test"
+  fulltext_table: "acord_manticore_qdrantish"
+  vector_table: "acord_manticore_qdrantish"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  fulltext_query_variant: "long"
+
+acord_manticore_hybrid_qdrantish:
+  base: "acord_manticore_fulltext_qdrantish"
+  source: "hf-beir:theatticusproject/acord:test"
+  type: "hybrid"
+  fulltext_table: "acord_manticore_qdrantish"
+  vector_table: "acord_manticore_qdrantish"
+  vector_cache_path: "vector_cache/acord-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+scifact_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/scifact/test"
+  fulltext_table: "scifact_manticore_qdrantish"
+  vector_table: "scifact_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+  fulltext_query_variant: "long"
+
+scifact_manticore_hybrid_qdrantish:
+  base: "scifact_manticore_fulltext_qdrantish"
+  source: "beir/scifact/test"
+  type: "hybrid"
+  fulltext_table: "scifact_manticore_qdrantish"
+  vector_table: "scifact_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scifact-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+arguana_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/arguana"
+  fulltext_table: "arguana_manticore_qdrantish"
+  vector_table: "arguana_manticore_qdrantish"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+  fulltext_query_variant: "long"
+
+arguana_manticore_hybrid_qdrantish:
+  base: "arguana_manticore_fulltext_qdrantish"
+  source: "beir/arguana"
+  type: "hybrid"
+  fulltext_table: "arguana_manticore_qdrantish"
+  vector_table: "arguana_manticore_qdrantish"
+  vector_cache_path: "vector_cache/arguana-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+scidocs_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/scidocs"
+  fulltext_table: "scidocs_manticore_qdrantish"
+  vector_table: "scidocs_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+  fulltext_query_variant: "long"
+
+scidocs_manticore_hybrid_qdrantish:
+  base: "scidocs_manticore_fulltext_qdrantish"
+  source: "beir/scidocs"
+  type: "hybrid"
+  fulltext_table: "scidocs_manticore_qdrantish"
+  vector_table: "scidocs_manticore_qdrantish"
+  vector_cache_path: "vector_cache/scidocs-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+fiqa_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/fiqa/test"
+  fulltext_table: "fiqa_manticore_qdrantish"
+  vector_table: "fiqa_manticore_qdrantish"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+  fulltext_query_variant: "long"
+
+fiqa_manticore_hybrid_qdrantish:
+  base: "fiqa_manticore_fulltext_qdrantish"
+  source: "beir/fiqa/test"
+  type: "hybrid"
+  fulltext_table: "fiqa_manticore_qdrantish"
+  vector_table: "fiqa_manticore_qdrantish"
+  vector_cache_path: "vector_cache/fiqa-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180
+
+cqadupstack_webmasters_manticore_fulltext_qdrantish:
+  base: "manticore"
+  type: "fulltext"
+  source: "beir/cqadupstack/webmasters"
+  fulltext_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+  fulltext_query_variant: "long"
+
+cqadupstack_webmasters_manticore_hybrid_qdrantish:
+  base: "cqadupstack_webmasters_manticore_fulltext_qdrantish"
+  source: "beir/cqadupstack/webmasters"
+  type: "hybrid"
+  fulltext_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_table: "cqadupstack_webmasters_manticore_qdrantish"
+  vector_cache_path: "vector_cache/cqadupstack-webmasters-openai.sqlite"
+  vector_quantization: "1bit"
+  vector_search_oversampling: 3.0
+  vector_search_rescore: 1
+  batch_size: 250
+  query_timeout_seconds: 180

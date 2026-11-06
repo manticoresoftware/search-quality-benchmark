@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual env
+.venv/
+
+# Local runtime outputs
+artifacts/
+data/
+state/
+
+# Local machine configs (may contain key paths or secrets)
+config.yaml
+
+# macOS
+.DS_Store
+
+# Build metadata
+*.egg-info/
+
+# Local embedding cache (large, regenerable)
+vector_cache/

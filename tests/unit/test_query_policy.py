@@ -1,0 +1,136 @@
+from bench.runbench import query_text_for_mode
+from bench.query_policy import (
+    benchmark_views,
+    dataset_query_variants_distinct,
+    query_texts_for_embedding,
+    query_variant_metadata,
+    trec_covid_artifact_identity,
+)
+
+
+def test_query_policy_uses_long_default_for_fulltext():
+    topic = {"query_short": "short q", "query_long": "longer query text"}
+    assert query_text_for_mode(topic, "fulltext") == "longer query text"
+
+
+def test_query_policy_can_select_short_for_fulltext():
+    topic = {"query_short": "short q", "query_long": "longer query text"}
+    assert query_text_for_mode(topic, "fulltext", fulltext_query_variant="short") == "short q"
+
+
+def test_query_policy_prefers_long_for_vector():
+    topic = {"query_short": "short q", "query_long": "longer query text"}
+    assert query_text_for_mode(topic, "vector") == "longer query text"
+
+
+def test_query_policy_uses_long_when_short_missing():
+    topic = {"query_short": "", "query_long": "longer query text"}
+    assert query_text_for_mode(topic, "fulltext") == "longer query text"
+    assert query_text_for_mode(topic, "vector") == "longer query text"
+
+
+def test_query_policy_raises_on_missing_short_and_long():
+    topic = {}
+    try:
+        query_text_for_mode(topic, "fulltext")
+    except ValueError as exc:
+        assert "missing query_short/query_long" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for missing query fields")
+
+
+def test_query_variant_metadata_keeps_distinct_query_sets_separate():
+    topics = [{"query_short": "short q", "query_long": "longer query text"}]
+
+    fulltext = query_variant_metadata(
+        topics,
+        ["fulltext"],
+        fulltext_query_variant="long",
+    )
+    vector = query_variant_metadata(
+        topics,
+        ["vector"],
+        fulltext_query_variant="long",
+    )
+
+    assert fulltext["query_variant_requested"] == "long"
+    assert fulltext["query_variant"] == "long"
+    assert fulltext["query_variants_distinct"] is True
+    assert vector["query_variant"] == "long"
+
+
+def test_query_variant_metadata_collapses_identical_short_and_long_texts():
+    topics = [{"query_short": "one query", "query_long": "one query"}]
+
+    fulltext = query_variant_metadata(
+        topics,
+        ["fulltext"],
+        fulltext_query_variant="short",
+    )
+    vector = query_variant_metadata(
+        topics,
+        ["vector"],
+        fulltext_query_variant="long",
+    )
+
+    assert fulltext["query_variant_requested"] == "short"
+    assert fulltext["query_variant"] == "same"
+    assert fulltext["query_variants_distinct"] is False
+    assert vector["query_variant_requested"] == "long"
+    assert vector["query_variant"] == "same"
+
+
+def test_legacy_dataset_fallback_assumes_only_trec_covid_is_distinct():
+    assert dataset_query_variants_distinct("beir/trec-covid", None) is True
+    assert dataset_query_variants_distinct("beir/scifact/test", None) is False
+    assert dataset_query_variants_distinct("future/distinct", True) is True
+
+
+def test_trec_covid_explicit_query_field_is_independent_of_search_mode():
+    topic = {
+        "query": "keywords",
+        "question": "natural question",
+        "narrative": "detailed information need",
+    }
+
+    for mode in ("fulltext", "vector", "hybrid"):
+        assert query_text_for_mode(topic, mode, query_field="query") == "keywords"
+        assert query_text_for_mode(topic, mode, query_field="question") == "natural question"
+        assert query_text_for_mode(topic, mode, query_field="narrative") == "detailed information need"
+
+
+def test_trec_covid_views_and_embedding_inputs_cover_all_three_fields():
+    topic = {
+        "query": "keywords",
+        "question": "natural question",
+        "narrative": "detailed information need",
+    }
+
+    assert benchmark_views("beir/trec-covid") == (
+        ("trec-covid-query", "query"),
+        ("trec-covid-question", "question"),
+        ("trec-covid-narrative", "narrative"),
+    )
+    assert query_texts_for_embedding(topic, "beir/trec-covid") == (
+        "keywords",
+        "natural question",
+        "detailed information need",
+    )
+
+
+def test_trec_covid_legacy_artifact_mapping_is_mode_based():
+    assert trec_covid_artifact_identity(
+        mode="fulltext", recorded_variant="long"
+    ) == ("trec-covid-query", "query")
+    assert trec_covid_artifact_identity(
+        mode="vector", recorded_variant="short"
+    ) == ("trec-covid-narrative", "narrative")
+    assert trec_covid_artifact_identity(
+        mode="hybrid", recorded_variant="question"
+    ) == ("trec-covid-narrative", "narrative")
+
+    assert trec_covid_artifact_identity(
+        mode="vector",
+        benchmark_dataset_id="trec-covid-question",
+        query_field="question",
+    ) == ("trec-covid-question", "question")
