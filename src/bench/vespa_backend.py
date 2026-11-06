@@ -1,0 +1,505 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from io import BytesIO
+import json
+from pathlib import Path
+import re
+import socket
+from time import monotonic, sleep
+from typing import Any
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
+from zipfile import ZIP_DEFLATED, ZipFile
+
+from .config import VespaConfig
+
+
+def _sanitize_vespa_string(value: Any) -> str:
+    text = str(value or "")
+    return "".join(ch for ch in text if ch >= " " or ch in "\t\n\r")
+
+
+def _sanitize_vespa_query_text(query_text: str) -> str:
+    text = _sanitize_vespa_string(query_text)
+    # Vespa userQuery() treats quotes as phrase syntax. Benchmark topics can
+    # contain long quoted passages, which may trip phrase limits on repeated
+    # stopwords such as "the".
+    text = re.sub(r"[\"'`“”‘’«»]", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text, flags=re.UNICODE).strip()
+    return text
+
+
+class VespaBackend:
+    def __init__(self, cfg: VespaConfig):
+        self.cfg = cfg
+
+    def connection_target(self) -> str:
+        return str(self.cfg.url or "http://127.0.0.1:8081")
+
+    def deploy_target(self) -> str:
+        return str(self.cfg.deploy_url or "http://127.0.0.1:19071")
+
+    def _request(
+        self,
+        method: str,
+        base_url: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        payload: Any | bytes | None = None,
+        content_type: str = "application/json",
+    ) -> Any:
+        base = str(base_url).rstrip("/")
+        query = f"?{urlparse.urlencode(params, doseq=True)}" if params else ""
+        url = f"{base}{path}{query}"
+        body: bytes | None = None
+        if isinstance(payload, bytes):
+            body = payload
+        elif payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+        headers: dict[str, str] = {}
+        if payload is not None:
+            headers["Content-Type"] = content_type
+        req = urlrequest.Request(url, data=body, method=method.upper(), headers=headers)
+        attempts = max(1, int(getattr(self.cfg, "retry_attempts", 1) or 1))
+        backoff = max(0.0, float(getattr(self.cfg, "retry_backoff_seconds", 0.0) or 0.0))
+        timeout = max(int(self.cfg.timeout_sec), 30)
+        data: bytes = b""
+        for attempt in range(1, attempts + 1):
+            try:
+                with urlrequest.urlopen(req, timeout=timeout) as resp:
+                    data = resp.read()
+                break
+            except urlerror.HTTPError as exc:
+                body_text = exc.read().decode("utf-8", errors="replace").strip()
+                if exc.code == 404:
+                    raise
+                raise RuntimeError(f"Vespa HTTP {exc.code}: {body_text}") from exc
+            except Exception as exc:
+                if attempt >= attempts or not self._is_retryable_request_error(exc):
+                    raise
+                if backoff > 0:
+                    sleep(backoff * (2 ** (attempt - 1)))
+        if not data:
+            return {}
+        text = data.decode("utf-8", errors="replace")
+        try:
+            return json.loads(text)
+        except Exception:
+            return text
+
+    @staticmethod
+    def _is_retryable_request_error(exc: Exception) -> bool:
+        if isinstance(exc, (TimeoutError, socket.timeout)):
+            return True
+        if isinstance(exc, urlerror.URLError):
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, (TimeoutError, socket.timeout)):
+                return True
+            text = str(reason or exc).strip().lower()
+            return "timed out" in text or "timeout" in text
+        text = str(exc).strip().lower()
+        return text == "timed out" or "timed out" in text
+
+    def _query(self, payload: dict[str, Any]) -> dict[str, Any]:
+        resp = self._request("POST", self.connection_target(), "/search/", payload=payload)
+        if not isinstance(resp, dict):
+            raise RuntimeError(f"Unexpected Vespa query response: {resp!r}")
+        return resp
+
+    def ensure_accessible(self) -> None:
+        try:
+            resp = self._request("GET", self.deploy_target(), "/state/v1/health")
+            status = dict((resp or {}).get("status") or {})
+            code = str(status.get("code") or "").strip().lower()
+            if code not in {"up", "initializing"}:
+                raise RuntimeError(f"Unexpected Vespa health status: {json.dumps(resp, ensure_ascii=True)}")
+        except Exception as exc:
+            raise RuntimeError(f"Vespa is not reachable at {self.connection_target()}: {exc}") from exc
+
+    def collection_name(self) -> str:
+        return str(self.cfg.collection_name or "").strip()
+
+    def schema_name(self) -> str:
+        raw = re.sub(r"[^a-z0-9_]+", "_", str(self.collection_name()).strip().lower())
+        raw = re.sub(r"_+", "_", raw).strip("_")
+        if not raw:
+            raw = "trec_covid_vespa"
+        if raw[0].isdigit():
+            raw = f"s_{raw}"
+        return raw
+
+    def document_type(self) -> str:
+        return self.schema_name()
+
+    def collection_exists(self, collection_name: str) -> bool:
+        return self._schema_file_path(self.schema_name()).exists()
+
+    def delete_collection_if_exists(self, collection_name: str) -> None:
+        schema = self.schema_name()
+        path = self._schema_file_path(schema)
+        if path.exists():
+            path.unlink()
+        registry = self._load_registry()
+        registry.pop(schema, None)
+        self._save_registry(registry)
+        self._deploy_current_package()
+
+    def recreate_collection(self, *, dimension: int | None = None) -> None:
+        registry = self._load_registry()
+        schema = self.schema_name()
+        existing = dict(registry.get(schema) or {})
+        dim = int(dimension or existing.get("dimension") or 1)
+        registry[schema] = {
+            "schema": schema,
+            "dimension": dim,
+            "text_fields": list(self.cfg.text_fields or ["title", "abstract"]),
+            "vector_field": str(self.cfg.vector_field or "embedding"),
+            "vector_distance": str(self.cfg.vector_distance or "angular"),
+            "hybrid_alpha": float(self.cfg.hybrid_alpha),
+        }
+        self._save_registry(registry)
+        self._write_schema_files(registry)
+        # Full-text-only builds use a one-dimensional placeholder tensor so
+        # they do not depend on the embedding cache. A later vector build must
+        # intentionally change that field to the cached embedding dimension.
+        self._deploy_current_package(allow_field_type_change=True)
+        self._wait_for_schema_ready(schema)
+
+    def import_documents(self, docs: list[dict[str, Any]]) -> int:
+        if not docs:
+            return 0
+        inserted = 0
+        namespace = str(self.cfg.namespace or "doc")
+        doc_type = self.document_type()
+        for doc in docs:
+            doc_id = str(doc.get("doc_id", doc.get("id", ""))).strip()
+            if not doc_id:
+                continue
+            fields = {
+                "id": int(doc.get("bench_id", doc.get("id", 0)) or 0),
+                "doc_id": doc_id,
+                "title": _sanitize_vespa_string(doc.get("title", "")),
+                "abstract": _sanitize_vespa_string(doc.get("abstract", "")),
+                "doi": _sanitize_vespa_string(doc.get("doi", "")),
+                "date": _sanitize_vespa_string(doc.get("date", "")),
+            }
+            vector = doc.get(self.cfg.vector_field)
+            if isinstance(vector, list) and vector:
+                fields[self.cfg.vector_field] = {"values": [float(x) for x in vector]}
+            self._request(
+                "POST",
+                self.connection_target(),
+                f"/document/v1/{namespace}/{doc_type}/docid/{urlparse.quote(doc_id, safe='')}",
+                payload={"fields": fields},
+            )
+            inserted += 1
+        return inserted
+
+    def document_exists(self, doc_id: str) -> bool:
+        namespace = str(self.cfg.namespace or "doc")
+        doc_type = self.document_type()
+        try:
+            self._request(
+                "GET",
+                self.connection_target(),
+                f"/document/v1/{namespace}/{doc_type}/docid/{urlparse.quote(str(doc_id), safe='')}",
+            )
+            return True
+        except urlerror.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
+
+    def get_document_count(self, collection_name: str) -> int:
+        resp = self._query(
+            {
+                "yql": f"select doc_id from sources {self.document_type()} where true;",
+                "hits": 0,
+                "ranking.profile": "bm25",
+            }
+        )
+        root = dict(resp.get("root") or {})
+        fields = dict(root.get("fields") or {})
+        total = fields.get("totalCount")
+        try:
+            return int(total or 0)
+        except Exception:
+            return 0
+
+    def search_lexical(self, query_text: str, limit: int) -> list[dict[str, Any]]:
+        resp = self._query(
+            {
+                "yql": f"select doc_id from sources {self.document_type()} where userQuery();",
+                "query": _sanitize_vespa_query_text(query_text),
+                "hits": int(limit),
+                "ranking.profile": "bm25",
+            }
+        )
+        return self._extract_hits(resp)
+
+    def search_vector(self, query_vector: list[float], limit: int) -> list[dict[str, Any]]:
+        resp = self._query(
+            {
+                "yql": (
+                    f"select doc_id from sources {self.document_type()} "
+                    f"where ({{targetHits:{int(limit)}}}nearestNeighbor({self.cfg.vector_field}, q));"
+                ),
+                "hits": int(limit),
+                "ranking.profile": "vector",
+                "input.query(q)": [float(x) for x in query_vector],
+            }
+        )
+        return self._extract_hits(resp)
+
+    def search_hybrid(self, query_text: str, query_vector: list[float], limit: int) -> list[dict[str, Any]]:
+        resp = self._query(
+            {
+                "yql": (
+                    f"select doc_id from sources {self.document_type()} "
+                    f"where userQuery() or ({{targetHits:{int(limit)}}}nearestNeighbor({self.cfg.vector_field}, q));"
+                ),
+                "query": _sanitize_vespa_query_text(query_text),
+                "hits": int(limit),
+                "ranking.profile": "hybrid",
+                "input.query(q)": [float(x) for x in query_vector],
+            }
+        )
+        return self._extract_hits(resp)
+
+    def _extract_hits(self, result: dict[str, Any]) -> list[dict[str, Any]]:
+        root = dict(result.get("root") or {})
+        children = list(root.get("children") or [])
+        out: list[dict[str, Any]] = []
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            fields = dict(child.get("fields") or {})
+            out.append(
+                {
+                    "doc_id": str(fields.get("doc_id", "")),
+                    "score": float(child.get("relevance") or 0.0),
+                }
+            )
+        return out
+
+    def _package_dir(self) -> Path:
+        return Path(str(self.cfg.package_dir or "data/vespa_app"))
+
+    def _registry_path(self) -> Path:
+        return self._package_dir() / "registry.json"
+
+    def _schema_file_path(self, schema: str) -> Path:
+        return self._package_dir() / "schemas" / f"{schema}.sd"
+
+    def _load_registry(self) -> dict[str, dict[str, Any]]:
+        path = self._registry_path()
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if isinstance(value, dict):
+                    out[str(key)] = value
+        return out
+
+    def _save_registry(self, registry: dict[str, dict[str, Any]]) -> None:
+        pkg = self._package_dir()
+        (pkg / "schemas").mkdir(parents=True, exist_ok=True)
+        self._registry_path().write_text(json.dumps(registry, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _write_schema_files(self, registry: dict[str, dict[str, Any]]) -> None:
+        pkg = self._package_dir()
+        schemas_dir = pkg / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        for old in schemas_dir.glob("*.sd"):
+            if old.stem not in registry:
+                old.unlink()
+        for schema, meta in registry.items():
+            path = schemas_dir / f"{schema}.sd"
+            path.write_text(self._render_schema(schema, meta), encoding="utf-8")
+        (pkg / "services.xml").write_text(self._render_services_xml(registry), encoding="utf-8")
+
+    def _render_services_xml(self, registry: dict[str, dict[str, Any]]) -> str:
+        documents = "\n".join(
+            f'      <document type="{schema}" mode="index" />'
+            for schema in sorted(registry.keys())
+        )
+        return (
+            '<services version="1.0">\n'
+            '  <container id="default" version="1.0">\n'
+            '    <search />\n'
+            '    <document-api />\n'
+            '    <document-processing />\n'
+            '    <nodes count="1" />\n'
+            '  </container>\n'
+            '  <content id="content" version="1.0">\n'
+            '    <redundancy>1</redundancy>\n'
+            '    <documents>\n'
+            f'{documents}\n'
+            '    </documents>\n'
+            '    <tuning>\n'
+            '      <resource-limits>\n'
+            '        <disk>0.99</disk>\n'
+            '        <memory>0.99</memory>\n'
+            '      </resource-limits>\n'
+            '    </tuning>\n'
+            '    <nodes count="1" />\n'
+            '  </content>\n'
+            '</services>\n'
+        )
+
+    def _render_schema(self, schema: str, meta: dict[str, Any]) -> str:
+        dim = int(meta.get("dimension") or 1)
+        text_fields = list(meta.get("text_fields") or ["title", "abstract"])
+        vector_field = str(meta.get("vector_field") or "embedding")
+        distance = str(meta.get("vector_distance") or "angular")
+        alpha = float(meta.get("hybrid_alpha") or 0.5)
+        text_expr = " + ".join(f"bm25({f})" for f in text_fields) or "0"
+        return f"""schema {schema} {{
+  document {schema} {{
+    field id type int {{
+      indexing: attribute | summary
+    }}
+    field doc_id type string {{
+      indexing: attribute | summary
+    }}
+    field title type string {{
+      indexing: index | summary
+      index: enable-bm25
+    }}
+    field abstract type string {{
+      indexing: index | summary
+      index: enable-bm25
+    }}
+    field doi type string {{
+      indexing: attribute | summary
+    }}
+    field date type string {{
+      indexing: attribute | summary
+    }}
+    field {vector_field} type tensor<float>(x[{dim}]) {{
+      indexing: attribute | index
+      attribute {{
+        distance-metric: {distance}
+      }}
+    }}
+  }}
+  fieldset default {{
+    fields: {", ".join(text_fields)}
+  }}
+  rank-profile bm25 inherits default {{
+    first-phase {{
+      expression: {text_expr}
+    }}
+  }}
+  rank-profile vector inherits default {{
+    inputs {{
+      query(q) tensor<float>(x[{dim}])
+    }}
+    first-phase {{
+      expression: closeness(field, {vector_field})
+    }}
+  }}
+  rank-profile hybrid inherits default {{
+    inputs {{
+      query(q) tensor<float>(x[{dim}])
+    }}
+    first-phase {{
+      expression: {text_expr} + {alpha:.6f} * closeness(field, {vector_field})
+    }}
+  }}
+}}
+"""
+
+    def _deploy_current_package(self, *, allow_field_type_change: bool = False) -> None:
+        pkg = self._package_dir()
+        (pkg / "schemas").mkdir(parents=True, exist_ok=True)
+        if not (pkg / "services.xml").exists():
+            self._write_schema_files(self._load_registry())
+        extra_files: dict[str, bytes] = {}
+        if allow_field_type_change:
+            # Vespa rejects tensor dimension changes unless the deployment
+            # explicitly acknowledges that existing values must be re-fed.
+            # Keep the narrowly scoped override ephemeral: it is included in
+            # this deployment archive but not persisted in the package dir.
+            until = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+            extra_files["validation-overrides.xml"] = (
+                "<validation-overrides>\n"
+                f'  <allow until="{until}" comment="Rebuild benchmark vector field">'
+                "field-type-change</allow>\n"
+                "</validation-overrides>\n"
+            ).encode("utf-8")
+        archive = self._build_package_zip(pkg, extra_files=extra_files)
+        try:
+            self._request("PUT", self.deploy_target(), "/application/v2/tenant/default")
+        except Exception:
+            pass
+        self._request(
+            "POST",
+            self.deploy_target(),
+            "/application/v2/tenant/default/prepareandactivate",
+            params={"applicationName": str(self.cfg.app_name or "bench")},
+            payload=archive,
+            content_type="application/zip",
+        )
+        self._wait_for_application_ready()
+
+    def _wait_for_application_ready(self) -> None:
+        deadline = monotonic() + max(int(self.cfg.timeout_sec), 30)
+        last_error = ""
+        while monotonic() < deadline:
+            try:
+                resp = self._request("GET", self.connection_target(), "/ApplicationStatus")
+                text = resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=True)
+                if "Application" in text or "application" in text:
+                    return
+            except Exception as exc:
+                last_error = str(exc)
+            sleep(1.0)
+        if last_error:
+            raise RuntimeError(f"Timed out waiting for Vespa application endpoint: {last_error}")
+        raise RuntimeError("Timed out waiting for Vespa application endpoint.")
+
+    def _wait_for_schema_ready(self, schema: str) -> None:
+        deadline = monotonic() + max(int(self.cfg.timeout_sec), 30)
+        last_error = ""
+        while monotonic() < deadline:
+            try:
+                resp = self._query(
+                    {
+                        "yql": f"select doc_id from sources {schema} where true;",
+                        "hits": 0,
+                        "ranking.profile": "bm25",
+                    }
+                )
+                root = dict(resp.get("root") or {})
+                if root.get("errors"):
+                    raise RuntimeError(json.dumps(root.get("errors"), ensure_ascii=True))
+                return
+            except Exception as exc:
+                last_error = str(exc)
+            sleep(1.0)
+        if last_error:
+            raise RuntimeError(f"Timed out waiting for Vespa schema '{schema}': {last_error}")
+        raise RuntimeError(f"Timed out waiting for Vespa schema '{schema}'.")
+
+    def _build_package_zip(self, pkg: Path, *, extra_files: dict[str, bytes] | None = None) -> bytes:
+        buf = BytesIO()
+        with ZipFile(buf, "w", compression=ZIP_DEFLATED) as zf:
+            for path in sorted(pkg.rglob("*")):
+                if path.is_dir():
+                    continue
+                rel = path.relative_to(pkg)
+                if extra_files and str(rel) in extra_files:
+                    continue
+                zf.writestr(str(rel), path.read_bytes())
+            for rel, contents in sorted((extra_files or {}).items()):
+                zf.writestr(rel, contents)
+        return buf.getvalue()
