@@ -4,16 +4,16 @@ Open-source search engines compared on ranking quality. Full-text, vector, and
 hybrid search, run on public information-retrieval datasets with relevance
 judgments, reported as one standalone interactive page.
 
-**[Open the interactive report](https://search-quality-benchmark.manticoresearch.com)** · 601 runs · 11 engines ·
-16 dataset/query-set cohorts · updated 2026-11-02
+[![Top 3 engines by search quality: Manticore Search 98.67%, Qdrant 98.29%, Milvus 97.94%](docs/images/top-3-engines.png)](https://search-quality-benchmark.manticoresearch.com)
+
+**[Open the full report: search-quality-benchmark.manticoresearch.com](https://search-quality-benchmark.manticoresearch.com)**
 
 > [!NOTE]
 > Search Quality Benchmark is maintained by [Manticore](https://manticoresearch.com/), the
 > team behind Manticore Search, which is one of the benchmarked engines. Every
 > engine profile is in this repository, every run writes its per-query results,
 > and the engine images are pinned in [`compose.yaml`](compose.yaml), so any
-> number here can be checked and rerun. The report will be published on a
-> manticoresearch.com subdomain; until then, open `docs/index.html` locally.
+> number here can be checked and rerun.
 
 ## Results
 
@@ -35,6 +35,9 @@ metric per dataset (NDCG@10, MRR@10 for MS MARCO and TREC-DL).
 | 8 | Vespa 8.751.13 | 89.19% | 51.30% | 2 |
 | 9 | Typesense 30.2 | 80.93% | 24.83% | 1 |
 | 10 | MariaDB 11.8.9 | 76.06% | 6.91% | 1 |
+
+The top four engines are within 1.13 points of each other. With one repeat per
+run, the benchmark cannot show whether gaps that small would hold on a rerun.
 
 - **Mean relative**: average over cohorts of `engine_score / best_score` on
   that cohort. 100% means the engine won everywhere.

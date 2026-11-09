@@ -1074,6 +1074,10 @@ Combined report (`bench report`):
 - Long query text must remain embedded in full. The table may clamp its preview
   visually, but expansion must reveal the original query.
 - Keep internal run IDs and artifact links out of the public interface.
+- The page head carries Open Graph and Twitter card tags pointing to
+  `docs/images/social-preview-1280x640.png`, served from the site root as
+  `/images/social-preview-1280x640.png`. That image is the only copy of the top
+  scores outside the report data; replace it when the ranking changes.
 
 Rebuild the canonical report from the repository root:
 

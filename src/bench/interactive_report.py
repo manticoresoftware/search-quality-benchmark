@@ -540,6 +540,14 @@ HTML_TEMPLATE = r'''<!doctype html>
   <meta name="color-scheme" content="light dark">
   <title>Search Quality Benchmark</title>
   <meta name="description" content="Compare full-text, vector, and hybrid search across open-source engines and public datasets. Relevance is the primary measure; latency and throughput provide additional context.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Search Quality Benchmark">
+  <meta property="og:description" content="Compare full-text, vector, and hybrid search across open-source engines and public datasets.">
+  <meta property="og:url" content="https://search-quality-benchmark.manticoresearch.com/">
+  <meta property="og:image" content="https://search-quality-benchmark.manticoresearch.com/images/social-preview-1280x640.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="data:,">
   <script>
     // Apply the saved theme before first paint; the report script keeps it in sync.
