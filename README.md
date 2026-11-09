@@ -6,7 +6,7 @@ judgments, reported as one standalone interactive page.
 
 [![Top 3 engines by search quality: Manticore Search 98.67%, Qdrant 98.29%, Milvus 97.94%](docs/images/top-3-engines.png)](https://search-quality-benchmark.manticoresearch.com)
 
-**[Open the full report: search-quality-benchmark.manticoresearch.com](https://search-quality-benchmark.manticoresearch.com)**
+**[Open the full report](https://search-quality-benchmark.manticoresearch.com)** · Top 3 by mean quality across 16 dataset cohorts, weighted by dataset family, 2 Nov 2026.
 
 > [!NOTE]
 > Search Quality Benchmark is maintained by [Manticore](https://manticoresearch.com/), the
